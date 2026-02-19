@@ -20,7 +20,7 @@ export default function Navbar() {
   const navItems = [...baseNavItems, ...(user === 'admin' ? adminNavItems : [])]
 
   return (
-    <nav className="navbar">
+    <nav className="navbar" aria-label="Main navigation">
       <Link to="/" className="navbar-brand">
         MTG Metagame
       </Link>

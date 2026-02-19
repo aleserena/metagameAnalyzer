@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { useBlocker } from 'react-router-dom'
+import toast from 'react-hot-toast'
 import { loadDecks, exportDecks } from '../api'
+import { getToken } from '../contexts/AuthContext'
 import { FORMATS, META_EDH } from '../config'
 
 const FORMAT_OPTIONS = Object.entries(FORMATS)
@@ -12,14 +14,20 @@ export default function Scrape() {
   const [store, setStore] = useState('')
   const [eventIds, setEventIds] = useState('')
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [message, setMessage] = useState<string | null>(null)
   const [progress, setProgress] = useState<string[]>([])
   const [pct, setPct] = useState(0)
   const [fileInput, setFileInput] = useState<HTMLInputElement | null>(null)
   const logRef = useRef<HTMLDivElement>(null)
+  const blockerDialogRef = useRef<HTMLDivElement>(null)
 
   const blocker = useBlocker(loading)
+
+  useEffect(() => {
+    if (blocker.state === 'blocked' && blockerDialogRef.current) {
+      const focusable = blockerDialogRef.current.querySelector<HTMLButtonElement>('button')
+      focusable?.focus()
+    }
+  }, [blocker.state])
 
   // Block browser tab close/refresh while scraping
   useEffect(() => {
@@ -33,15 +41,17 @@ export default function Scrape() {
 
   const handleScrape = async () => {
     setLoading(true)
-    setError(null)
-    setMessage(null)
     setProgress([])
     setPct(0)
 
     try {
+      const token = getToken()
       const res = await fetch('/api/scrape', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({
           format,
           period: period || undefined,
@@ -77,10 +87,10 @@ export default function Scrape() {
               setPct(data.pct ?? 0)
               setTimeout(() => logRef.current?.scrollTo(0, logRef.current.scrollHeight), 0)
             } else if (data.type === 'done') {
-              setMessage(data.message)
+              toast.success(data.message)
               setPct(100)
             } else if (data.type === 'error') {
-              setError(data.message)
+              toast.error(data.message)
             }
           } catch {
             // ignore malformed lines
@@ -88,7 +98,7 @@ export default function Scrape() {
         }
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      toast.error(e instanceof Error ? e.message : String(e))
     } finally {
       setLoading(false)
     }
@@ -97,26 +107,22 @@ export default function Scrape() {
   const handleLoadFile = async () => {
     const input = fileInput
     if (!input?.files?.length) {
-      setError('Select a file first')
+      toast.error('Select a file first')
       return
     }
     setLoading(true)
-    setError(null)
-    setMessage(null)
     try {
       const result = await loadDecks(input.files[0])
-      setMessage(result.message)
+      toast.success(result.message)
       input.value = ''
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      toast.error(e instanceof Error ? e.message : String(e))
     } finally {
       setLoading(false)
     }
   }
 
   const handleDownload = async () => {
-    setError(null)
-    setMessage(null)
     try {
       const blob = await exportDecks()
       const url = URL.createObjectURL(blob)
@@ -125,9 +131,9 @@ export default function Scrape() {
       a.download = 'decks.json'
       a.click()
       URL.revokeObjectURL(url)
-      setMessage('Download started (decks.json)')
+      toast.success('Download started (decks.json)')
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      toast.error(e instanceof Error ? e.message : String(e))
     }
   }
 
@@ -135,68 +141,84 @@ export default function Scrape() {
     <div>
       <h1 className="page-title">Scrape & Load Data</h1>
 
-      <div className="chart-container" style={{ maxWidth: 500 }}>
-        <h3 style={{ margin: '0 0 1rem' }}>Load from file</h3>
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
-          <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
-            <label>JSON file (decks.json)</label>
-            <input
-              type="file"
-              accept=".json"
-              ref={setFileInput}
-              onChange={() => {}}
-            />
+      <div
+        className="scrape-sections-grid"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: '1.5rem',
+          marginBottom: '1.5rem',
+        }}
+      >
+        <div className="chart-container chart-container--compact">
+          <h3 style={{ margin: '0 0 1rem' }}>Load from file</h3>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
+            <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
+              <label htmlFor="scrape-file-input">JSON file (decks.json)</label>
+              <input
+                id="scrape-file-input"
+                type="file"
+                accept=".json"
+                ref={setFileInput}
+                onChange={() => {}}
+                aria-label="Select JSON file to load decks"
+              />
+            </div>
+            <button className="btn" onClick={handleLoadFile} disabled={loading}>
+              Load
+            </button>
           </div>
-          <button className="btn" onClick={handleLoadFile} disabled={loading}>
-            Load
+        </div>
+
+        <div className="chart-container chart-container--compact">
+          <h3 style={{ margin: '0 0 1rem' }}>Download current data</h3>
+          <p style={{ margin: '0 0 0.75rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+            Export all loaded or scraped decks as JSON (same format as Load accepts).
+          </p>
+          <button className="btn" onClick={handleDownload} disabled={loading}>
+            Download decks.json
           </button>
         </div>
       </div>
 
-      <div className="chart-container" style={{ maxWidth: 500, marginTop: '1.5rem' }}>
-        <h3 style={{ margin: '0 0 1rem' }}>Download current data</h3>
-        <p style={{ margin: '0 0 0.75rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-          Export all loaded or scraped decks as JSON (same format as Load accepts).
-        </p>
-        <button className="btn" onClick={handleDownload} disabled={loading}>
-          Download decks.json
-        </button>
-      </div>
-
-      <div className="chart-container" style={{ maxWidth: 500, marginTop: '1.5rem' }}>
+      <div className="chart-container chart-container--compact" style={{ maxWidth: 500 }}>
         <h3 style={{ margin: '0 0 1rem' }}>Scrape from MTGTop8</h3>
         <div className="form-group">
-          <label>Format</label>
-          <select value={format} onChange={(e) => setFormat(e.target.value)}>
+          <label htmlFor="scrape-format">Format</label>
+          <select id="scrape-format" value={format} onChange={(e) => setFormat(e.target.value)} aria-label="Scrape format">
             {FORMAT_OPTIONS.map(([id, name]) => (
               <option key={id} value={id}>{name}</option>
             ))}
           </select>
         </div>
         <div className="form-group">
-          <label>Time period</label>
-          <select value={period} onChange={(e) => setPeriod(e.target.value)}>
+          <label htmlFor="scrape-period">Time period</label>
+          <select id="scrape-period" value={period} onChange={(e) => setPeriod(e.target.value)} aria-label="Time period">
             {PERIOD_OPTIONS.map((p) => (
               <option key={p} value={p}>{p}</option>
             ))}
           </select>
         </div>
         <div className="form-group">
-          <label>Store filter (substring in event name)</label>
+          <label htmlFor="scrape-store">Store filter (substring in event name)</label>
           <input
+            id="scrape-store"
             type="text"
             placeholder="e.g. Hadouken, Angers"
             value={store}
             onChange={(e) => setStore(e.target.value)}
+            aria-label="Store filter"
           />
         </div>
         <div className="form-group">
-          <label>Event IDs (comma-separated, optional)</label>
+          <label htmlFor="scrape-event-ids">Event IDs (comma-separated, optional)</label>
           <input
+            id="scrape-event-ids"
             type="text"
             placeholder="e.g. 80455,80480"
             value={eventIds}
             onChange={(e) => setEventIds(e.target.value)}
+            aria-label="Event IDs"
           />
         </div>
         <button className="btn" onClick={handleScrape} disabled={loading}>
@@ -224,8 +246,6 @@ export default function Scrape() {
         )}
       </div>
 
-      {error && <div className="error" style={{ marginTop: '1rem' }}>{error}</div>}
-      {message && <div style={{ marginTop: '1rem', color: 'var(--success)', fontWeight: 600 }}>{message}</div>}
       {progress.length > 0 && (
         <div
           ref={logRef}
@@ -264,8 +284,14 @@ export default function Scrape() {
             alignItems: 'center',
             justifyContent: 'center',
           }}
+          aria-hidden="false"
         >
           <div
+            ref={blockerDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="scrape-blocker-title"
+            aria-label="Leave page confirmation"
             style={{
               background: 'var(--bg-card)',
               border: '1px solid var(--border)',
@@ -275,17 +301,24 @@ export default function Scrape() {
               textAlign: 'center',
             }}
           >
-            <p style={{ marginBottom: '1.5rem', fontSize: '1rem' }}>
+            <p id="scrape-blocker-title" style={{ marginBottom: '1.5rem', fontSize: '1rem' }}>
               Scraping is in progress. Are you sure you want to leave?
             </p>
             <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
-              <button className="btn" onClick={() => blocker.reset?.()}>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => blocker.reset?.()}
+                aria-label="Stay on page"
+              >
                 Stay
               </button>
               <button
+                type="button"
                 className="btn"
                 style={{ background: 'var(--danger, #e53e3e)' }}
                 onClick={() => blocker.proceed?.()}
+                aria-label="Leave page"
               >
                 Leave
               </button>

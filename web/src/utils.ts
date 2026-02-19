@@ -36,6 +36,13 @@ export function dateMinusDays(ddMmYy: string, days: number): string {
   return `${dd}/${mm}/${yy}`
 }
 
+/** Return first day of year for a given DD/MM/YY (as 01/01/YY) */
+export function firstDayOfYear(ddMmYy: string): string {
+  const [, , y] = ddMmYy.split('/').map(Number)
+  const yy = String(y < 100 ? 2000 + y : y).slice(-2)
+  return `01/01/${yy}`
+}
+
 const PLURAL_MAP: Record<string, string> = {
   Sorcery: 'Sorceries',
   Other: 'Other',

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import toast from 'react-hot-toast'
 import { getDecks, getDeckCompare } from '../api'
 import type { Deck } from '../types'
 import CardHover from '../components/CardHover'
@@ -13,7 +14,6 @@ export default function DeckCompare() {
   const [search, setSearch] = useState('')
   const [searchResults, setSearchResults] = useState<Deck[]>([])
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [initDone, setInitDone] = useState(false)
 
   // Auto-load from ?ids= query param
@@ -30,7 +30,7 @@ export default function DeckCompare() {
         setSelectedDecks(r.decks)
         setCompareData(r.decks)
       })
-      .catch((e) => setError(e.message))
+      .catch((e) => toast.error(e.message))
       .finally(() => setLoading(false))
   }, [searchParams, initDone])
 
@@ -63,10 +63,9 @@ export default function DeckCompare() {
   const runCompare = () => {
     if (selectedDecks.length < 2) return
     setLoading(true)
-    setError(null)
     getDeckCompare(selectedDecks.map((d) => d.deck_id))
       .then((r) => setCompareData(r.decks))
-      .catch((e) => setError(e.message))
+      .catch((e) => toast.error(e.message))
       .finally(() => setLoading(false))
   }
 
@@ -172,8 +171,6 @@ export default function DeckCompare() {
           {loading ? 'Loading...' : 'Compare'}
         </button>
       </div>
-
-      {error && <div className="error">{error}</div>}
 
       {compareData && compareData.length >= 2 && (
         <div className="chart-container">

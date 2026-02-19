@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams, useNavigate, Link } from 'react-router-dom'
+import toast from 'react-hot-toast'
 import {
   BarChart,
   Bar,
@@ -100,7 +101,10 @@ export default function Metagame() {
     const eventIdsParam = eventIds.length ? eventIds.join(',') : undefined
     getMetagame(placementWeighted, ignoreLands, undefined, undefined, undefined, eventIdsParam)
       .then(setMetagame)
-      .catch((e) => setError(e.message))
+      .catch((e) => {
+        setError(e.message)
+        toast.error(e.message)
+      })
       .finally(() => setLoading(false))
   }, [placementWeighted, ignoreLands, eventIds])
 
@@ -148,7 +152,34 @@ export default function Metagame() {
       </div>
     )
   }
-  if (error) return <div className="error">{error}</div>
+  if (error) {
+    return (
+      <div>
+        <h1 className="page-title" style={{ margin: 0 }}>Metagame Analysis</h1>
+        <div className="chart-container" style={{ textAlign: 'center', padding: '2rem', marginTop: '1.5rem' }}>
+          <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{error}</p>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              setError(null)
+              setLoading(true)
+              const eventIdsParam = eventIds.length ? eventIds.join(',') : undefined
+              getMetagame(placementWeighted, ignoreLands, undefined, undefined, undefined, eventIdsParam)
+                .then(setMetagame)
+                .catch((e) => {
+                  setError(e.message)
+                  toast.error(e.message)
+                })
+                .finally(() => setLoading(false))
+            }}
+          >
+            Try again
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   const summary = metagame?.summary ?? { total_decks: 0 }
   if (summary.total_decks === 0) {
@@ -212,11 +243,23 @@ export default function Metagame() {
 
   return (
     <div style={{ opacity: loading ? 0.6 : 1, transition: 'opacity 0.2s' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '0.75rem' }}>
         <h1 className="page-title" style={{ margin: 0 }}>
           Metagame Analysis{formatName && <span style={{ fontSize: '0.7em', color: 'var(--text-muted)', marginLeft: '0.5rem' }}>— {formatName}</span>}
         </h1>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'flex-end' }}>
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: '0.5rem',
+            alignItems: 'center',
+            padding: '0.5rem 0.75rem',
+            background: 'var(--bg)',
+            border: '1px solid var(--border)',
+            borderRadius: 8,
+            fontSize: '0.8125rem',
+          }}
+        >
           <EventSelector
             events={events}
             selectedIds={eventIds}
@@ -225,30 +268,23 @@ export default function Metagame() {
             maxDate={maxDate}
             lastEventDate={lastEventDate}
           />
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={placementWeighted}
-              onChange={(e) => setPlacementWeighted(e.target.checked)}
-            />
-            Placement weighted
-          </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={ignoreLands}
-              onChange={(e) => setIgnoreLands(e.target.checked)}
-            />
-            Ignore lands
-          </label>
         </div>
       </div>
 
       <div className="chart-container">
-        <h3 style={{ margin: '0 0 1rem' }}>
-          Commander Distribution
-          {placementWeighted && <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginLeft: '0.5rem' }}>weighted by placement</span>}
-        </h3>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
+          <h3 style={{ margin: 0 }}>Commander Distribution</h3>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.875rem' }}>
+            <input
+              type="checkbox"
+              checked={placementWeighted}
+              onChange={(e) => setPlacementWeighted(e.target.checked)}
+              aria-label="Placement weighted"
+            />
+            Placement weighted
+          </label>
+          {placementWeighted && <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>weighted by placement</span>}
+        </div>
         <ResponsiveContainer width="100%" height={400}>
           <BarChart data={commanders.slice(0, 15)} margin={{ top: 20, right: 30, left: 20, bottom: 80 }}
             style={{ cursor: 'pointer' }}
@@ -335,9 +371,29 @@ export default function Metagame() {
           </div>
         </div>
 
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'center', marginBottom: '1rem' }}>
-          <span style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Filter by:</span>
-          <span style={{ fontSize: '0.875rem', fontWeight: 600 }}>Color</span>
+        <div
+          className="top-cards-filters"
+          style={{
+            padding: '0.5rem 0.75rem',
+            background: 'var(--bg)',
+            border: '1px solid var(--border)',
+            borderRadius: 8,
+            marginBottom: '1rem',
+            fontSize: '0.8125rem',
+          }}
+        >
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={ignoreLands}
+                onChange={(e) => setIgnoreLands(e.target.checked)}
+                aria-label="Ignore lands"
+              />
+              Ignore lands
+            </label>
+            <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Filter:</span>
+            <span style={{ fontWeight: 600 }}>Color</span>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
             {COLOR_OPTIONS.map((opt) => (
               <label key={opt.value} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', cursor: 'pointer', fontSize: '0.8rem' }} title={opt.title}>
@@ -373,7 +429,7 @@ export default function Metagame() {
               </label>
             ))}
           </div>
-          <span style={{ fontSize: '0.875rem', fontWeight: 600 }}>Cost</span>
+          <span style={{ fontWeight: 600 }}>Cost</span>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
             {CMC_OPTIONS.map((opt) => (
               <label key={opt} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', cursor: 'pointer', fontSize: '0.8rem' }} title={opt === 5 ? '5+' : `CMC ${opt}`}>
@@ -391,7 +447,7 @@ export default function Metagame() {
             ))}
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.875rem', fontWeight: 600 }}>Type</span>
+            <span style={{ fontWeight: 600 }}>Type</span>
             {TYPE_OPTIONS.map((opt) => (
               <label key={opt} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', cursor: 'pointer', fontSize: '0.8rem' }}>
                 <input
@@ -416,6 +472,7 @@ export default function Metagame() {
           >
             Clear filters
           </button>
+          </div>
         </div>
 
         {loadingCardMeta && (
@@ -428,11 +485,11 @@ export default function Metagame() {
           <table>
             <thead>
               <tr>
-                <th>#</th>
-                <th>Card</th>
-                <th>Decks</th>
-                <th>Play Rate</th>
-                <th>{placementWeighted ? 'Weighted Score' : 'Copies'}</th>
+                <th scope="col">#</th>
+                <th scope="col">Card</th>
+                <th scope="col">Decks</th>
+                <th scope="col">Play Rate</th>
+                <th scope="col">{placementWeighted ? 'Weighted Score' : 'Copies'}</th>
               </tr>
             </thead>
             <tbody>
@@ -462,9 +519,9 @@ export default function Metagame() {
             <table>
               <thead>
                 <tr>
-                  <th>Card A</th>
-                  <th>Card B</th>
-                  <th>Decks</th>
+                  <th scope="col">Card A</th>
+                  <th scope="col">Card B</th>
+                  <th scope="col">Decks</th>
                 </tr>
               </thead>
               <tbody>

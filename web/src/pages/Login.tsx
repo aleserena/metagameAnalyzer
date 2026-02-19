@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import toast from 'react-hot-toast'
 import { useAuth } from '../contexts/AuthContext'
 
 export default function Login() {
   const [password, setPassword] = useState('')
-  const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const { login, user } = useAuth()
   const navigate = useNavigate()
@@ -17,13 +17,12 @@ export default function Login() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    setError(null)
     setSubmitting(true)
     try {
       await login(password)
       navigate('/', { replace: true })
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      toast.error(e instanceof Error ? e.message : String(e))
     } finally {
       setSubmitting(false)
     }
@@ -48,7 +47,6 @@ export default function Login() {
             disabled={submitting}
           />
         </div>
-        {error && <div className="error" style={{ marginBottom: '1rem' }}>{error}</div>}
         <button type="submit" className="btn" disabled={submitting}>
           {submitting ? 'Signing in...' : 'Sign in'}
         </button>

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Event } from '../types'
-import { dateMinusDays, dateInRange } from '../utils'
+import { dateMinusDays, dateInRange, firstDayOfYear } from '../utils'
 
 export interface EventSelectorProps {
   events: Event[]
@@ -11,6 +11,9 @@ export interface EventSelectorProps {
   lastEventDate?: string | null
 }
 
+const DROPDOWN_MAX_HEIGHT = 240
+const DROPDOWN_GAP = 4
+
 export default function EventSelector({
   events,
   selectedIds,
@@ -20,7 +23,10 @@ export default function EventSelector({
   lastEventDate = null,
 }: EventSelectorProps) {
   const [open, setOpen] = useState(false)
+  const [flipAbove, setFlipAbove] = useState(false)
+  const [maxHeight, setMaxHeight] = useState(DROPDOWN_MAX_HEIGHT)
   const ref = useRef<HTMLDivElement>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -30,7 +36,18 @@ export default function EventSelector({
     return () => document.removeEventListener('click', handler)
   }, [open])
 
-  const setPreset = (preset: 'all' | '2weeks' | 'month' | 'lastEvent') => {
+  useEffect(() => {
+    if (!open || !buttonRef.current) return
+    const rect = buttonRef.current.getBoundingClientRect()
+    const spaceBelow = window.innerHeight - rect.bottom - DROPDOWN_GAP
+    const spaceAbove = rect.top - DROPDOWN_GAP
+    const shouldFlip = spaceBelow < DROPDOWN_MAX_HEIGHT && spaceAbove > spaceBelow
+    setFlipAbove(shouldFlip)
+    const available = shouldFlip ? spaceAbove : spaceBelow
+    setMaxHeight(Math.min(DROPDOWN_MAX_HEIGHT, Math.max(100, available)))
+  }, [open])
+
+  const setPreset = (preset: 'all' | '2weeks' | 'month' | '2months' | '6months' | 'thisYear' | 'lastEvent') => {
     if (preset === 'all' || !maxDate) {
       onChange([])
       return
@@ -41,7 +58,16 @@ export default function EventSelector({
       return
     }
     const to = maxDate
-    const from = preset === '2weeks' ? dateMinusDays(maxDate, 14) : dateMinusDays(maxDate, 30)
+    const from =
+      preset === '2weeks'
+        ? dateMinusDays(maxDate, 14)
+        : preset === 'month'
+          ? dateMinusDays(maxDate, 30)
+          : preset === '2months'
+            ? dateMinusDays(maxDate, 60)
+            : preset === '6months'
+              ? dateMinusDays(maxDate, 183)
+              : firstDayOfYear(maxDate)
     const ids = events.filter((e) => dateInRange(e.date, from, to)).map((e) => e.event_id)
     onChange(ids)
   }
@@ -71,6 +97,30 @@ export default function EventSelector({
             type="button"
             className="btn"
             style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }}
+            onClick={() => setPreset('thisYear')}
+          >
+            This year
+          </button>
+          <button
+            type="button"
+            className="btn"
+            style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }}
+            onClick={() => setPreset('6months')}
+          >
+            6 months
+          </button>
+          <button
+            type="button"
+            className="btn"
+            style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }}
+            onClick={() => setPreset('2months')}
+          >
+            2 months
+          </button>
+          <button
+            type="button"
+            className="btn"
+            style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }}
             onClick={() => setPreset('month')}
           >
             Last month
@@ -95,8 +145,12 @@ export default function EventSelector({
       )}
       <div style={{ position: 'relative' }}>
         <button
+          ref={buttonRef}
           type="button"
           onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          aria-haspopup="listbox"
+          aria-label="Select events"
           style={{
             width: '100%',
             minWidth: 280,
@@ -122,13 +176,17 @@ export default function EventSelector({
         {open && (
           <div
             className="events-dropdown"
+            role="listbox"
+            aria-multiselectable
+            aria-label="Events"
             style={{
               position: 'absolute',
-              top: '100%',
               left: 0,
               width: 280,
-              marginTop: 4,
-              maxHeight: 240,
+              ...(flipAbove
+                ? { bottom: '100%', marginBottom: DROPDOWN_GAP, marginTop: 0 }
+                : { top: '100%', marginTop: DROPDOWN_GAP }),
+              maxHeight,
               overflowY: 'auto',
               background: 'var(--bg-card)',
               border: '1px solid var(--border)',

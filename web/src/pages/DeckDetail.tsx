@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
+import toast from 'react-hot-toast'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts'
 import { getDeck, getMetagame, getDeckAnalysis, getDateRange, getSimilarDecks } from '../api'
 import type { Deck, MetagameReport, SimilarDeck } from '../types'
@@ -7,7 +8,7 @@ import type { DeckAnalysis, CardMeta } from '../api'
 import CardGrid from '../components/CardGrid'
 import CardHover from '../components/CardHover'
 import ManaSymbols from '../components/ManaSymbols'
-import { dateMinusDays, pluralizeType } from '../utils'
+import { dateMinusDays, firstDayOfYear, pluralizeType } from '../utils'
 
 type ViewMode = 'list' | 'scryfall'
 type GroupMode = 'type' | 'cmc' | 'color' | 'none'
@@ -179,7 +180,10 @@ export default function DeckDetail() {
     if (!deckId) return
     getDeck(parseInt(deckId, 10))
       .then(setDeck)
-      .catch((e) => setError(e.message))
+      .catch((e) => {
+        setError(e.message)
+        toast.error(e.message)
+      })
       .finally(() => setLoading(false))
   }, [deckId])
 
@@ -212,8 +216,47 @@ export default function DeckDetail() {
   }, [deckId, deck])
 
   if (loading) return <div className="loading">Loading...</div>
-  if (error) return <div className="error">{error}</div>
-  if (!deck) return <div className="error">Deck not found</div>
+  if (error) {
+    return (
+      <div>
+        <h1 className="page-title">Deck</h1>
+        <div className="chart-container" style={{ textAlign: 'center', padding: '2rem' }}>
+          <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{error}</p>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              setError(null)
+              setLoading(true)
+              getDeck(parseInt(deckId!, 10))
+                .then(setDeck)
+                .catch((e) => {
+                  setError(e.message)
+                  toast.error(e.message)
+                })
+                .finally(() => setLoading(false))
+            }}
+          >
+            Try again
+          </button>
+        </div>
+      </div>
+    )
+  }
+  if (!deck) {
+    toast.error('Deck not found')
+    return (
+      <div>
+        <h1 className="page-title">Deck</h1>
+        <div className="chart-container" style={{ textAlign: 'center', padding: '2rem' }}>
+          <p style={{ color: 'var(--text-muted)' }}>Deck not found.</p>
+          <button type="button" className="btn" style={{ marginTop: '1rem' }} onClick={() => navigate('/decks')}>
+            Back to Decks
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   const playRateByCard: Record<string, number> = {}
   if (metagame) {
@@ -596,6 +639,30 @@ export default function DeckDetail() {
                   }}
                 >
                   All time
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  style={{ padding: '0.2rem 0.4rem', fontSize: '0.8rem' }}
+                  onClick={() => maxDate && (setMetagameDateTo(maxDate), setMetagameDateFrom(firstDayOfYear(maxDate)))}
+                >
+                  This year
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  style={{ padding: '0.2rem 0.4rem', fontSize: '0.8rem' }}
+                  onClick={() => maxDate && (setMetagameDateTo(maxDate), setMetagameDateFrom(dateMinusDays(maxDate, 183)))}
+                >
+                  6 months
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  style={{ padding: '0.2rem 0.4rem', fontSize: '0.8rem' }}
+                  onClick={() => maxDate && (setMetagameDateTo(maxDate), setMetagameDateFrom(dateMinusDays(maxDate, 60)))}
+                >
+                  2 months
                 </button>
                 <button
                   type="button"

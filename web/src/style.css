@@ -148,6 +148,10 @@ th {
   font-size: 0.875rem;
 }
 
+th.sortable:hover {
+  color: var(--accent);
+}
+
 tr:hover {
   background: var(--bg-hover);
 }
@@ -211,6 +215,10 @@ tr.clickable {
   padding: 1rem;
   margin-bottom: 1.5rem;
   min-height: 300px;
+}
+
+.chart-container--compact {
+  min-height: 0;
 }
 
 .form-group {
@@ -293,5 +301,8 @@ tr.clickable {
   }
   .deck-columns {
     grid-template-columns: 1fr;
+  }
+  .scrape-sections-grid {
+    grid-template-columns: 1fr !important;
   }
 }

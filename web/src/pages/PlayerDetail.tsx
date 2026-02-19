@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
+import toast from 'react-hot-toast'
 import { getPlayerDetail, getSimilarPlayers, addPlayerAlias, getPlayerAliases } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -18,7 +19,10 @@ export default function PlayerDetail() {
     if (!playerName) return
     getPlayerDetail(decodeURIComponent(playerName))
       .then(setData)
-      .catch((e) => setError(e.message))
+      .catch((e) => {
+        setError(e.message)
+        toast.error(e.message)
+      })
       .finally(() => setLoading(false))
   }, [playerName])
 
@@ -29,8 +33,47 @@ export default function PlayerDetail() {
   }, [data?.player])
 
   if (loading) return <div className="loading">Loading...</div>
-  if (error) return <div className="error">{error}</div>
-  if (!data) return <div className="error">Player not found</div>
+  if (error) {
+    return (
+      <div>
+        <h1 className="page-title">Player</h1>
+        <div className="chart-container" style={{ textAlign: 'center', padding: '2rem' }}>
+          <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{error}</p>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              setError(null)
+              setLoading(true)
+              getPlayerDetail(decodeURIComponent(playerName!))
+                .then(setData)
+                .catch((e) => {
+                  setError(e.message)
+                  toast.error(e.message)
+                })
+                .finally(() => setLoading(false))
+            }}
+          >
+            Try again
+          </button>
+        </div>
+      </div>
+    )
+  }
+  if (!data) {
+    toast.error('Player not found')
+    return (
+      <div>
+        <h1 className="page-title">Player</h1>
+        <div className="chart-container" style={{ textAlign: 'center', padding: '2rem' }}>
+          <p style={{ color: 'var(--text-muted)' }}>Player not found.</p>
+          <button type="button" className="btn" style={{ marginTop: '1rem' }} onClick={() => navigate('/players')}>
+            Back to Players
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div>

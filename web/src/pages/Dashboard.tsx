@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import toast from 'react-hot-toast'
 import { getMetagame, getEvents, getDateRange } from '../api'
 import type { MetagameReport, Event } from '../types'
 import CardHover from '../components/CardHover'
@@ -29,7 +30,10 @@ export default function Dashboard() {
     const eventIdsParam = eventIds.length ? eventIds.join(',') : undefined
     getMetagame(false, ignoreLands, undefined, undefined, undefined, eventIdsParam)
       .then(setMetagame)
-      .catch((e) => setError(e.message))
+      .catch((e) => {
+        setError(e.message)
+        toast.error(e.message)
+      })
       .finally(() => setLoading(false))
   }, [ignoreLands, eventIds])
 
@@ -61,7 +65,34 @@ export default function Dashboard() {
       </div>
     )
   }
-  if (error) return <div className="error">{error}</div>
+  if (error) {
+    return (
+      <div>
+        <h1 className="page-title">Dashboard</h1>
+        <div className="chart-container" style={{ textAlign: 'center', padding: '2rem' }}>
+          <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{error}</p>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              setError(null)
+              setLoading(true)
+              const eventIdsParam = eventIds.length ? eventIds.join(',') : undefined
+              getMetagame(false, ignoreLands, undefined, undefined, undefined, eventIdsParam)
+                .then(setMetagame)
+                .catch((e) => {
+                  setError(e.message)
+                  toast.error(e.message)
+                })
+                .finally(() => setLoading(false))
+            }}
+          >
+            Try again
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   const summary = metagame?.summary ?? { total_decks: 0, unique_commanders: 0, unique_archetypes: 0 }
   const topCommanders = metagame?.commander_distribution?.slice(0, 5) ?? []
@@ -88,9 +119,38 @@ export default function Dashboard() {
 
   return (
     <div style={{ opacity: loading ? 0.6 : 1, transition: 'opacity 0.2s' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
         <h1 className="page-title" style={{ margin: 0 }}>Dashboard</h1>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'flex-end' }}>
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'stretch', gap: '1rem', marginBottom: '2rem' }}>
+        <div className="card-grid" style={{ flex: '1 1 auto', minWidth: 0, marginBottom: 0 }}>
+          <div className="stat-card">
+            <div className="value">{summary.total_decks}</div>
+            <div className="label">Total Decks</div>
+          </div>
+          <div className="stat-card">
+            <div className="value">{summary.unique_commanders}</div>
+            <div className="label">Unique Commanders</div>
+          </div>
+          <div className="stat-card">
+            <div className="value">{summary.unique_archetypes}</div>
+            <div className="label">Archetypes</div>
+          </div>
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: '0.5rem',
+            alignItems: 'center',
+            padding: '0.5rem 0.75rem',
+            background: 'var(--bg)',
+            border: '1px solid var(--border)',
+            borderRadius: 8,
+            fontSize: '0.8125rem',
+          }}
+        >
           <EventSelector
             events={events}
             selectedIds={eventIds}
@@ -99,25 +159,6 @@ export default function Dashboard() {
             maxDate={maxDate}
             lastEventDate={lastEventDate}
           />
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
-            <input type="checkbox" checked={ignoreLands} onChange={(e) => setIgnoreLands(e.target.checked)} />
-            Ignore lands
-          </label>
-        </div>
-      </div>
-
-      <div className="card-grid" style={{ marginBottom: '2rem' }}>
-        <div className="stat-card">
-          <div className="value">{summary.total_decks}</div>
-          <div className="label">Total Decks</div>
-        </div>
-        <div className="stat-card">
-          <div className="value">{summary.unique_commanders}</div>
-          <div className="label">Unique Commanders</div>
-        </div>
-        <div className="stat-card">
-          <div className="value">{summary.unique_archetypes}</div>
-          <div className="label">Archetypes</div>
         </div>
       </div>
 
@@ -165,7 +206,18 @@ export default function Dashboard() {
         </div>
 
         <div className="chart-container">
-          <h3 style={{ margin: '0 0 1rem' }}>Top Cards</h3>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
+            <h3 style={{ margin: 0 }}>Top Cards</h3>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.875rem' }}>
+              <input
+                type="checkbox"
+                checked={ignoreLands}
+                onChange={(e) => setIgnoreLands(e.target.checked)}
+                aria-label="Ignore lands"
+              />
+              Ignore lands
+            </label>
+          </div>
           {topCards.length ? (
             <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
               {topCards.map((c, i) => (

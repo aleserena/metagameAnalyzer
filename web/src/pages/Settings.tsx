@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import toast from 'react-hot-toast'
 import {
   getPlayerAliases,
   addPlayerAlias,
@@ -31,88 +32,77 @@ export default function Settings() {
   const [rankWeights, setRankWeights] = useState<Record<string, number>>(DEFAULT_RANK_WEIGHTS)
   const [loadingRankWeights, setLoadingRankWeights] = useState(true)
   const [savingRankWeights, setSavingRankWeights] = useState(false)
-  const [message, setMessage] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     getPlayerAliases()
       .then((r) => setAliases(r.aliases))
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .catch((e) => toast.error(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoadingAliases(false))
   }, [])
 
   useEffect(() => {
     getIgnoreLandsCards()
       .then((r) => setIgnoreLandsCards(r.cards))
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .catch((e) => toast.error(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoadingCards(false))
   }, [])
 
   useEffect(() => {
     getRankWeights()
       .then((r) => setRankWeights({ ...DEFAULT_RANK_WEIGHTS, ...r.weights }))
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .catch((e) => toast.error(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoadingRankWeights(false))
   }, [])
 
   const handleAddAlias = () => {
     if (!newAlias.trim() || !newCanonical.trim()) return
-    setError(null)
     addPlayerAlias(newAlias.trim(), newCanonical.trim())
       .then((r) => {
         setAliases(r.aliases)
         setNewAlias('')
         setNewCanonical('')
-        setMessage('Alias added')
-        setTimeout(() => setMessage(null), 3000)
+        toast.success('Alias added')
       })
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .catch((e) => toast.error(e instanceof Error ? e.message : String(e)))
   }
 
   const handleRemoveAlias = (alias: string) => {
-    setError(null)
     removePlayerAlias(alias)
       .then((r) => {
         setAliases(r.aliases)
-        setMessage('Alias removed')
-        setTimeout(() => setMessage(null), 3000)
+        toast.success('Alias removed')
       })
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .catch((e) => toast.error(e instanceof Error ? e.message : String(e)))
   }
 
   const handleAddIgnoreCard = () => {
     const card = newIgnoreCard.trim()
     if (!card) return
     if (ignoreLandsCards.includes(card)) {
-      setError('Card already in list')
+      toast.error('Card already in list')
       return
     }
-    setError(null)
     const updated = [...ignoreLandsCards, card].sort()
     putIgnoreLandsCards(updated)
       .then((r) => {
         setIgnoreLandsCards(r.cards)
         setNewIgnoreCard('')
-        setMessage('Card added to ignore list')
-        setTimeout(() => setMessage(null), 3000)
+        toast.success('Card added to ignore list')
       })
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .catch((e) => toast.error(e instanceof Error ? e.message : String(e)))
   }
 
   const handleRemoveIgnoreCard = (card: string) => {
-    setError(null)
     const updated = ignoreLandsCards.filter((c) => c !== card)
     putIgnoreLandsCards(updated)
       .then((r) => {
         setIgnoreLandsCards(r.cards)
-        setMessage('Card removed from ignore list')
-        setTimeout(() => setMessage(null), 3000)
+        toast.success('Card removed from ignore list')
       })
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .catch((e) => toast.error(e instanceof Error ? e.message : String(e)))
   }
 
   const handleSaveRankWeights = () => {
-    setError(null)
     setSavingRankWeights(true)
     const toSave: Record<string, number> = { ...DEFAULT_RANK_WEIGHTS }
     RANK_KEYS.forEach((k) => {
@@ -122,22 +112,15 @@ export default function Settings() {
     putRankWeights(toSave)
       .then((r) => {
         setRankWeights({ ...DEFAULT_RANK_WEIGHTS, ...r.weights })
-        setMessage('Points per position saved')
-        setTimeout(() => setMessage(null), 3000)
+        toast.success('Points per position saved')
       })
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .catch((e) => toast.error(e instanceof Error ? e.message : String(e)))
       .finally(() => setSavingRankWeights(false))
   }
 
   return (
     <div>
       <h1 className="page-title">Settings</h1>
-      {error && <div className="error" style={{ marginBottom: '1rem' }}>{error}</div>}
-      {message && (
-        <div style={{ marginBottom: '1rem', color: 'var(--success)', fontWeight: 600 }}>
-          {message}
-        </div>
-      )}
 
       <div className="chart-container" style={{ maxWidth: 600, marginBottom: '2rem' }}>
         <h2 style={{ margin: '0 0 1rem', fontSize: '1.25rem' }}>Player aliases</h2>

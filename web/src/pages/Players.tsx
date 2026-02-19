@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import toast from 'react-hot-toast'
 import { getPlayers, getDateRange } from '../api'
 import type { PlayerStats } from '../types'
 import Skeleton from '../components/Skeleton'
-import { dateMinusDays } from '../utils'
+import { dateMinusDays, firstDayOfYear } from '../utils'
 
 type SortKey = 'player' | 'wins' | 'top2' | 'top4' | 'top8' | 'points' | 'deck_count'
 
@@ -29,11 +30,14 @@ export default function Players() {
     setLoading(true)
     getPlayers(dateFrom, dateTo)
       .then((r) => setPlayers(r.players))
-      .catch((e) => setError(e.message))
+      .catch((e) => {
+        setError(e.message)
+        toast.error(e.message)
+      })
       .finally(() => setLoading(false))
   }, [dateFrom, dateTo])
 
-  const setPreset = (preset: 'all' | '2weeks' | 'month' | 'lastEvent') => {
+  const setPreset = (preset: 'all' | '2weeks' | 'month' | '2months' | '6months' | 'thisYear' | 'lastEvent') => {
     if (preset === 'all' || !maxDate) {
       setDateFrom(null)
       setDateTo(null)
@@ -45,7 +49,19 @@ export default function Players() {
       return
     }
     setDateTo(maxDate)
-    setDateFrom(preset === '2weeks' ? dateMinusDays(maxDate, 14) : dateMinusDays(maxDate, 30))
+    setDateFrom(
+      preset === '2weeks'
+        ? dateMinusDays(maxDate, 14)
+        : preset === 'month'
+          ? dateMinusDays(maxDate, 30)
+          : preset === '2months'
+            ? dateMinusDays(maxDate, 60)
+            : preset === '6months'
+              ? dateMinusDays(maxDate, 183)
+              : preset === 'thisYear'
+                ? firstDayOfYear(maxDate)
+                : maxDate
+    )
   }
 
   const handleSort = (key: SortKey) => {
@@ -101,7 +117,33 @@ export default function Players() {
       </div>
     )
   }
-  if (error) return <div className="error">{error}</div>
+  if (error) {
+    return (
+      <div>
+        <h1 className="page-title" style={{ margin: 0 }}>Player Leaderboard</h1>
+        <div className="chart-container" style={{ textAlign: 'center', padding: '2rem', marginTop: '1.5rem' }}>
+          <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{error}</p>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              setError(null)
+              setLoading(true)
+              getPlayers(dateFrom, dateTo)
+                .then((r) => setPlayers(r.players))
+                .catch((e) => {
+                  setError(e.message)
+                  toast.error(e.message)
+                })
+                .finally(() => setLoading(false))
+            }}
+          >
+            Try again
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   if (sorted.length === 0) {
     return (
@@ -111,6 +153,9 @@ export default function Players() {
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
             <span style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Date range:</span>
             <button type="button" className="btn" style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }} onClick={() => setPreset('all')}>All time</button>
+            <button type="button" className="btn" style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }} onClick={() => setPreset('thisYear')}>This year</button>
+            <button type="button" className="btn" style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }} onClick={() => setPreset('6months')}>6 months</button>
+            <button type="button" className="btn" style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }} onClick={() => setPreset('2months')}>2 months</button>
             <button type="button" className="btn" style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }} onClick={() => setPreset('month')}>Last month</button>
             <button type="button" className="btn" style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }} onClick={() => setPreset('2weeks')}>Last 2 weeks</button>
             <button type="button" className="btn" style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }} onClick={() => setPreset('lastEvent')}>Last event</button>
@@ -135,6 +180,15 @@ export default function Players() {
           <span style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Date range:</span>
           <button type="button" className="btn" style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }} onClick={() => setPreset('all')}>
             All time
+          </button>
+          <button type="button" className="btn" style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }} onClick={() => setPreset('thisYear')}>
+            This year
+          </button>
+          <button type="button" className="btn" style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }} onClick={() => setPreset('6months')}>
+            6 months
+          </button>
+          <button type="button" className="btn" style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }} onClick={() => setPreset('2months')}>
+            2 months
           </button>
           <button type="button" className="btn" style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }} onClick={() => setPreset('month')}>
             Last month

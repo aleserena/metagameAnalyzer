@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
+import toast from 'react-hot-toast'
 import { getDecks, getEvents, getDateRange, getDuplicateDecks } from '../api'
 import type { Deck, Event } from '../types'
 import EventSelector from '../components/EventSelector'
@@ -120,7 +121,10 @@ export default function Decks() {
         setDecks(r.decks)
         setTotal(r.total)
       })
-      .catch((e) => setError(e.message))
+      .catch((e) => {
+        setError(e.message)
+        toast.error(e.message)
+      })
       .finally(() => setLoading(false))
   }, [eventIdsParam, deckName, archetype, player, card, sort, order, skip, limit])
 
@@ -128,6 +132,15 @@ export default function Decks() {
     const params = new URLSearchParams(searchParams)
     if (value) params.set(key, value)
     else params.delete(key)
+    params.delete('page')
+    navigate({ search: params.toString() })
+  }
+
+  const handleSortHeader = (sortKey: 'date' | 'rank' | 'name' | 'player') => {
+    const nextOrder = sort === sortKey ? (order === 'asc' ? 'desc' : 'asc') : sortKey === 'date' || sortKey === 'rank' ? 'desc' : 'asc'
+    const params = new URLSearchParams(searchParams)
+    params.set('sort', sortKey)
+    params.set('order', nextOrder)
     params.delete('page')
     navigate({ search: params.toString() })
   }
@@ -140,10 +153,32 @@ export default function Decks() {
     navigate({ pathname: '/decks', search: '' })
   }
 
+  const retryLoad = () => {
+    setError(null)
+    setLoading(true)
+    getDecks({
+      event_ids: eventIds.length ? eventIds.join(',') : undefined,
+      deck_name: deckName ?? undefined,
+      archetype: archetype ?? undefined,
+      player: player ?? undefined,
+      card: card ?? undefined,
+      sort,
+      order,
+      skip,
+      limit,
+    })
+      .then((r) => {
+        setDecks(r.decks)
+        setTotal(r.total)
+      })
+      .catch((e) => {
+        setError(e.message)
+        toast.error(e.message)
+      })
+      .finally(() => setLoading(false))
+  }
+
   const hasActiveFilters = !!(eventIds.length || deckName || archetype || player || card)
-
-  if (error) return <div className="error">{error}</div>
-
   const totalPages = Math.ceil(total / limit)
 
   return (
@@ -165,82 +200,91 @@ export default function Decks() {
         )}
       </div>
 
-      <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
-        <div className="form-group" style={{ marginBottom: 0 }}>
-          <label>Deck name</label>
-          <input
-            type="text"
-            placeholder="Search deck name..."
-            value={localDeckName}
-            onChange={(e) => setLocalDeckName(e.target.value)}
+      <div style={{ display: 'flex', gap: '1.5rem', marginBottom: '1.5rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <div
+          className="filters-group"
+          style={{
+            display: 'flex',
+            gap: '1rem',
+            flexWrap: 'wrap',
+            alignItems: 'flex-end',
+            padding: '1rem',
+            background: 'var(--bg)',
+            border: '1px solid var(--border)',
+            borderRadius: 8,
+          }}
+        >
+          <span style={{ width: '100%', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Filters
+          </span>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label htmlFor="decks-name">Deck name</label>
+            <input
+              id="decks-name"
+              type="text"
+              placeholder="Search deck name..."
+              value={localDeckName}
+              onChange={(e) => setLocalDeckName(e.target.value)}
+              aria-label="Search deck name"
+            />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label htmlFor="decks-archetype">Archetype</label>
+            <input
+              id="decks-archetype"
+              type="text"
+              placeholder="Search archetype..."
+              value={localArchetype}
+              onChange={(e) => setLocalArchetype(e.target.value)}
+              aria-label="Search archetype"
+            />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label htmlFor="decks-player">Player</label>
+            <input
+              id="decks-player"
+              type="text"
+              placeholder="Search player..."
+              value={localPlayer}
+              onChange={(e) => setLocalPlayer(e.target.value)}
+              aria-label="Search player"
+            />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label htmlFor="decks-card">Card</label>
+            <input
+              id="decks-card"
+              type="text"
+              placeholder="Search by card..."
+              value={localCard}
+              onChange={(e) => setLocalCard(e.target.value)}
+              aria-label="Search by card"
+            />
+          </div>
+          <EventSelector
+            events={events}
+            selectedIds={eventIds}
+            onChange={setEventIdsFilter}
+            showDatePresets
+            maxDate={maxDate}
+            lastEventDate={lastEventDate}
           />
+          {hasActiveFilters && (
+            <button type="button" className="btn" onClick={clearFilters} style={{ marginBottom: 0 }}>
+              Clear filters
+            </button>
+          )}
         </div>
-        <div className="form-group" style={{ marginBottom: 0 }}>
-          <label>Archetype</label>
-          <input
-            type="text"
-            placeholder="Search archetype..."
-            value={localArchetype}
-            onChange={(e) => setLocalArchetype(e.target.value)}
-          />
-        </div>
-        <div className="form-group" style={{ marginBottom: 0 }}>
-          <label>Player</label>
-          <input
-            type="text"
-            placeholder="Search player..."
-            value={localPlayer}
-            onChange={(e) => setLocalPlayer(e.target.value)}
-          />
-        </div>
-        <div className="form-group" style={{ marginBottom: 0 }}>
-          <label>Card</label>
-          <input
-            type="text"
-            placeholder="Search by card..."
-            value={localCard}
-            onChange={(e) => setLocalCard(e.target.value)}
-          />
-        </div>
-        <EventSelector
-          events={events}
-          selectedIds={eventIds}
-          onChange={setEventIdsFilter}
-          showDatePresets
-          maxDate={maxDate}
-          lastEventDate={lastEventDate}
-        />
-        <div className="form-group" style={{ marginBottom: 0 }}>
-          <label>Sort</label>
-          <select
-            value={`${sort}-${order}`}
-            onChange={(e) => {
-              const [s, o] = e.target.value.split('-')
-              const p = new URLSearchParams(searchParams)
-              p.set('sort', s)
-              p.set('order', o)
-              p.delete('page')
-              navigate({ search: p.toString() })
-            }}
-          >
-            <option value="date-desc">Date (newest first)</option>
-            <option value="date-asc">Date (oldest first)</option>
-            <option value="rank-asc">Rank (best first)</option>
-            <option value="rank-desc">Rank (worst first)</option>
-            <option value="name-asc">Deck name (A–Z)</option>
-            <option value="name-desc">Deck name (Z–A)</option>
-            <option value="player-asc">Player (A–Z)</option>
-            <option value="player-desc">Player (Z–A)</option>
-          </select>
-        </div>
-        {hasActiveFilters && (
-          <button type="button" className="btn" onClick={clearFilters} style={{ marginBottom: 0 }}>
-            Clear filters
-          </button>
-        )}
       </div>
 
-      {loading ? (
+      {error && !loading ? (
+        <div className="chart-container" style={{ textAlign: 'center', padding: '2rem' }}>
+          <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{error}</p>
+          <button type="button" className="btn" onClick={retryLoad}>
+            Try again
+          </button>
+        </div>
+      ) : loading ? (
         <>
           <Skeleton width={120} height={16} style={{ marginBottom: '0.5rem' }} />
           <SkeletonTable rows={10} />
@@ -276,12 +320,48 @@ export default function Decks() {
             <table>
               <thead>
                 <tr>
-                  <th style={{ width: 32 }}></th>
-                  <th>Deck</th>
-                  <th>Player</th>
-                  <th>Event</th>
-                  <th>Date</th>
-                  <th>Rank</th>
+                  <th scope="col" style={{ width: 32 }} aria-label="Select for comparison"></th>
+                  <th
+                    scope="col"
+                    className="sortable"
+                    style={{ cursor: 'pointer', userSelect: 'none' }}
+                    onClick={() => handleSortHeader('name')}
+                    title="Sort by deck name"
+                    aria-sort={sort === 'name' ? (order === 'asc' ? 'ascending' : 'descending') : undefined}
+                  >
+                    Deck {sort === 'name' && (order === 'asc' ? '↑' : '↓')}
+                  </th>
+                  <th
+                    scope="col"
+                    className="sortable"
+                    style={{ cursor: 'pointer', userSelect: 'none' }}
+                    onClick={() => handleSortHeader('player')}
+                    title="Sort by player"
+                    aria-sort={sort === 'player' ? (order === 'asc' ? 'ascending' : 'descending') : undefined}
+                  >
+                    Player {sort === 'player' && (order === 'asc' ? '↑' : '↓')}
+                  </th>
+                  <th scope="col">Event</th>
+                  <th
+                    scope="col"
+                    className="sortable"
+                    style={{ cursor: 'pointer', userSelect: 'none' }}
+                    onClick={() => handleSortHeader('date')}
+                    title="Sort by date"
+                    aria-sort={sort === 'date' ? (order === 'asc' ? 'ascending' : 'descending') : undefined}
+                  >
+                    Date {sort === 'date' && (order === 'asc' ? '↑' : '↓')}
+                  </th>
+                  <th
+                    scope="col"
+                    className="sortable"
+                    style={{ cursor: 'pointer', userSelect: 'none' }}
+                    onClick={() => handleSortHeader('rank')}
+                    title="Sort by rank"
+                    aria-sort={sort === 'rank' ? (order === 'asc' ? 'ascending' : 'descending') : undefined}
+                  >
+                    Rank {sort === 'rank' && (order === 'asc' ? '↑' : '↓')}
+                  </th>
                 </tr>
               </thead>
               <tbody>
