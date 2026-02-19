@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts'
-import { getDeck, getMetagame, getDeckAnalysis, getDateRange } from '../api'
-import type { Deck, MetagameReport } from '../types'
+import { getDeck, getMetagame, getDeckAnalysis, getDateRange, getSimilarDecks } from '../api'
+import type { Deck, MetagameReport, SimilarDeck } from '../types'
 import type { DeckAnalysis, CardMeta } from '../api'
 import CardGrid from '../components/CardGrid'
 import CardHover from '../components/CardHover'
@@ -173,6 +173,7 @@ export default function DeckDetail() {
   const [metagameDateTo, setMetagameDateTo] = useState<string | null>(null)
   const [maxDate, setMaxDate] = useState<string | null>(null)
   const [lastEventDate, setLastEventDate] = useState<string | null>(null)
+  const [similarDecks, setSimilarDecks] = useState<SimilarDeck[]>([])
 
   useEffect(() => {
     if (!deckId) return
@@ -202,6 +203,13 @@ export default function DeckDetail() {
       .then(setAnalysis)
       .catch(() => setAnalysis(null))
   }, [deckId])
+
+  useEffect(() => {
+    if (!deckId || !deck) return
+    getSimilarDecks(parseInt(deckId, 10), 8, String(deck.event_id))
+      .then((r) => setSimilarDecks(r.similar))
+      .catch(() => setSimilarDecks([]))
+  }, [deckId, deck])
 
   if (loading) return <div className="loading">Loading...</div>
   if (error) return <div className="error">{error}</div>
@@ -234,6 +242,39 @@ export default function DeckDetail() {
 
       <h1 className="page-title">{deck.name}</h1>
 
+      {deck.duplicate_info && (
+        <div
+          style={{
+            marginBottom: '1rem',
+            padding: '0.75rem 1rem',
+            background: deck.duplicate_info.is_duplicate ? 'rgba(247, 147, 26, 0.15)' : 'rgba(0, 186, 124, 0.1)',
+            border: `1px solid ${deck.duplicate_info.is_duplicate ? 'var(--warning)' : 'var(--success)'}`,
+            borderRadius: 8,
+            fontSize: '0.9rem',
+          }}
+        >
+          {deck.duplicate_info.is_duplicate ? (
+            <>
+              <strong>Duplicate deck</strong> — Identical mainboard to{' '}
+              <Link to={`/decks/${deck.duplicate_info.duplicate_of}`} style={{ color: 'var(--accent)' }}>
+                another deck
+              </Link>
+            </>
+          ) : (
+            <>
+              <strong>Has duplicates</strong> — {deck.duplicate_info.same_mainboard_ids.length} other deck(s) with identical mainboard
+              <div style={{ marginTop: '0.5rem' }}>
+                {deck.duplicate_info.same_mainboard_ids.map((id) => (
+                  <Link key={id} to={`/decks/${id}`} style={{ color: 'var(--accent)', marginRight: '1rem' }}>
+                    View deck {id}
+                  </Link>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       <div className="stat-card" style={{ marginBottom: '1.5rem' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '1rem' }}>
           <div>
@@ -247,7 +288,7 @@ export default function DeckDetail() {
           <div>
             <div className="label">Event</div>
             <div>
-              <Link to={`/decks?event_id=${deck.event_id}`} style={{ color: 'var(--accent)' }}>
+              <Link to={`/decks?event_ids=${deck.event_id}`} style={{ color: 'var(--accent)' }}>
                 {deck.event_name}
               </Link>
             </div>
@@ -262,10 +303,31 @@ export default function DeckDetail() {
           </div>
           <div>
             <div className="label">Archetype</div>
-            <div>{deck.archetype ? <Link to={`/decks?deck_name=${encodeURIComponent(deck.archetype)}`} style={{ color: 'var(--accent)' }}>{deck.archetype}</Link> : '-'}</div>
+            <div>{deck.archetype ? <Link to={`/decks?archetype=${encodeURIComponent(deck.archetype)}`} style={{ color: 'var(--accent)' }}>{deck.archetype}</Link> : '-'}</div>
           </div>
         </div>
       </div>
+
+      {similarDecks.length > 0 && (
+        <div className="chart-container" style={{ marginBottom: '1.5rem' }}>
+          <h3 style={{ margin: '0 0 1rem' }}>Similar Decks</h3>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '0.75rem' }}>
+            Decks with high card overlap from the same event
+          </p>
+          <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+            {similarDecks.map((s) => (
+              <li key={s.deck_id} style={{ padding: '0.5rem 0', borderBottom: '1px solid var(--border)' }}>
+                <Link to={`/decks/${s.deck_id}`} style={{ color: 'var(--accent)' }}>
+                  {s.name}
+                </Link>
+                <span style={{ color: 'var(--text-muted)', marginLeft: '0.5rem' }}>
+                  {s.player} — {s.event_name} ({s.date}) — {s.similarity}% overlap
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {analysis && (
         <div style={{ marginBottom: '1.5rem' }}>

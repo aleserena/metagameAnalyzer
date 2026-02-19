@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useSearchParams, useNavigate } from 'react-router-dom'
+import { useSearchParams, useNavigate, Link } from 'react-router-dom'
 import {
   BarChart,
   Bar,
@@ -14,8 +14,9 @@ import {
 } from 'recharts'
 import { getMetagame, getDateRange, getFormatInfo, getEvents } from '../api'
 import CardHover from '../components/CardHover'
+import EventSelector from '../components/EventSelector'
+import Skeleton from '../components/Skeleton'
 import type { MetagameReport, Event } from '../types'
-import { dateMinusDays } from '../utils'
 
 const COLORS = ['#1d9bf0', '#00ba7c', '#f7931a', '#e91e63', '#9c27b0', '#00bcd4', '#ff9800', '#4caf50']
 
@@ -27,24 +28,22 @@ export default function Metagame() {
   const [error, setError] = useState<string | null>(null)
   const [placementWeighted, setPlacementWeighted] = useState(false)
   const [ignoreLands, setIgnoreLands] = useState(false)
-  const [dateFrom, setDateFrom] = useState<string | null>(() => searchParams.get('date_from'))
-  const [dateTo, setDateTo] = useState<string | null>(() => searchParams.get('date_to'))
-  const [eventId, setEventId] = useState<number | null>(() => {
-    const id = searchParams.get('event_id')
-    return id ? parseInt(id, 10) : null
+  const [eventIds, setEventIds] = useState<number[]>(() => {
+    const param = searchParams.get('event_ids') ?? searchParams.get('event_id')
+    if (!param) return []
+    return param.split(',').map((s) => parseInt(s.trim(), 10)).filter((n) => !isNaN(n))
   })
   const [topCardsPage, setTopCardsPage] = useState(0)
-
-  useEffect(() => {
-    setDateFrom(searchParams.get('date_from'))
-    setDateTo(searchParams.get('date_to'))
-    const id = searchParams.get('event_id')
-    setEventId(id ? parseInt(id, 10) : null)
-  }, [searchParams])
   const [maxDate, setMaxDate] = useState<string | null>(null)
   const [lastEventDate, setLastEventDate] = useState<string | null>(null)
   const [formatName, setFormatName] = useState<string | null>(null)
   const [events, setEvents] = useState<Event[]>([])
+
+  useEffect(() => {
+    const param = searchParams.get('event_ids') ?? searchParams.get('event_id')
+    if (!param) setEventIds([])
+    else setEventIds(param.split(',').map((s) => parseInt(s.trim(), 10)).filter((n) => !isNaN(n)))
+  }, [searchParams])
 
   useEffect(() => {
     getDateRange().then((r) => {
@@ -57,22 +56,59 @@ export default function Metagame() {
 
   useEffect(() => {
     setLoading(true)
-    getMetagame(placementWeighted, ignoreLands, dateFrom, dateTo, eventId)
+    const eventIdsParam = eventIds.length ? eventIds.join(',') : undefined
+    getMetagame(placementWeighted, ignoreLands, undefined, undefined, undefined, eventIdsParam)
       .then(setMetagame)
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
-  }, [placementWeighted, ignoreLands, dateFrom, dateTo, eventId])
+  }, [placementWeighted, ignoreLands, eventIds])
 
-  const setEventFilter = (id: number | null) => {
-    setEventId(id)
+  const setEventFilter = (ids: number[]) => {
+    setEventIds(ids)
     const p = new URLSearchParams(searchParams)
-    if (id != null) p.set('event_id', String(id))
-    else p.delete('event_id')
+    if (ids.length) p.set('event_ids', ids.join(','))
+    else {
+      p.delete('event_ids')
+      p.delete('event_id')
+    }
     setSearchParams(p)
   }
 
-  if (!metagame && loading) return <div className="loading">Loading...</div>
+  if (!metagame && loading) {
+    return (
+      <div>
+        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+          <Skeleton width={100} height={32} />
+          <Skeleton width={120} height={32} />
+          <Skeleton width={140} height={32} />
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+          <div className="chart-container">
+            <Skeleton width={200} height={24} style={{ marginBottom: '1rem' }} />
+            <Skeleton width="100%" height={300} />
+          </div>
+          <div className="chart-container">
+            <Skeleton width={200} height={24} style={{ marginBottom: '1rem' }} />
+            <Skeleton width="100%" height={300} />
+          </div>
+        </div>
+      </div>
+    )
+  }
   if (error) return <div className="error">{error}</div>
+
+  const summary = metagame?.summary ?? { total_decks: 0 }
+  if (summary.total_decks === 0) {
+    return (
+      <div className="chart-container" style={{ textAlign: 'center', padding: '3rem 2rem', maxWidth: 480, margin: '0 auto' }}>
+        <p style={{ color: 'var(--text-muted)', marginBottom: '1rem', fontSize: '1.1rem' }}>No metagame data</p>
+        <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
+          Load or scrape deck data to analyze the metagame.
+        </p>
+        <Link to="/scrape" className="btn" style={{ textDecoration: 'none' }}>Load or scrape data</Link>
+      </div>
+    )
+  }
 
   const TOP_CARDS_PER_PAGE = 50
 
@@ -83,86 +119,21 @@ export default function Metagame() {
   const topCardsPages = Math.ceil(Math.min(topCardsTotal, 100) / TOP_CARDS_PER_PAGE)
   const topCardsSlice = topMain.slice(topCardsPage * TOP_CARDS_PER_PAGE, (topCardsPage + 1) * TOP_CARDS_PER_PAGE)
 
-  const setPreset = (preset: 'all' | '2weeks' | 'month' | 'lastEvent') => {
-    const p = new URLSearchParams(searchParams)
-    if (preset === 'all' || !maxDate) {
-      setDateFrom(null)
-      setDateTo(null)
-      p.delete('date_from')
-      p.delete('date_to')
-    } else if (preset === 'lastEvent' && lastEventDate) {
-      setDateFrom(lastEventDate)
-      setDateTo(lastEventDate)
-      p.set('date_from', lastEventDate)
-      p.set('date_to', lastEventDate)
-    } else {
-      const to = maxDate
-      const from = preset === '2weeks' ? dateMinusDays(maxDate, 14) : dateMinusDays(maxDate, 30)
-      setDateTo(to)
-      setDateFrom(from)
-      p.set('date_from', from)
-      p.set('date_to', to)
-    }
-    setSearchParams(p)
-  }
-
   return (
     <div style={{ opacity: loading ? 0.6 : 1, transition: 'opacity 0.2s' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
         <h1 className="page-title" style={{ margin: 0 }}>
           Metagame Analysis{formatName && <span style={{ fontSize: '0.7em', color: 'var(--text-muted)', marginLeft: '0.5rem' }}>— {formatName}</span>}
         </h1>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'center' }}>
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Date range:</span>
-            <button
-              type="button"
-              className="btn"
-              style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }}
-              onClick={() => setPreset('all')}
-            >
-              All time
-            </button>
-            <button
-              type="button"
-              className="btn"
-              style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }}
-              onClick={() => setPreset('month')}
-            >
-              Last month
-            </button>
-            <button
-              type="button"
-              className="btn"
-              style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }}
-              onClick={() => setPreset('2weeks')}
-            >
-              Last 2 weeks
-            </button>
-            <button
-              type="button"
-              className="btn"
-              style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }}
-              onClick={() => setPreset('lastEvent')}
-            >
-              Last event
-            </button>
-          </div>
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginRight: '0.5rem' }}>Event:</label>
-            <select
-              value={eventId ?? ''}
-              onChange={(e) => setEventFilter(e.target.value ? parseInt(e.target.value, 10) : null)}
-              style={{ padding: '0.25rem 0.5rem' }}
-            >
-              <option value="">All events</option>
-              {events.map((e) => (
-                <option key={e.event_id} value={e.event_id}>
-                  {e.event_name} ({e.date})
-                </option>
-              ))}
-            </select>
-          </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'flex-end' }}>
+          <EventSelector
+            events={events}
+            selectedIds={eventIds}
+            onChange={setEventFilter}
+            showDatePresets
+            maxDate={maxDate}
+            lastEventDate={lastEventDate}
+          />
           <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
             <input
               type="checkbox"
@@ -219,7 +190,7 @@ export default function Metagame() {
               label={({ archetype, pct }) => `${archetype} (${pct}%)`}
               style={{ cursor: 'pointer' }}
               onClick={(data) => {
-                if (data?.archetype) navigate(`/decks?deck_name=${encodeURIComponent(data.archetype)}`)
+                if (data?.archetype) navigate(`/decks?archetype=${encodeURIComponent(data.archetype)}`)
               }}
             >
               {archetypes.slice(0, 8).map((_, i) => (
@@ -228,7 +199,7 @@ export default function Metagame() {
             </Pie>
             <Tooltip />
             <Legend onClick={(e) => {
-              if (e?.value) navigate(`/decks?deck_name=${encodeURIComponent(String(e.value))}`)
+              if (e?.value) navigate(`/decks?archetype=${encodeURIComponent(String(e.value))}`)
             }} />
           </PieChart>
         </ResponsiveContainer>
@@ -293,6 +264,39 @@ export default function Metagame() {
           </table>
         </div>
       </div>
+
+      {metagame?.card_synergy && metagame.card_synergy.length > 0 && (
+        <div className="chart-container" style={{ marginTop: '1.5rem' }}>
+          <h3 style={{ margin: '0 0 1rem' }}>Cards Often Played Together</h3>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1rem' }}>
+            Pairs that appear in the same deck frequently (co-occurrence)
+          </p>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Card A</th>
+                  <th>Card B</th>
+                  <th>Decks</th>
+                </tr>
+              </thead>
+              <tbody>
+                {metagame.card_synergy.map((s, i) => (
+                  <tr key={`${s.card_a}-${s.card_b}-${i}`}>
+                    <td>
+                      <CardHover cardName={s.card_a} linkTo>{s.card_a}</CardHover>
+                    </td>
+                    <td>
+                      <CardHover cardName={s.card_b} linkTo>{s.card_b}</CardHover>
+                    </td>
+                    <td>{s.decks}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

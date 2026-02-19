@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { getPlayerDetail } from '../api'
+import { getPlayerDetail, getSimilarPlayers, addPlayerAlias, getPlayerAliases } from '../api'
 
 export default function PlayerDetail() {
   const { playerName } = useParams<{ playerName: string }>()
@@ -8,6 +8,9 @@ export default function PlayerDetail() {
   const [data, setData] = useState<Awaited<ReturnType<typeof getPlayerDetail>> | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [similarPlayers, setSimilarPlayers] = useState<string[]>([])
+  const [aliases, setAliases] = useState<Record<string, string>>({})
+  const [mergeLoading, setMergeLoading] = useState(false)
 
   useEffect(() => {
     if (!playerName) return
@@ -16,6 +19,12 @@ export default function PlayerDetail() {
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
   }, [playerName])
+
+  useEffect(() => {
+    if (!data?.player) return
+    getSimilarPlayers(data.player, 10).then((r) => setSimilarPlayers(r.similar.filter((s) => s !== data.player)))
+    getPlayerAliases().then((r) => setAliases(r.aliases))
+  }, [data?.player])
 
   if (loading) return <div className="loading">Loading...</div>
   if (error) return <div className="error">{error}</div>
@@ -57,6 +66,55 @@ export default function PlayerDetail() {
           </div>
         </div>
       </div>
+
+      {similarPlayers.length > 0 && (
+        <div className="chart-container" style={{ marginBottom: '1.5rem' }}>
+          <h3 style={{ margin: '0 0 0.5rem' }}>Merge players</h3>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '0.75rem' }}>
+            These players have similar names. Merge them into &quot;{data?.player}&quot; to combine stats.
+          </p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+            {similarPlayers.map((name) => (
+              <span
+                key={name}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  padding: '0.25rem 0.5rem',
+                  background: aliases[name] ? 'rgba(0, 186, 124, 0.2)' : 'var(--bg-hover)',
+                  borderRadius: 6,
+                  fontSize: '0.9rem',
+                }}
+              >
+                {name}
+                {aliases[name] ? (
+                  <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>→ {aliases[name]}</span>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn"
+                    style={{ padding: '0.15rem 0.4rem', fontSize: '0.75rem' }}
+                    disabled={mergeLoading}
+                    onClick={async () => {
+                      setMergeLoading(true)
+                      try {
+                        await addPlayerAlias(name, data!.player)
+                        setAliases((a) => ({ ...a, [name]: data!.player }))
+                        navigate(0)
+                      } finally {
+                        setMergeLoading(false)
+                      }
+                    }}
+                  >
+                    Merge into {data?.player}
+                  </button>
+                )}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="chart-container">
         <h3 style={{ margin: '0 0 1rem' }}>Decks</h3>

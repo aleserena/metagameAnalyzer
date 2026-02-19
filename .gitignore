@@ -2,6 +2,7 @@
 decks.json
 metagame.json
 .scryfall_cache.json
+player_aliases.json
 
 # Python
 __pycache__/

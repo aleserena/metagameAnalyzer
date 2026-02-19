@@ -167,6 +167,18 @@ tr.clickable {
   color: var(--text-muted);
 }
 
+.skeleton {
+  background: linear-gradient(90deg, var(--border) 25%, var(--bg-hover) 50%, var(--border) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+  border-radius: 4px;
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
 .error {
   background: rgba(244, 67, 54, 0.1);
   border: 1px solid #f44336;
@@ -206,6 +218,23 @@ tr.clickable {
   border-radius: 6px;
   color: var(--text);
   font-size: 1rem;
+}
+
+.events-dropdown input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
+  min-width: 1rem;
+  max-width: none;
+  padding: 0;
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+
+.events-dropdown label {
+  color: var(--text);
+  display: flex;
+  align-items: center;
 }
 
 .deck-list {

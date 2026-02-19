@@ -2,8 +2,17 @@
 
 import json
 import threading
+import unicodedata
 from pathlib import Path
 from urllib.parse import unquote
+
+
+def _normalize_search(s: str) -> str:
+    """Lowercase and strip accents for relaxed substring matching."""
+    if not s:
+        return ""
+    nfd = unicodedata.normalize("NFD", s.lower())
+    return "".join(c for c in nfd if unicodedata.category(c) != "Mn")
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,7 +23,7 @@ from pydantic import BaseModel
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.mtgtop8.analyzer import analyze, deck_analysis, player_leaderboard
+from src.mtgtop8.analyzer import analyze, deck_analysis, player_leaderboard, similar_decks, find_duplicate_decks
 from src.mtgtop8.card_lookup import lookup_cards
 from src.mtgtop8.models import Deck
 from src.mtgtop8.scraper import scrape
@@ -32,6 +41,40 @@ app.add_middleware(
 # In-memory storage
 _decks: list[dict] = []
 _metagame_cache: dict | None = None
+_player_aliases: dict[str, str] = {}  # alias -> canonical
+
+
+def _aliases_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "player_aliases.json"
+
+
+def _load_player_aliases() -> None:
+    global _player_aliases
+    p = _aliases_path()
+    if p.exists():
+        try:
+            with open(p, encoding="utf-8") as f:
+                _player_aliases = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            _player_aliases = {}
+    else:
+        _player_aliases = {}
+
+
+def _save_player_aliases() -> None:
+    with open(_aliases_path(), "w", encoding="utf-8") as f:
+        json.dump(_player_aliases, f, indent=2, ensure_ascii=False)
+
+
+def _normalize_player(name: str) -> str:
+    """Return canonical player name (alias -> canonical mapping)."""
+    if not name or not name.strip():
+        return "(unknown)"
+    n = name.strip()
+    return _player_aliases.get(n, n)
+
+
+_load_player_aliases()
 
 
 def _get_decks() -> list[Deck]:
@@ -115,6 +158,12 @@ def _filter_decks_by_date(decks: list[dict], date_from: str | None, date_to: str
     return [d for d in decks if _date_in_range(d.get("date", ""), date_from, date_to)]
 
 
+@app.get("/api/health")
+def health():
+    """Health check for load balancers and monitoring."""
+    return {"status": "ok"}
+
+
 class CardLookupBody(BaseModel):
     names: list[str] = []
 
@@ -127,46 +176,91 @@ def cards_lookup(body: CardLookupBody):
     return lookup_cards(body.names)
 
 
+def _deck_sort_key_by(sort: str, order: str):
+    """Return (key_fn, reverse) for sorting decks."""
+    reverse = order == "desc"
+
+    def key(d: dict):
+        if sort == "date":
+            date_key = _parse_date_sortkey(d.get("date", ""))
+            val = int(date_key) if date_key.isdigit() else 0
+            return (-val if reverse else val, _RANK_ORDER.get(d.get("rank", ""), 99))
+        if sort == "rank":
+            rk = _RANK_ORDER.get(d.get("rank", ""), 99)
+            date_key = _parse_date_sortkey(d.get("date", ""))
+            return (-rk if reverse else rk, -(int(date_key) if date_key.isdigit() else 0))
+        if sort == "player":
+            return ((d.get("player") or "").lower(),)
+        if sort == "name":
+            return ((d.get("name") or "").lower(),)
+        return _deck_sort_key(d)
+
+    return key, reverse if sort in ("player", "name") else False
+
+
 @app.get("/api/decks")
 def list_decks(
-    event_id: int | None = Query(None, description="Filter by event ID"),
+    event_id: int | None = Query(None, description="Filter by event ID (single, for backward compatibility)"),
+    event_ids: str | None = Query(None, description="Filter by event IDs (comma-separated)"),
     commander: str | None = Query(None, description="Filter by commander name (substring)"),
     deck_name: str | None = Query(None, description="Filter by deck name (substring)"),
+    archetype: str | None = Query(None, description="Filter by archetype (substring)"),
     player: str | None = Query(None, description="Filter by player name (substring)"),
     card: str | None = Query(None, description="Filter by card name (substring, commander, mainboard or sideboard)"),
+    sort: str = Query("date", description="Sort by: date, rank, player, name"),
+    order: str = Query("desc", description="Sort order: asc, desc"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
 ):
     """List decks with optional filters and pagination."""
     filtered = _decks
-    if event_id is not None:
+    if event_ids:
+        ids = [int(x.strip()) for x in event_ids.split(",") if x.strip()]
+        if ids:
+            filtered = [d for d in filtered if d.get("event_id") in ids]
+    elif event_id is not None:
         filtered = [d for d in filtered if d.get("event_id") == event_id]
     if commander:
-        c_lower = commander.lower()
+        c_norm = _normalize_search(commander)
         filtered = [
             d for d in filtered
-            if any(c_lower in (c or "").lower() for c in d.get("commanders", []))
+            if any(c_norm in _normalize_search(c or "") for c in d.get("commanders", []))
         ]
     if deck_name:
-        dn_lower = deck_name.lower()
-        filtered = [d for d in filtered if dn_lower in (d.get("name") or "").lower()]
-    if player:
-        p_lower = player.lower()
-        filtered = [d for d in filtered if p_lower in (d.get("player") or "").lower()]
-    if card:
-        card_lower = card.lower().strip()
+        dn_norm = _normalize_search(deck_name)
+        filtered = [d for d in filtered if dn_norm in _normalize_search(d.get("name") or "")]
+    if archetype:
+        arch_norm = _normalize_search(archetype)
         filtered = [
             d for d in filtered
-            if any(card_lower in (c or "").lower() for c in d.get("commanders", []))
+            if arch_norm in _normalize_search(d.get("archetype") or "")
+        ]
+    if player:
+        p_norm = _normalize_search(player)
+        filtered = [
+            d for d in filtered
+            if p_norm in _normalize_search(d.get("player") or "")
+            or p_norm in _normalize_search(_normalize_player(d.get("player") or ""))
+        ]
+    if card:
+        card_norm = _normalize_search(card)
+        filtered = [
+            d for d in filtered
+            if any(card_norm in _normalize_search(c or "") for c in d.get("commanders", []))
             or any(
-                card_lower in ((e.get("card") if isinstance(e, dict) else "") or "").lower()
+                card_norm in _normalize_search((e.get("card") if isinstance(e, dict) else "") or "")
                 for section in (d.get("mainboard", []), d.get("sideboard", []))
                 for e in section
             )
         ]
-    filtered = sorted(filtered, key=_deck_sort_key)
+    sort_val = sort if sort in ("date", "rank", "player", "name") else "date"
+    order_val = order if order in ("asc", "desc") else "desc"
+    key_fn, reverse = _deck_sort_key_by(sort_val, order_val)
+    filtered = sorted(filtered, key=key_fn, reverse=reverse)
     total = len(filtered)
     page = filtered[skip : skip + limit]
+    # Normalize player names for display (merge aliases)
+    page = [{**d, "player": _normalize_player(d.get("player") or "")} for d in page]
     return {"decks": page, "total": total, "skip": skip, "limit": limit}
 
 
@@ -184,8 +278,59 @@ def compare_decks(ids: str = Query(..., description="Comma-separated deck IDs"))
     for did in id_list:
         if did not in deck_map:
             raise HTTPException(status_code=404, detail=f"Deck {did} not found")
-        result.append(deck_map[did])
+        d = dict(deck_map[did])
+        d["player"] = _normalize_player(d.get("player") or "")
+        result.append(d)
     return {"decks": result}
+
+
+def _deck_duplicate_info(deck_id: int) -> dict | None:
+    """Return duplicate info for a deck: {is_duplicate, duplicate_of, same_mainboard_ids}."""
+    decks = [Deck.from_dict(d) for d in _decks]
+    dup_map = find_duplicate_decks(decks)
+    for primary, others in dup_map.items():
+        if deck_id == primary:
+            return {"is_duplicate": False, "duplicate_of": None, "same_mainboard_ids": others}
+        if deck_id in others:
+            return {"is_duplicate": True, "duplicate_of": primary, "same_mainboard_ids": [x for x in others if x != deck_id]}
+    return None
+
+
+@app.get("/api/decks/duplicates")
+def list_duplicate_decks(
+    event_ids: str | None = Query(None, description="Limit to events (comma-separated)"),
+):
+    """Decks with identical mainboard (duplicates across events)."""
+    candidate = _decks
+    if event_ids:
+        ids = [int(x.strip()) for x in event_ids.split(",") if x.strip()]
+        if ids:
+            candidate = [d for d in _decks if d.get("event_id") in ids]
+    decks = [Deck.from_dict(d) for d in candidate]
+    dup_map = find_duplicate_decks(decks)
+    deck_map = {d.get("deck_id"): d for d in _decks}
+    result = []
+    for primary_id, duplicate_ids in dup_map.items():
+        primary = deck_map.get(primary_id, {})
+        result.append({
+            "primary_deck_id": primary_id,
+            "primary_name": primary.get("name"),
+            "primary_player": primary.get("player"),
+            "primary_event": primary.get("event_name"),
+            "primary_date": primary.get("date"),
+            "duplicate_deck_ids": duplicate_ids,
+            "duplicates": [
+                {
+                    "deck_id": did,
+                    "name": deck_map.get(did, {}).get("name"),
+                    "player": deck_map.get(did, {}).get("player"),
+                    "event_name": deck_map.get(did, {}).get("event_name"),
+                    "date": deck_map.get(did, {}).get("date"),
+                }
+                for did in duplicate_ids
+            ],
+        })
+    return {"duplicates": result}
 
 
 @app.get("/api/decks/{deck_id}")
@@ -193,8 +338,37 @@ def get_deck(deck_id: int):
     """Get single deck by ID."""
     for d in _decks:
         if d.get("deck_id") == deck_id:
-            return d
+            out = dict(d)
+            out["player"] = _normalize_player(out.get("player") or "")
+            dup = _deck_duplicate_info(deck_id)
+            if dup:
+                out["duplicate_info"] = dup
+            return out
     raise HTTPException(status_code=404, detail="Deck not found")
+
+
+@app.get("/api/decks/{deck_id}/similar")
+def get_similar_decks(
+    deck_id: int,
+    limit: int = Query(10, ge=1, le=20),
+    event_ids: str | None = Query(None, description="Limit to events (comma-separated)"),
+):
+    """Decks with high card overlap (same metagame)."""
+    deck_dict = None
+    for d in _decks:
+        if d.get("deck_id") == deck_id:
+            deck_dict = d
+            break
+    if not deck_dict:
+        raise HTTPException(status_code=404, detail="Deck not found")
+    deck = Deck.from_dict(deck_dict)
+    candidate_decks = _decks
+    if event_ids:
+        ids = [int(x.strip()) for x in event_ids.split(",") if x.strip()]
+        if ids:
+            candidate_decks = [d for d in _decks if d.get("event_id") in ids]
+    all_decks = [Deck.from_dict(d) for d in candidate_decks]
+    return {"similar": similar_decks(deck, all_decks, limit=limit)}
 
 
 @app.get("/api/decks/{deck_id}/analysis")
@@ -268,7 +442,8 @@ def get_metagame(
     ignore_lands: bool = Query(False),
     date_from: str | None = Query(None, description="Filter from date (DD/MM/YY)"),
     date_to: str | None = Query(None, description="Filter to date (DD/MM/YY)"),
-    event_id: int | None = Query(None, description="Filter by event ID"),
+    event_id: int | None = Query(None, description="Filter by event ID (single, backward compat)"),
+    event_ids: str | None = Query(None, description="Filter by event IDs (comma-separated)"),
 ):
     """Full metagame report."""
     if not _decks:
@@ -281,11 +456,74 @@ def get_metagame(
             "ignore_lands": ignore_lands,
         }
     filtered = _decks
-    if event_id is not None:
+    if event_ids:
+        ids = [int(x.strip()) for x in event_ids.split(",") if x.strip()]
+        if ids:
+            filtered = [d for d in filtered if d.get("event_id") in ids]
+    elif event_id is not None:
         filtered = [d for d in filtered if d.get("event_id") == event_id]
-    filtered = _filter_decks_by_date(filtered, date_from, date_to)
+    else:
+        filtered = _filter_decks_by_date(filtered, date_from, date_to)
     decks = [Deck.from_dict(d) for d in filtered]
     return analyze(decks, placement_weighted=placement_weighted, ignore_lands=ignore_lands)
+
+
+@app.get("/api/player-aliases")
+def get_player_aliases():
+    """List player alias mappings (alias -> canonical)."""
+    return {"aliases": _player_aliases}
+
+
+class PlayerAliasBody(BaseModel):
+    alias: str
+    canonical: str
+
+
+@app.post("/api/player-aliases")
+def add_player_alias(body: PlayerAliasBody):
+    """Merge player: map alias to canonical name. E.g. {'alias': 'Pablo Tomas Pesci', 'canonical': 'Tomas Pesci'}."""
+    alias = body.alias.strip()
+    canonical = body.canonical.strip()
+    if not alias or not canonical:
+        raise HTTPException(status_code=400, detail="alias and canonical required")
+    _player_aliases[alias] = canonical
+    _save_player_aliases()
+    return {"aliases": _player_aliases}
+
+
+@app.delete("/api/player-aliases/{alias:path}")
+def remove_player_alias(alias: str):
+    """Remove a player alias."""
+    a = unquote(alias).strip()
+    if a in _player_aliases:
+        del _player_aliases[a]
+        _save_player_aliases()
+    return {"aliases": _player_aliases}
+
+
+@app.get("/api/players/similar")
+def get_similar_players(
+    name: str = Query(..., description="Player name to find similar"),
+    limit: int = Query(10, ge=1, le=50),
+):
+    """Suggest players with similar names (for merging)."""
+    name_norm = _normalize_search(name)
+    names = set((d.get("player") or "").strip() for d in _decks if (d.get("player") or "").strip())
+    names.discard("")
+    names.discard("(unknown)")
+    # Simple similarity: same last word, or one contains the other (accent-insensitive)
+    def score(n: str) -> int:
+        nn = _normalize_search(n)
+        if nn == name_norm:
+            return 0
+        if name_norm in nn or nn in name_norm:
+            return 1
+        name_words = set(name_norm.split())
+        n_words = set(nn.split())
+        overlap = len(name_words & n_words)
+        return 10 - overlap if overlap > 0 else 99
+    sorted_names = sorted(names, key=score)
+    return {"similar": [n for n in sorted_names if score(n) < 99][:limit]}
 
 
 @app.get("/api/players")
@@ -293,19 +531,20 @@ def get_players(
     date_from: str | None = Query(None, description="Filter from date (DD/MM/YY)"),
     date_to: str | None = Query(None, description="Filter to date (DD/MM/YY)"),
 ):
-    """Player leaderboard (wins, top-2, top-4, points)."""
+    """Player leaderboard (wins, top-2, top-4, points). Merges aliased players."""
     if not _decks:
         return {"players": []}
     filtered = _filter_decks_by_date(_decks, date_from, date_to)
     decks = [Deck.from_dict(d) for d in filtered]
-    return {"players": player_leaderboard(decks)}
+    return {"players": player_leaderboard(decks, normalize_player=_normalize_player)}
 
 
 @app.get("/api/players/{player_name:path}")
 def get_player_detail(player_name: str):
-    """Player stats and their decks."""
-    name = unquote(player_name)
-    player_decks = [d for d in _decks if (d.get("player") or "").strip() == name]
+    """Player stats and their decks. Merges aliased players (e.g. Pablo Tomas Pesci = Tomas Pesci)."""
+    name = unquote(player_name).strip()
+    canonical = _normalize_player(name)
+    player_decks = [d for d in _decks if _normalize_player(d.get("player") or "") == canonical]
     if not player_decks:
         raise HTTPException(status_code=404, detail="Player not found")
     decks = [Deck.from_dict(d) for d in player_decks]
@@ -319,7 +558,7 @@ def get_player_detail(player_name: str):
     ]
     deck_summaries.sort(key=lambda x: _deck_sort_key(x))
     return {
-        "player": stat["player"],
+        "player": canonical,
         "wins": stat["wins"],
         "top2": stat["top2"],
         "top4": stat["top4"],

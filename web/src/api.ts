@@ -1,4 +1,4 @@
-import type { Deck, MetagameReport, Event, PlayerStats } from './types'
+import type { Deck, MetagameReport, Event, PlayerStats, SimilarDeck } from './types'
 
 const API_BASE = '/api'
 
@@ -19,19 +19,27 @@ async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
 
 export async function getDecks(params?: {
   event_id?: number
+  event_ids?: string
   commander?: string
   deck_name?: string
+  archetype?: string
   player?: string
   card?: string
+  sort?: string
+  order?: string
   skip?: number
   limit?: number
 }): Promise<{ decks: Deck[]; total: number; skip: number; limit: number }> {
   const search = new URLSearchParams()
   if (params?.event_id != null) search.set('event_id', String(params.event_id))
+  if (params?.event_ids) search.set('event_ids', params.event_ids)
   if (params?.commander) search.set('commander', params.commander)
   if (params?.deck_name) search.set('deck_name', params.deck_name)
+  if (params?.archetype) search.set('archetype', params.archetype)
   if (params?.player) search.set('player', params.player)
   if (params?.card) search.set('card', params.card)
+  if (params?.sort) search.set('sort', params.sort)
+  if (params?.order) search.set('order', params.order)
   if (params?.skip != null) search.set('skip', String(params.skip))
   if (params?.limit != null) search.set('limit', String(params.limit))
   const q = search.toString()
@@ -44,6 +52,32 @@ export async function getDeck(deckId: number): Promise<Deck> {
 
 export async function getDeckCompare(deckIds: number[]): Promise<{ decks: Deck[] }> {
   return fetchApi(`/decks/compare?ids=${deckIds.join(',')}`)
+}
+
+export async function getSimilarDecks(
+  deckId: number,
+  limit = 10,
+  eventIds?: string
+): Promise<{ similar: SimilarDeck[] }> {
+  const params = new URLSearchParams()
+  params.set('limit', String(limit))
+  if (eventIds) params.set('event_ids', eventIds)
+  return fetchApi(`/decks/${deckId}/similar?${params.toString()}`)
+}
+
+export async function getDuplicateDecks(eventIds?: string): Promise<{
+  duplicates: Array<{
+    primary_deck_id: number
+    primary_name: string
+    primary_player: string
+    primary_event: string
+    primary_date: string
+    duplicate_deck_ids: number[]
+    duplicates: Array<{ deck_id: number; name: string; player: string; event_name: string; date: string }>
+  }>
+}> {
+  const params = eventIds ? `?event_ids=${encodeURIComponent(eventIds)}` : ''
+  return fetchApi(`/decks/duplicates${params}`)
 }
 
 export interface CardLookupResult {
@@ -107,14 +141,16 @@ export async function getMetagame(
   ignoreLands = false,
   dateFrom?: string | null,
   dateTo?: string | null,
-  eventId?: number | null
+  eventId?: number | null,
+  eventIds?: string | null
 ): Promise<MetagameReport> {
   const params = new URLSearchParams()
   params.set('placement_weighted', String(placementWeighted))
   params.set('ignore_lands', String(ignoreLands))
   if (dateFrom) params.set('date_from', dateFrom)
   if (dateTo) params.set('date_to', dateTo)
-  if (eventId != null) params.set('event_id', String(eventId))
+  if (eventIds) params.set('event_ids', eventIds)
+  else if (eventId != null) params.set('event_id', String(eventId))
   return fetchApi(`/metagame?${params.toString()}`)
 }
 
@@ -139,6 +175,25 @@ export interface PlayerDetail {
 
 export async function getPlayerDetail(playerName: string): Promise<PlayerDetail> {
   return fetchApi(`/players/${encodeURIComponent(playerName)}`)
+}
+
+export async function getPlayerAliases(): Promise<{ aliases: Record<string, string> }> {
+  return fetchApi('/player-aliases')
+}
+
+export async function addPlayerAlias(alias: string, canonical: string): Promise<{ aliases: Record<string, string> }> {
+  return fetchApi('/player-aliases', {
+    method: 'POST',
+    body: JSON.stringify({ alias, canonical }),
+  })
+}
+
+export async function removePlayerAlias(alias: string): Promise<{ aliases: Record<string, string> }> {
+  return fetchApi(`/player-aliases/${encodeURIComponent(alias)}`, { method: 'DELETE' })
+}
+
+export async function getSimilarPlayers(name: string, limit = 10): Promise<{ similar: string[] }> {
+  return fetchApi(`/players/similar?name=${encodeURIComponent(name)}&limit=${limit}`)
 }
 
 export async function loadDecks(file: File): Promise<{ loaded: number; message: string }> {

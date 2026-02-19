@@ -27,6 +27,13 @@ def client():
     return TestClient(app)
 
 
+def test_health(client):
+    """GET /api/health returns ok."""
+    r = client.get("/api/health")
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok"}
+
+
 def test_get_decks_pagination(client, sample_decks):
     """GET /api/decks returns paginated results."""
     r = client.get("/api/decks?skip=0&limit=1")
@@ -40,12 +47,23 @@ def test_get_decks_pagination(client, sample_decks):
 
 
 def test_get_decks_filter_event_id(client, sample_decks):
-    """GET /api/decks filters by event_id."""
+    """GET /api/decks filters by event_id (single)."""
     event_id = sample_decks[0]["event_id"]
     r = client.get(f"/api/decks?event_id={event_id}")
     assert r.status_code == 200
     data = r.json()
     assert all(d["event_id"] == event_id for d in data["decks"])
+
+
+def test_get_decks_filter_event_ids(client, sample_decks):
+    """GET /api/decks filters by event_ids (multiple)."""
+    ids = [d["event_id"] for d in sample_decks]
+    event_ids = ",".join(str(i) for i in ids)
+    r = client.get(f"/api/decks?event_ids={event_ids}")
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data["decks"]) == len(sample_decks)
+    assert all(d["event_id"] in ids for d in data["decks"])
 
 
 def test_get_decks_filter_deck_name(client, sample_decks):
@@ -55,6 +73,20 @@ def test_get_decks_filter_deck_name(client, sample_decks):
     data = r.json()
     assert len(data["decks"]) >= 1
     assert any("Spider" in (d.get("name") or "") for d in data["decks"])
+
+
+def test_get_decks_filter_archetype(client, sample_decks):
+    """GET /api/decks filters by archetype substring."""
+    r = client.get("/api/decks?archetype=Aggro")
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data["decks"]) >= 1
+    assert any("Aggro" in (d.get("archetype") or "") for d in data["decks"])
+    r2 = client.get("/api/decks?archetype=Control")
+    assert r2.status_code == 200
+    data2 = r2.json()
+    assert len(data2["decks"]) >= 1
+    assert any("Control" in (d.get("archetype") or "") for d in data2["decks"])
 
 
 def test_get_decks_filter_player(client, sample_decks):

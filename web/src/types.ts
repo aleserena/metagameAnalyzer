@@ -17,6 +17,7 @@ export interface Deck {
   sideboard: DeckCard[]
   commanders: string[]
   archetype: string | null
+  duplicate_info?: DeckDuplicateInfo
 }
 
 export interface MetagameSummary {
@@ -44,13 +45,36 @@ export interface TopCard {
   total_copies: number
 }
 
+export interface CardSynergy {
+  card_a: string
+  card_b: string
+  decks: number
+}
+
 export interface MetagameReport {
   summary: MetagameSummary
   commander_distribution: CommanderDistribution[]
   archetype_distribution: ArchetypeDistribution[]
   top_cards_main: TopCard[]
+  card_synergy?: CardSynergy[]
   placement_weighted: boolean
   ignore_lands: boolean
+}
+
+export interface SimilarDeck {
+  deck_id: number
+  name: string
+  player: string
+  event_name: string
+  date: string
+  rank: string
+  similarity: number
+}
+
+export interface DeckDuplicateInfo {
+  is_duplicate: boolean
+  duplicate_of: number | null
+  same_mainboard_ids: number[]
 }
 
 export interface Event {

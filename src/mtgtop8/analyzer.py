@@ -148,11 +148,17 @@ def top_cards_sideboard(decks: list[Deck], placement_weighted: bool = False) -> 
     ][:100]
 
 
-def player_leaderboard(decks: list[Deck]) -> list[dict[str, Any]]:
-    """Player stats: wins, top-2, top-4, points. Sorted by wins desc, then points."""
+def player_leaderboard(
+    decks: list[Deck],
+    normalize_player: "typing.Callable[[str], str] | None" = None,
+) -> list[dict[str, Any]]:
+    """Player stats: wins, top-2, top-4, points. Sorted by wins desc, then points.
+    normalize_player: optional fn to merge aliases (e.g. 'Pablo Tomas Pesci' -> 'Tomas Pesci').
+    """
+    norm = normalize_player if normalize_player is not None else (lambda x: x)
     stats: dict[str, dict[str, int | float]] = {}
     for d in decks:
-        player = d.player or "(unknown)"
+        player = norm(d.player or "(unknown)")
         if player not in stats:
             stats[player] = {"player": player, "wins": 0, "top2": 0, "top4": 0, "top8": 0, "points": 0.0, "deck_count": 0}
         s = stats[player]
@@ -341,9 +347,10 @@ def analyze(
     decks: list[Deck],
     placement_weighted: bool = False,
     ignore_lands: bool = False,
+    include_card_synergy: bool = True,
 ) -> dict[str, Any]:
     """Full metagame analysis."""
-    return {
+    result: dict[str, Any] = {
         "summary": deck_diversity(decks),
         "commander_distribution": commander_distribution(decks, placement_weighted),
         "archetype_distribution": archetype_distribution(decks, placement_weighted),
@@ -351,6 +358,97 @@ def analyze(
         "placement_weighted": placement_weighted,
         "ignore_lands": ignore_lands,
     }
+    if include_card_synergy and len(decks) >= 3:
+        result["card_synergy"] = card_synergy(decks, min_decks=2, top_n=30, ignore_lands=ignore_lands)
+    else:
+        result["card_synergy"] = []
+    return result
+
+
+def card_synergy(
+    decks: list[Deck],
+    min_decks: int = 3,
+    top_n: int = 50,
+    ignore_lands: bool = False,
+) -> list[dict[str, Any]]:
+    """Cards often played together: pairs that co-occur in many decks."""
+    from collections import defaultdict
+
+    pair_counts: dict[tuple[str, str], int] = defaultdict(int)
+
+    for d in decks:
+        cards = set()
+        for qty, card in d.mainboard:
+            if card in BASIC_LANDS:
+                continue
+            if ignore_lands and _is_land_card(card):
+                continue
+            cards.add(card)
+        cards_list = sorted(cards)
+        for i in range(len(cards_list)):
+            for j in range(i + 1, len(cards_list)):
+                a, b = cards_list[i], cards_list[j]
+                pair_counts[(a, b)] += 1
+
+    return [
+        {
+            "card_a": a,
+            "card_b": b,
+            "decks": count,
+        }
+        for (a, b), count in sorted(pair_counts.items(), key=lambda x: -x[1])
+        if count >= min_decks
+    ][:top_n]
+
+
+def similar_decks(
+    deck: Deck,
+    all_decks: list[Deck],
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Return decks with highest card overlap (Jaccard similarity on mainboard)."""
+    deck_cards = set(c for _, c in deck.mainboard)
+    if not deck_cards:
+        return []
+
+    results: list[tuple[float, Deck]] = []
+    for d in all_decks:
+        if d.deck_id == deck.deck_id:
+            continue
+        other_cards = set(c for _, c in d.mainboard)
+        if not other_cards:
+            continue
+        intersection = len(deck_cards & other_cards)
+        union = len(deck_cards | other_cards)
+        sim = intersection / union if union else 0
+        results.append((sim, d))
+
+    results.sort(key=lambda x: -x[0])
+    return [
+        {
+            "deck_id": d.deck_id,
+            "name": d.name,
+            "player": d.player,
+            "event_name": d.event_name,
+            "date": d.date,
+            "rank": d.rank,
+            "similarity": round(sim * 100, 1),
+        }
+        for sim, d in results[:limit]
+    ]
+
+
+def find_duplicate_decks(decks: list[Deck]) -> dict[int, list[int]]:
+    """Deck IDs that are duplicates (identical mainboard). Returns {deck_id: [other_duplicate_ids]}."""
+    def mainboard_key(d: Deck) -> tuple:
+        return tuple(sorted((qty, c) for qty, c in d.mainboard))
+
+    by_key: dict[tuple, list[int]] = {}
+    for d in decks:
+        k = mainboard_key(d)
+        by_key.setdefault(k, []).append(d.deck_id)
+
+    return {ids[0]: ids[1:] for ids in by_key.values() if len(ids) > 1}
 
 
 def write_report(report: dict[str, Any], path: str) -> None:

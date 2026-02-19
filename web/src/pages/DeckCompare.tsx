@@ -78,6 +78,23 @@ export default function DeckCompare() {
   const cardQtyInDeck = (card: string, deck: Deck) =>
     deck.mainboard.find((c) => c.card === card)?.qty ?? 0
 
+  const UNIQUE_COLORS = [
+    'rgba(29, 155, 240, 0.25)',
+    'rgba(247, 147, 26, 0.25)',
+    'rgba(156, 39, 176, 0.25)',
+    'rgba(0, 188, 212, 0.25)',
+  ]
+  const getCellBg = (card: string, deck: Deck, deckIndex: number) => {
+    const inDecks = compareData!.filter((d) => cardInDeck(card, d))
+    const isCommon = inDecks.length === compareData!.length
+    if (!cardInDeck(card, deck)) return undefined
+    if (isCommon) return 'rgba(0, 186, 124, 0.1)'
+    if (inDecks.length === 1 && inDecks[0].deck_id === deck.deck_id) {
+      return UNIQUE_COLORS[deckIndex % UNIQUE_COLORS.length]
+    }
+    return undefined
+  }
+
   return (
     <div>
       <h1 className="page-title">Compare Decks</h1>
@@ -161,6 +178,9 @@ export default function DeckCompare() {
       {compareData && compareData.length >= 2 && (
         <div className="chart-container">
           <h3 style={{ margin: '0 0 1rem' }}>Card Comparison</h3>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1rem' }}>
+            Green = in all decks. Colored cells = unique to that deck. &quot;(unique)&quot; = only in one deck.
+          </p>
           <div className="table-wrap" style={{ overflowX: 'auto' }}>
             <table>
               <thead>
@@ -183,18 +203,24 @@ export default function DeckCompare() {
                 {allCards.sort().map((card) => {
                   const inDecks = compareData.filter((d) => cardInDeck(card, d))
                   const isCommon = inDecks.length === compareData.length
+                  const isUnique = inDecks.length === 1
                   return (
                     <tr
                       key={card}
                       style={{
-                        background: isCommon ? 'rgba(0, 186, 124, 0.1)' : undefined,
+                        background: isCommon ? 'rgba(0, 186, 124, 0.08)' : undefined,
                       }}
                     >
                       <td>
                         <CardHover cardName={card} linkTo>{card}</CardHover>
+                        {isUnique && (
+                          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginLeft: 4 }}>
+                            (unique)
+                          </span>
+                        )}
                       </td>
-                      {compareData.map((d) => (
-                        <td key={d.deck_id}>
+                      {compareData.map((d, i) => (
+                        <td key={d.deck_id} style={{ background: getCellBg(card, d, i) }}>
                           {cardInDeck(card, d) ? cardQtyInDeck(card, d) : '—'}
                         </td>
                       ))}

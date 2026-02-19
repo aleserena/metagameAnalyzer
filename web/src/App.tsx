@@ -1,5 +1,6 @@
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import Layout from './components/Layout'
+import ErrorBoundary from './components/ErrorBoundary'
 import Dashboard from './pages/Dashboard'
 import Metagame from './pages/Metagame'
 import Decks from './pages/Decks'
@@ -12,7 +13,11 @@ import Scrape from './pages/Scrape'
 const router = createBrowserRouter([
   {
     path: '/',
-    element: <Layout />,
+    element: (
+      <ErrorBoundary>
+        <Layout />
+      </ErrorBoundary>
+    ),
     children: [
       { index: true, element: <Dashboard /> },
       { path: 'metagame', element: <Metagame /> },

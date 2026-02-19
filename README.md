@@ -52,6 +52,15 @@ npm run dev
 
 The API loads `decks.json` on startup if present. You can also load data via the Scrape page (upload JSON or run a new scrape).
 
+### Player aliases (merge duplicate names)
+
+If the same player appears under different names (e.g. "Tomas Pesci" and "Pablo Tomas Pesci"), you can merge them:
+
+1. **Players page** → Expand "Manage player aliases" at the bottom. Add mappings (alias → canonical).
+2. **Player detail page** → When viewing a player, similar names are suggested with a "Merge into X" button.
+
+Aliases are stored in `player_aliases.json` in the project root. Merged players share stats and deck lists.
+
 ## CLI Usage
 
 ### Scrape decks
