@@ -36,6 +36,7 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 from src.mtgtop8.analyzer import (
     DEFAULT_IGNORE_LANDS_SET,
+    RANK_WEIGHTS as DEFAULT_RANK_WEIGHTS,
     analyze,
     deck_analysis,
     find_duplicate_decks,
@@ -104,6 +105,25 @@ def _aliases_path() -> Path:
 
 def _ignore_lands_cards_path() -> Path:
     return DATA_DIR / "ignore_lands_cards.json"
+
+
+def _rank_weights_path() -> Path:
+    return DATA_DIR / "rank_weights.json"
+
+
+def _get_rank_weights() -> dict[str, float]:
+    """Load rank -> points from file, or return default."""
+    p = _rank_weights_path()
+    if p.exists():
+        try:
+            with open(p, encoding="utf-8") as f:
+                data = json.load(f)
+            weights = data.get("weights")
+            if isinstance(weights, dict):
+                return {k: float(v) for k, v in weights.items() if isinstance(v, (int, float))}
+        except (json.JSONDecodeError, OSError):
+            pass
+    return dict(DEFAULT_RANK_WEIGHTS)
 
 
 def _get_ignore_lands_cards() -> list[str]:
@@ -565,11 +585,13 @@ def get_metagame(
         filtered = _filter_decks_by_date(filtered, date_from, date_to)
     decks = [Deck.from_dict(d) for d in filtered]
     ignore_lands_cards = set(_get_ignore_lands_cards()) if ignore_lands else None
+    rank_weights = _get_rank_weights()
     return analyze(
         decks,
         placement_weighted=placement_weighted,
         ignore_lands=ignore_lands,
         ignore_lands_cards=ignore_lands_cards,
+        rank_weights=rank_weights,
     )
 
 
@@ -591,6 +613,26 @@ def put_ignore_lands_cards(body: IgnoreLandsCardsBody, _: str = Depends(require_
     with open(_ignore_lands_cards_path(), "w", encoding="utf-8") as f:
         json.dump({"cards": sorted(set(cards))}, f, indent=2, ensure_ascii=False)
     return {"cards": _get_ignore_lands_cards()}
+
+
+@app.get("/api/settings/rank-weights")
+def get_rank_weights(_: str = Depends(require_admin)):
+    """Return points per placement (1st, 2nd, 3-4, etc.). Admin-only."""
+    return {"weights": _get_rank_weights()}
+
+
+class RankWeightsBody(BaseModel):
+    weights: dict[str, float] = {}
+
+
+@app.put("/api/settings/rank-weights")
+def put_rank_weights(body: RankWeightsBody, _: str = Depends(require_admin)):
+    """Update points per placement (admin-only)."""
+    weights = {k: float(v) for k, v in body.weights.items() if v is not None}
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with open(_rank_weights_path(), "w", encoding="utf-8") as f:
+        json.dump({"weights": weights}, f, indent=2, ensure_ascii=False)
+    return {"weights": _get_rank_weights()}
 
 
 @app.get("/api/player-aliases")
@@ -661,7 +703,8 @@ def get_players(
         return {"players": []}
     filtered = _filter_decks_by_date(_decks, date_from, date_to)
     decks = [Deck.from_dict(d) for d in filtered]
-    return {"players": player_leaderboard(decks, normalize_player=_normalize_player)}
+    rank_weights = _get_rank_weights()
+    return {"players": player_leaderboard(decks, normalize_player=_normalize_player, rank_weights=rank_weights)}
 
 
 @app.get("/api/players/{player_name:path}")
@@ -673,7 +716,8 @@ def get_player_detail(player_name: str):
     if not player_decks:
         raise HTTPException(status_code=404, detail="Player not found")
     decks = [Deck.from_dict(d) for d in player_decks]
-    stats_list = player_leaderboard(decks)
+    rank_weights = _get_rank_weights()
+    stats_list = player_leaderboard(decks, rank_weights=rank_weights)
     if not stats_list:
         raise HTTPException(status_code=404, detail="Player not found")
     stat = stats_list[0]

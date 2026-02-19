@@ -16,18 +16,21 @@ RANK_WEIGHTS: dict[str, float] = {
 }
 
 
-def _get_weight(rank: str) -> float:
-    return RANK_WEIGHTS.get(rank, 1.0)
+def _get_weight(rank: str, rank_weights: dict[str, float] | None = None) -> float:
+    weights = rank_weights if rank_weights is not None else RANK_WEIGHTS
+    return weights.get(rank, 1.0)
 
 
 def commander_distribution(
-    decks: list[Deck], placement_weighted: bool = False
+    decks: list[Deck],
+    placement_weighted: bool = False,
+    rank_weights: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
     """Count (or weighted score) and % of decks per commander."""
     scores: dict[str, float] = {}
     for d in decks:
         key = " / ".join(sorted(d.commanders)) if d.commanders else "(no commander)"
-        w = _get_weight(d.rank) if placement_weighted else 1.0
+        w = _get_weight(d.rank, rank_weights) if placement_weighted else 1.0
         scores[key] = scores.get(key, 0.0) + w
     total = sum(scores.values()) or 1
     return [
@@ -37,13 +40,15 @@ def commander_distribution(
 
 
 def archetype_distribution(
-    decks: list[Deck], placement_weighted: bool = False
+    decks: list[Deck],
+    placement_weighted: bool = False,
+    rank_weights: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
     """Count (or weighted score) and % per archetype."""
     scores: dict[str, float] = {}
     for d in decks:
         key = d.archetype or "(unknown)"
-        w = _get_weight(d.rank) if placement_weighted else 1.0
+        w = _get_weight(d.rank, rank_weights) if placement_weighted else 1.0
         scores[key] = scores.get(key, 0.0) + w
     total = sum(scores.values()) or 1
     return [
@@ -106,6 +111,7 @@ def top_cards_main(
     placement_weighted: bool = False,
     ignore_lands: bool = False,
     ignore_lands_cards: set[str] | None = None,
+    rank_weights: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
     """Top cards in mainboard: play rate %, total copies."""
     deck_count = len(decks)
@@ -113,7 +119,7 @@ def top_cards_main(
     card_copies: dict[str, float] = {}
 
     for d in decks:
-        w = _get_weight(d.rank) if placement_weighted else 1.0
+        w = _get_weight(d.rank, rank_weights) if placement_weighted else 1.0
         for qty, card in d.mainboard:
             if card in BASIC_LANDS:
                 continue
@@ -136,14 +142,18 @@ def top_cards_main(
     ][:100]
 
 
-def top_cards_sideboard(decks: list[Deck], placement_weighted: bool = False) -> list[dict[str, Any]]:
+def top_cards_sideboard(
+    decks: list[Deck],
+    placement_weighted: bool = False,
+    rank_weights: dict[str, float] | None = None,
+) -> list[dict[str, Any]]:
     """Top cards in sideboard."""
     deck_count = len(decks)
     card_decks: dict[str, set[int]] = {}
     card_copies: dict[str, float] = {}
 
     for d in decks:
-        w = _get_weight(d.rank) if placement_weighted else 1.0
+        w = _get_weight(d.rank, rank_weights) if placement_weighted else 1.0
         for qty, card in d.sideboard:
             if card not in card_decks:
                 card_decks[card] = set()
@@ -165,6 +175,7 @@ def top_cards_sideboard(decks: list[Deck], placement_weighted: bool = False) -> 
 def player_leaderboard(
     decks: list[Deck],
     normalize_player: Callable[[str], str] | None = None,
+    rank_weights: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
     """Player stats: wins, top-2, top-4, points. Sorted by wins desc, then points.
     normalize_player: optional fn to merge aliases (e.g. 'Pablo Tomas Pesci' -> 'Tomas Pesci').
@@ -177,7 +188,7 @@ def player_leaderboard(
             stats[player] = {"player": player, "wins": 0, "top2": 0, "top4": 0, "top8": 0, "points": 0.0, "deck_count": 0}
         s = stats[player]
         s["deck_count"] += 1
-        s["points"] += _get_weight(d.rank)
+        s["points"] += _get_weight(d.rank, rank_weights)
         if d.rank == "1":
             s["wins"] += 1
         if d.rank in ("1", "2"):
@@ -363,14 +374,15 @@ def analyze(
     ignore_lands: bool = False,
     include_card_synergy: bool = True,
     ignore_lands_cards: set[str] | None = None,
+    rank_weights: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """Full metagame analysis."""
     result: dict[str, Any] = {
         "summary": deck_diversity(decks),
-        "commander_distribution": commander_distribution(decks, placement_weighted),
-        "archetype_distribution": archetype_distribution(decks, placement_weighted),
+        "commander_distribution": commander_distribution(decks, placement_weighted, rank_weights),
+        "archetype_distribution": archetype_distribution(decks, placement_weighted, rank_weights),
         "top_cards_main": top_cards_main(
-            decks, placement_weighted, ignore_lands, ignore_lands_cards
+            decks, placement_weighted, ignore_lands, ignore_lands_cards, rank_weights
         ),
         "placement_weighted": placement_weighted,
         "ignore_lands": ignore_lands,

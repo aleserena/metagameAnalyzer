@@ -6,7 +6,19 @@ import {
   removePlayerAlias,
   getIgnoreLandsCards,
   putIgnoreLandsCards,
+  getRankWeights,
+  putRankWeights,
 } from '../api'
+
+const RANK_KEYS = ['1', '2', '3-4', '5-8', '9-16', '17-32'] as const
+const DEFAULT_RANK_WEIGHTS: Record<string, number> = {
+  '1': 8,
+  '2': 6,
+  '3-4': 4,
+  '5-8': 2,
+  '9-16': 1,
+  '17-32': 0.5,
+}
 
 export default function Settings() {
   const [aliases, setAliases] = useState<Record<string, string>>({})
@@ -16,6 +28,9 @@ export default function Settings() {
   const [newIgnoreCard, setNewIgnoreCard] = useState('')
   const [loadingAliases, setLoadingAliases] = useState(true)
   const [loadingCards, setLoadingCards] = useState(true)
+  const [rankWeights, setRankWeights] = useState<Record<string, number>>(DEFAULT_RANK_WEIGHTS)
+  const [loadingRankWeights, setLoadingRankWeights] = useState(true)
+  const [savingRankWeights, setSavingRankWeights] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -31,6 +46,13 @@ export default function Settings() {
       .then((r) => setIgnoreLandsCards(r.cards))
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoadingCards(false))
+  }, [])
+
+  useEffect(() => {
+    getRankWeights()
+      .then((r) => setRankWeights({ ...DEFAULT_RANK_WEIGHTS, ...r.weights }))
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoadingRankWeights(false))
   }, [])
 
   const handleAddAlias = () => {
@@ -87,6 +109,24 @@ export default function Settings() {
         setTimeout(() => setMessage(null), 3000)
       })
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+  }
+
+  const handleSaveRankWeights = () => {
+    setError(null)
+    setSavingRankWeights(true)
+    const toSave: Record<string, number> = { ...DEFAULT_RANK_WEIGHTS }
+    RANK_KEYS.forEach((k) => {
+      const v = rankWeights[k]
+      if (typeof v === 'number' && !Number.isNaN(v)) toSave[k] = v
+    })
+    putRankWeights(toSave)
+      .then((r) => {
+        setRankWeights({ ...DEFAULT_RANK_WEIGHTS, ...r.weights })
+        setMessage('Points per position saved')
+        setTimeout(() => setMessage(null), 3000)
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setSavingRankWeights(false))
   }
 
   return (
@@ -167,6 +207,46 @@ export default function Settings() {
               </button>
             </div>
           </>
+        )}
+      </div>
+
+      <div className="chart-container" style={{ maxWidth: 600, marginBottom: '2rem' }}>
+        <h2 style={{ margin: '0 0 1rem', fontSize: '1.25rem' }}>Points per position</h2>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1rem' }}>
+          Points awarded for each placement in the player leaderboard and for placement-weighted metagame stats.
+        </p>
+        {loadingRankWeights ? (
+          <p style={{ color: 'var(--text-muted)' }}>Loading...</p>
+        ) : (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'center' }}>
+            {RANK_KEYS.map((rank) => (
+              <label key={rank} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem' }}>
+                <span style={{ minWidth: 48 }}>{rank}:</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  value={rankWeights[rank] ?? ''}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    const n = v === '' ? 0 : parseFloat(v)
+                    if (!Number.isNaN(n)) setRankWeights((w) => ({ ...w, [rank]: n }))
+                  }}
+                  style={{ width: 72, padding: '0.35rem 0.5rem' }}
+                />
+                <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>pts</span>
+              </label>
+            ))}
+            <button
+              type="button"
+              className="btn"
+              style={{ padding: '0.35rem 0.75rem' }}
+              onClick={handleSaveRankWeights}
+              disabled={savingRankWeights}
+            >
+              {savingRankWeights ? 'Saving...' : 'Save'}
+            </button>
+          </div>
         )}
       </div>
 

@@ -214,6 +214,17 @@ export async function putIgnoreLandsCards(cards: string[]): Promise<{ cards: str
   })
 }
 
+export async function getRankWeights(): Promise<{ weights: Record<string, number> }> {
+  return fetchApi('/settings/rank-weights')
+}
+
+export async function putRankWeights(weights: Record<string, number>): Promise<{ weights: Record<string, number> }> {
+  return fetchApi('/settings/rank-weights', {
+    method: 'PUT',
+    body: JSON.stringify({ weights }),
+  })
+}
+
 export async function getSimilarPlayers(name: string, limit = 10): Promise<{ similar: string[] }> {
   return fetchApi(`/players/similar?name=${encodeURIComponent(name)}&limit=${limit}`)
 }
