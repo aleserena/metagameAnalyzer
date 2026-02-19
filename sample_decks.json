@@ -1,0 +1,32 @@
+[
+  {
+    "deck_id": 811597,
+    "event_id": 80455,
+    "format_id": "EDH",
+    "name": "Spider-man 2099",
+    "player": "Jeremy Lb",
+    "event_name": "CR PdLL MTGAnjou @ Angers (France)",
+    "date": "15/02/26",
+    "rank": "1",
+    "player_count": 128,
+    "mainboard": [{"qty": 1, "card": "Spider-Man 2099"}, {"qty": 38, "card": "Lands"}],
+    "sideboard": [{"qty": 1, "card": "Soul-Guide Lantern"}],
+    "commanders": ["Spider-Man 2099"],
+    "archetype": "UR Aggro"
+  },
+  {
+    "deck_id": 811598,
+    "event_id": 80455,
+    "format_id": "EDH",
+    "name": "Terra, Magical Adept",
+    "player": "Thomas Le Goff",
+    "event_name": "CR PdLL MTGAnjou @ Angers (France)",
+    "date": "15/02/26",
+    "rank": "2",
+    "player_count": 128,
+    "mainboard": [{"qty": 1, "card": "Terra, Magical Adept"}, {"qty": 39, "card": "Lands"}],
+    "sideboard": [],
+    "commanders": ["Terra, Magical Adept"],
+    "archetype": "UR Control"
+  }
+]
