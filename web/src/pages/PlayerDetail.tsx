@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { getPlayerDetail, getSimilarPlayers, addPlayerAlias, getPlayerAliases } from '../api'
+import { useAuth } from '../contexts/AuthContext'
 
 export default function PlayerDetail() {
   const { playerName } = useParams<{ playerName: string }>()
   const navigate = useNavigate()
+  const { user } = useAuth()
   const [data, setData] = useState<Awaited<ReturnType<typeof getPlayerDetail>> | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -67,7 +69,7 @@ export default function PlayerDetail() {
         </div>
       </div>
 
-      {similarPlayers.length > 0 && (
+      {user === 'admin' && similarPlayers.length > 0 && (
         <div className="chart-container" style={{ marginBottom: '1.5rem' }}>
           <h3 style={{ margin: '0 0 0.5rem' }}>Merge players</h3>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '0.75rem' }}>

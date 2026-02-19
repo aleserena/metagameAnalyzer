@@ -1,7 +1,7 @@
 """Metagame analysis for scraped decks."""
 
 import json
-from typing import Any
+from typing import Any, Callable
 
 from .models import Deck
 
@@ -164,7 +164,7 @@ def top_cards_sideboard(decks: list[Deck], placement_weighted: bool = False) -> 
 
 def player_leaderboard(
     decks: list[Deck],
-    normalize_player: "typing.Callable[[str], str] | None" = None,
+    normalize_player: Callable[[str], str] | None = None,
 ) -> list[dict[str, Any]]:
     """Player stats: wins, top-2, top-4, points. Sorted by wins desc, then points.
     normalize_player: optional fn to merge aliases (e.g. 'Pablo Tomas Pesci' -> 'Tomas Pesci').
