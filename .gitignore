@@ -4,6 +4,7 @@ metagame.json
 .scryfall_cache.json
 player_aliases.json
 ignore_lands_cards.json
+rank_weights.json
 
 # Python
 __pycache__/
