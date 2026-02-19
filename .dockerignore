@@ -22,6 +22,7 @@ web/dist
 decks.json
 metagame.json
 player_aliases.json
+ignore_lands_cards.json
 .scryfall_cache.json
 
 # Environment and IDE

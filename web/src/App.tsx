@@ -1,6 +1,7 @@
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import Layout from './components/Layout'
 import ErrorBoundary from './components/ErrorBoundary'
+import AdminGuard from './components/AdminGuard'
 import Dashboard from './pages/Dashboard'
 import Metagame from './pages/Metagame'
 import Decks from './pages/Decks'
@@ -9,8 +10,11 @@ import DeckCompare from './pages/DeckCompare'
 import Players from './pages/Players'
 import PlayerDetail from './pages/PlayerDetail'
 import Scrape from './pages/Scrape'
+import Settings from './pages/Settings'
+import Login from './pages/Login'
 
 const router = createBrowserRouter([
+  { path: '/login', element: <Login /> },
   {
     path: '/',
     element: (
@@ -26,7 +30,22 @@ const router = createBrowserRouter([
       { path: 'decks/:deckId', element: <DeckDetail /> },
       { path: 'players', element: <Players /> },
       { path: 'players/:playerName', element: <PlayerDetail /> },
-      { path: 'scrape', element: <Scrape /> },
+      {
+        path: 'scrape',
+        element: (
+          <AdminGuard>
+            <Scrape />
+          </AdminGuard>
+        ),
+      },
+      {
+        path: 'settings',
+        element: (
+          <AdminGuard>
+            <Settings />
+          </AdminGuard>
+        ),
+      },
     ],
   },
 ])

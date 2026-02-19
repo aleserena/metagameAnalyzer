@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { getPlayers, getDateRange, getPlayerAliases, addPlayerAlias, removePlayerAlias } from '../api'
+import { getPlayers, getDateRange } from '../api'
 import type { PlayerStats } from '../types'
 import Skeleton from '../components/Skeleton'
 import { dateMinusDays } from '../utils'
@@ -17,10 +17,6 @@ export default function Players() {
   const [dateTo, setDateTo] = useState<string | null>(null)
   const [maxDate, setMaxDate] = useState<string | null>(null)
   const [lastEventDate, setLastEventDate] = useState<string | null>(null)
-  const [aliasesOpen, setAliasesOpen] = useState(false)
-  const [aliases, setAliases] = useState<Record<string, string>>({})
-  const [newAlias, setNewAlias] = useState('')
-  const [newCanonical, setNewCanonical] = useState('')
 
   useEffect(() => {
     getDateRange().then((r) => {
@@ -36,10 +32,6 @@ export default function Players() {
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
   }, [dateFrom, dateTo])
-
-  useEffect(() => {
-    getPlayerAliases().then((r) => setAliases(r.aliases))
-  }, [aliasesOpen])
 
   const setPreset = (preset: 'all' | '2weeks' | 'month' | 'lastEvent') => {
     if (preset === 'all' || !maxDate) {
@@ -203,86 +195,6 @@ export default function Players() {
         </table>
       </div>
 
-      <div className="chart-container" style={{ marginTop: '1.5rem' }}>
-        <button
-          type="button"
-          onClick={() => setAliasesOpen((o) => !o)}
-          style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.9rem' }}
-        >
-          {aliasesOpen ? '▼' : '▶'} Manage player aliases (merge duplicate names)
-        </button>
-        {aliasesOpen && (
-          <div style={{ marginTop: '1rem' }}>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1rem' }}>
-              Map alternate names to a canonical name. E.g. &quot;Pablo Tomas Pesci&quot; → &quot;Tomas Pesci&quot; merges stats.
-            </p>
-            {Object.keys(aliases).length > 0 && (
-              <div style={{ marginBottom: '1rem' }}>
-                <div style={{ fontSize: '0.875rem', fontWeight: 600, marginBottom: '0.5rem' }}>Current aliases:</div>
-                {Object.entries(aliases).map(([alias, canonical]) => (
-                  <div
-                    key={alias}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.5rem',
-                      padding: '0.2rem 0',
-                      fontSize: '0.9rem',
-                    }}
-                  >
-                    <span>{alias}</span>
-                    <span style={{ color: 'var(--text-muted)' }}>→</span>
-                    <Link to={`/players/${encodeURIComponent(canonical)}`} style={{ color: 'var(--accent)' }}>
-                      {canonical}
-                    </Link>
-                    <button
-                      type="button"
-                      onClick={() => removePlayerAlias(alias).then((r) => (setAliases(r.aliases), setPlayers([]), getPlayers(dateFrom, dateTo).then((x) => setPlayers(x.players))))}
-                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.8rem' }}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
-              <input
-                type="text"
-                placeholder="Alias (e.g. Pablo Tomas Pesci)"
-                value={newAlias}
-                onChange={(e) => setNewAlias(e.target.value)}
-                style={{ padding: '0.35rem 0.5rem', minWidth: 180 }}
-              />
-              <span style={{ color: 'var(--text-muted)' }}>→</span>
-              <input
-                type="text"
-                placeholder="Canonical (e.g. Tomas Pesci)"
-                value={newCanonical}
-                onChange={(e) => setNewCanonical(e.target.value)}
-                style={{ padding: '0.35rem 0.5rem', minWidth: 180 }}
-              />
-              <button
-                type="button"
-                className="btn"
-                style={{ padding: '0.35rem 0.75rem' }}
-                onClick={() => {
-                  if (!newAlias.trim() || !newCanonical.trim()) return
-                  addPlayerAlias(newAlias.trim(), newCanonical.trim())
-                    .then((r) => {
-                      setAliases(r.aliases)
-                      setNewAlias('')
-                      setNewCanonical('')
-                      getPlayers(dateFrom, dateTo).then((x) => setPlayers(x.players))
-                    })
-                }}
-              >
-                Add merge
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
     </div>
   )
 }

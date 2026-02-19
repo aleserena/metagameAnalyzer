@@ -1,15 +1,26 @@
 import type { Deck, MetagameReport, Event, PlayerStats, SimilarDeck } from './types'
+import { getToken } from './contexts/AuthContext'
 
 const API_BASE = '/api'
+
+function getAuthHeaders(): Record<string, string> {
+  const token = getToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
 
 async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      ...getAuthHeaders(),
       ...options?.headers,
     },
   })
+  if (res.status === 401) {
+    localStorage.removeItem('admin_token')
+    window.dispatchEvent(new Event('auth-logout'))
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(err.detail || res.statusText)
@@ -192,6 +203,17 @@ export async function removePlayerAlias(alias: string): Promise<{ aliases: Recor
   return fetchApi(`/player-aliases/${encodeURIComponent(alias)}`, { method: 'DELETE' })
 }
 
+export async function getIgnoreLandsCards(): Promise<{ cards: string[] }> {
+  return fetchApi('/settings/ignore-lands-cards')
+}
+
+export async function putIgnoreLandsCards(cards: string[]): Promise<{ cards: string[] }> {
+  return fetchApi('/settings/ignore-lands-cards', {
+    method: 'PUT',
+    body: JSON.stringify({ cards }),
+  })
+}
+
 export async function getSimilarPlayers(name: string, limit = 10): Promise<{ similar: string[] }> {
   return fetchApi(`/players/similar?name=${encodeURIComponent(name)}&limit=${limit}`)
 }
@@ -201,13 +223,31 @@ export async function loadDecks(file: File): Promise<{ loaded: number; message: 
   form.append('file', file)
   const res = await fetch(`${API_BASE}/load`, {
     method: 'POST',
+    headers: getAuthHeaders(),
     body: form,
   })
+  if (res.status === 401) {
+    localStorage.removeItem('admin_token')
+    window.dispatchEvent(new Event('auth-logout'))
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(err.detail || res.statusText)
   }
   return res.json()
+}
+
+export async function exportDecks(): Promise<Blob> {
+  const res = await fetch(`${API_BASE}/export`, { headers: getAuthHeaders() })
+  if (res.status === 401) {
+    localStorage.removeItem('admin_token')
+    window.dispatchEvent(new Event('auth-logout'))
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(err.detail || res.statusText)
+  }
+  return res.blob()
 }
 
 export async function loadDecksFromPath(path: string): Promise<{ loaded: number; message: string }> {

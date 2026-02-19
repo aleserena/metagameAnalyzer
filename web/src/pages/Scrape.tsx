@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useBlocker } from 'react-router-dom'
-import { loadDecks } from '../api'
+import { loadDecks, exportDecks } from '../api'
 import { FORMATS, META_EDH } from '../config'
 
 const FORMAT_OPTIONS = Object.entries(FORMATS)
@@ -114,6 +114,23 @@ export default function Scrape() {
     }
   }
 
+  const handleDownload = async () => {
+    setError(null)
+    setMessage(null)
+    try {
+      const blob = await exportDecks()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'decks.json'
+      a.click()
+      URL.revokeObjectURL(url)
+      setMessage('Download started (decks.json)')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   return (
     <div>
       <h1 className="page-title">Scrape & Load Data</h1>
@@ -134,6 +151,16 @@ export default function Scrape() {
             Load
           </button>
         </div>
+      </div>
+
+      <div className="chart-container" style={{ maxWidth: 500, marginTop: '1.5rem' }}>
+        <h3 style={{ margin: '0 0 1rem' }}>Download current data</h3>
+        <p style={{ margin: '0 0 0.75rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+          Export all loaded or scraped decks as JSON (same format as Load accepts).
+        </p>
+        <button className="btn" onClick={handleDownload} disabled={loading}>
+          Download decks.json
+        </button>
       </div>
 
       <div className="chart-container" style={{ maxWidth: 500, marginTop: '1.5rem' }}>

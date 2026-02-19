@@ -52,14 +52,19 @@ npm run dev
 
 The API loads `decks.json` on startup if present. You can also load data via the Scrape page (upload JSON or run a new scrape).
 
+### Admin authentication
+
+Scrape and Settings are available only to an admin user. Set the environment variable **`ADMIN_PASSWORD`** (required for admin features). Optional **`JWT_SECRET`** (defaults to `ADMIN_PASSWORD` if set) is used to sign login tokens.
+
+- **Login**: Open `/login` and enter the admin password. A signed token is stored in the browser and sent with requests to protected endpoints.
+- **Scrape tab**: Load/upload data, download export, and run scrapes (admin only).
+- **Settings tab**: Manage player aliases and the list of cards excluded by the "Ignore lands" metagame option (admin only).
+
+If `ADMIN_PASSWORD` is not set, admin login is disabled and those tabs are hidden.
+
 ### Player aliases (merge duplicate names)
 
-If the same player appears under different names (e.g. "Tomas Pesci" and "Pablo Tomas Pesci"), you can merge them:
-
-1. **Players page** → Expand "Manage player aliases" at the bottom. Add mappings (alias → canonical).
-2. **Player detail page** → When viewing a player, similar names are suggested with a "Merge into X" button.
-
-Aliases are stored in `player_aliases.json` in the project root. Merged players share stats and deck lists.
+If the same player appears under different names (e.g. "Tomas Pesci" and "Pablo Tomas Pesci"), an admin can merge them in **Settings → Player aliases**: add mappings (alias → canonical). On the Player detail page, similar names are suggested with a "Merge into X" button (merge requires admin login). Aliases are stored in `player_aliases.json` (in `DATA_DIR`). Merged players share stats and deck lists.
 
 ## CLI Usage
 

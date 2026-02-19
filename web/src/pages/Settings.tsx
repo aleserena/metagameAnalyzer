@@ -1,0 +1,233 @@
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import {
+  getPlayerAliases,
+  addPlayerAlias,
+  removePlayerAlias,
+  getIgnoreLandsCards,
+  putIgnoreLandsCards,
+} from '../api'
+
+export default function Settings() {
+  const [aliases, setAliases] = useState<Record<string, string>>({})
+  const [newAlias, setNewAlias] = useState('')
+  const [newCanonical, setNewCanonical] = useState('')
+  const [ignoreLandsCards, setIgnoreLandsCards] = useState<string[]>([])
+  const [newIgnoreCard, setNewIgnoreCard] = useState('')
+  const [loadingAliases, setLoadingAliases] = useState(true)
+  const [loadingCards, setLoadingCards] = useState(true)
+  const [message, setMessage] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    getPlayerAliases()
+      .then((r) => setAliases(r.aliases))
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoadingAliases(false))
+  }, [])
+
+  useEffect(() => {
+    getIgnoreLandsCards()
+      .then((r) => setIgnoreLandsCards(r.cards))
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoadingCards(false))
+  }, [])
+
+  const handleAddAlias = () => {
+    if (!newAlias.trim() || !newCanonical.trim()) return
+    setError(null)
+    addPlayerAlias(newAlias.trim(), newCanonical.trim())
+      .then((r) => {
+        setAliases(r.aliases)
+        setNewAlias('')
+        setNewCanonical('')
+        setMessage('Alias added')
+        setTimeout(() => setMessage(null), 3000)
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+  }
+
+  const handleRemoveAlias = (alias: string) => {
+    setError(null)
+    removePlayerAlias(alias)
+      .then((r) => {
+        setAliases(r.aliases)
+        setMessage('Alias removed')
+        setTimeout(() => setMessage(null), 3000)
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+  }
+
+  const handleAddIgnoreCard = () => {
+    const card = newIgnoreCard.trim()
+    if (!card) return
+    if (ignoreLandsCards.includes(card)) {
+      setError('Card already in list')
+      return
+    }
+    setError(null)
+    const updated = [...ignoreLandsCards, card].sort()
+    putIgnoreLandsCards(updated)
+      .then((r) => {
+        setIgnoreLandsCards(r.cards)
+        setNewIgnoreCard('')
+        setMessage('Card added to ignore list')
+        setTimeout(() => setMessage(null), 3000)
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+  }
+
+  const handleRemoveIgnoreCard = (card: string) => {
+    setError(null)
+    const updated = ignoreLandsCards.filter((c) => c !== card)
+    putIgnoreLandsCards(updated)
+      .then((r) => {
+        setIgnoreLandsCards(r.cards)
+        setMessage('Card removed from ignore list')
+        setTimeout(() => setMessage(null), 3000)
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+  }
+
+  return (
+    <div>
+      <h1 className="page-title">Settings</h1>
+      {error && <div className="error" style={{ marginBottom: '1rem' }}>{error}</div>}
+      {message && (
+        <div style={{ marginBottom: '1rem', color: 'var(--success)', fontWeight: 600 }}>
+          {message}
+        </div>
+      )}
+
+      <div className="chart-container" style={{ maxWidth: 600, marginBottom: '2rem' }}>
+        <h2 style={{ margin: '0 0 1rem', fontSize: '1.25rem' }}>Player aliases</h2>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1rem' }}>
+          Map alternate names to a canonical name. E.g. &quot;Pablo Tomas Pesci&quot; → &quot;Tomas Pesci&quot; merges stats across the app.
+        </p>
+        {loadingAliases ? (
+          <p style={{ color: 'var(--text-muted)' }}>Loading...</p>
+        ) : (
+          <>
+            {Object.keys(aliases).length > 0 && (
+              <div style={{ marginBottom: '1rem' }}>
+                <div style={{ fontSize: '0.875rem', fontWeight: 600, marginBottom: '0.5rem' }}>
+                  Current aliases
+                </div>
+                {Object.entries(aliases).map(([alias, canonical]) => (
+                  <div
+                    key={alias}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      padding: '0.35rem 0',
+                      fontSize: '0.9rem',
+                    }}
+                  >
+                    <span>{alias}</span>
+                    <span style={{ color: 'var(--text-muted)' }}>→</span>
+                    <Link to={`/players/${encodeURIComponent(canonical)}`} style={{ color: 'var(--accent)' }}>
+                      {canonical}
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveAlias(alias)}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: 'var(--text-muted)',
+                        cursor: 'pointer',
+                        fontSize: '0.8rem',
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+              <input
+                type="text"
+                placeholder="Alias (e.g. Pablo Tomas Pesci)"
+                value={newAlias}
+                onChange={(e) => setNewAlias(e.target.value)}
+                style={{ padding: '0.35rem 0.5rem', minWidth: 180 }}
+              />
+              <span style={{ color: 'var(--text-muted)' }}>→</span>
+              <input
+                type="text"
+                placeholder="Canonical (e.g. Tomas Pesci)"
+                value={newCanonical}
+                onChange={(e) => setNewCanonical(e.target.value)}
+                style={{ padding: '0.35rem 0.5rem', minWidth: 180 }}
+              />
+              <button type="button" className="btn" style={{ padding: '0.35rem 0.75rem' }} onClick={handleAddAlias}>
+                Add merge
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="chart-container" style={{ maxWidth: 600 }}>
+        <h2 style={{ margin: '0 0 1rem', fontSize: '1.25rem' }}>Cards ignored by &quot;Ignore lands&quot;</h2>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1rem' }}>
+          These cards are excluded from Metagame (top cards, synergy) when the &quot;Ignore lands&quot; checkbox is checked on Dashboard and Metagame pages.
+        </p>
+        {loadingCards ? (
+          <p style={{ color: 'var(--text-muted)' }}>Loading...</p>
+        ) : (
+          <>
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+              <input
+                type="text"
+                placeholder="Card name (e.g. Command Tower)"
+                value={newIgnoreCard}
+                onChange={(e) => setNewIgnoreCard(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleAddIgnoreCard()}
+                style={{ padding: '0.35rem 0.5rem', flex: 1, maxWidth: 280 }}
+              />
+              <button type="button" className="btn" style={{ padding: '0.35rem 0.75rem' }} onClick={handleAddIgnoreCard}>
+                Add card
+              </button>
+            </div>
+            <div style={{ maxHeight: 320, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 8, padding: '0.5rem' }}>
+              {ignoreLandsCards.length === 0 ? (
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>No cards in list (default set is used). Add cards to extend the list.</p>
+              ) : (
+                ignoreLandsCards.map((card) => (
+                  <div
+                    key={card}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '0.25rem 0',
+                      fontSize: '0.9rem',
+                    }}
+                  >
+                    <span>{card}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveIgnoreCard(card)}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: 'var(--text-muted)',
+                        cursor: 'pointer',
+                        fontSize: '0.8rem',
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}

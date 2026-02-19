@@ -81,17 +81,31 @@ LAND_KEYWORDS = {
     "Botanical Sanctum", "Blooming Marsh",
 }
 
-def _is_land_card(card: str) -> bool:
-    """True for cards that are lands. Uses exact full name matching only."""
+DEFAULT_IGNORE_LANDS_SET: set[str] = BASIC_LANDS | LAND_KEYWORDS
+
+
+def _is_land_card(card: str, ignore_set: set[str] | None = None) -> bool:
+    """True for cards that are lands. Uses exact full name matching only.
+    If ignore_set is provided, use it; else use BASIC_LANDS and LAND_KEYWORDS."""
+    if ignore_set is not None:
+        return card in ignore_set
     if card in BASIC_LANDS:
         return True
     return card in LAND_KEYWORDS
+
+
+def _should_ignore_land(card: str, ignore_lands: bool, ignore_lands_cards: set[str] | None) -> bool:
+    """True if we should exclude this card when ignore_lands is on."""
+    if not ignore_lands:
+        return False
+    return _is_land_card(card, ignore_lands_cards if ignore_lands_cards is not None else None)
 
 
 def top_cards_main(
     decks: list[Deck],
     placement_weighted: bool = False,
     ignore_lands: bool = False,
+    ignore_lands_cards: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Top cards in mainboard: play rate %, total copies."""
     deck_count = len(decks)
@@ -103,7 +117,7 @@ def top_cards_main(
         for qty, card in d.mainboard:
             if card in BASIC_LANDS:
                 continue
-            if ignore_lands and _is_land_card(card):
+            if _should_ignore_land(card, ignore_lands, ignore_lands_cards):
                 continue
             if card not in card_decks:
                 card_decks[card] = set()
@@ -348,18 +362,24 @@ def analyze(
     placement_weighted: bool = False,
     ignore_lands: bool = False,
     include_card_synergy: bool = True,
+    ignore_lands_cards: set[str] | None = None,
 ) -> dict[str, Any]:
     """Full metagame analysis."""
     result: dict[str, Any] = {
         "summary": deck_diversity(decks),
         "commander_distribution": commander_distribution(decks, placement_weighted),
         "archetype_distribution": archetype_distribution(decks, placement_weighted),
-        "top_cards_main": top_cards_main(decks, placement_weighted, ignore_lands),
+        "top_cards_main": top_cards_main(
+            decks, placement_weighted, ignore_lands, ignore_lands_cards
+        ),
         "placement_weighted": placement_weighted,
         "ignore_lands": ignore_lands,
     }
     if include_card_synergy and len(decks) >= 3:
-        result["card_synergy"] = card_synergy(decks, min_decks=2, top_n=30, ignore_lands=ignore_lands)
+        result["card_synergy"] = card_synergy(
+            decks, min_decks=2, top_n=30, ignore_lands=ignore_lands,
+            ignore_lands_cards=ignore_lands_cards,
+        )
     else:
         result["card_synergy"] = []
     return result
@@ -370,6 +390,7 @@ def card_synergy(
     min_decks: int = 3,
     top_n: int = 50,
     ignore_lands: bool = False,
+    ignore_lands_cards: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Cards often played together: pairs that co-occur in many decks."""
     from collections import defaultdict
@@ -381,7 +402,7 @@ def card_synergy(
         for qty, card in d.mainboard:
             if card in BASIC_LANDS:
                 continue
-            if ignore_lands and _is_land_card(card):
+            if _should_ignore_land(card, ignore_lands, ignore_lands_cards):
                 continue
             cards.add(card)
         cards_list = sorted(cards)

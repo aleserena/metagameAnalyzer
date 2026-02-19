@@ -3,10 +3,12 @@
 import json
 import os
 import threading
+import time
 import unicodedata
 from pathlib import Path
 from urllib.parse import unquote
 
+import jwt
 
 def _normalize_search(s: str) -> str:
     """Lowercase and strip accents for relaxed substring matching."""
@@ -15,9 +17,9 @@ def _normalize_search(s: str) -> str:
     nfd = unicodedata.normalize("NFD", s.lower())
     return "".join(c for c in nfd if unicodedata.category(c) != "Mn")
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -32,7 +34,14 @@ if not DATA_DIR.is_absolute():
     DATA_DIR = _project_root / DATA_DIR
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-from src.mtgtop8.analyzer import analyze, deck_analysis, player_leaderboard, similar_decks, find_duplicate_decks
+from src.mtgtop8.analyzer import (
+    DEFAULT_IGNORE_LANDS_SET,
+    analyze,
+    deck_analysis,
+    find_duplicate_decks,
+    player_leaderboard,
+    similar_decks,
+)
 from src.mtgtop8.card_lookup import lookup_cards
 from src.mtgtop8.models import Deck
 from src.mtgtop8.scraper import scrape
@@ -48,6 +57,41 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Admin auth: single user, password from env, JWT for session
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
+JWT_SECRET = os.getenv("JWT_SECRET", ADMIN_PASSWORD or "dev-secret-change-in-production")
+JWT_ALGORITHM = "HS256"
+JWT_EXP_SECONDS = 7 * 24 * 3600  # 7 days
+
+
+def _create_admin_token() -> str:
+    return jwt.encode(
+        {"sub": "admin", "exp": int(time.time()) + JWT_EXP_SECONDS},
+        JWT_SECRET,
+        algorithm=JWT_ALGORITHM,
+    )
+
+
+def _verify_admin_token(token: str) -> bool:
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return payload.get("sub") == "admin"
+    except jwt.PyJWTError:
+        return False
+
+
+def require_admin(authorization: str | None = Header(None, alias="Authorization")):
+    """Dependency: require valid admin Bearer token or raise 401."""
+    if not ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Admin login disabled (ADMIN_PASSWORD not set)")
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+    token = authorization[7:].strip()
+    if not _verify_admin_token(token):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    return "admin"
+
+
 # In-memory storage
 _decks: list[dict] = []
 _metagame_cache: dict | None = None
@@ -56,6 +100,25 @@ _player_aliases: dict[str, str] = {}  # alias -> canonical
 
 def _aliases_path() -> Path:
     return DATA_DIR / "player_aliases.json"
+
+
+def _ignore_lands_cards_path() -> Path:
+    return DATA_DIR / "ignore_lands_cards.json"
+
+
+def _get_ignore_lands_cards() -> list[str]:
+    """Load ignore-lands card list from file, or return default sorted list."""
+    p = _ignore_lands_cards_path()
+    if p.exists():
+        try:
+            with open(p, encoding="utf-8") as f:
+                data = json.load(f)
+            cards = data.get("cards")
+            if isinstance(cards, list) and all(isinstance(c, str) for c in cards):
+                return sorted(set(c.strip() for c in cards if c.strip()))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return sorted(DEFAULT_IGNORE_LANDS_SET)
 
 
 def _load_player_aliases() -> None:
@@ -173,6 +236,31 @@ def _filter_decks_by_date(decks: list[dict], date_from: str | None, date_to: str
 def health():
     """Health check for load balancers and monitoring."""
     return {"status": "ok"}
+
+
+class LoginBody(BaseModel):
+    password: str = ""
+
+
+@app.post("/api/auth/login")
+def auth_login(body: LoginBody):
+    """Login as admin. Returns JWT if password matches ADMIN_PASSWORD."""
+    if not ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Admin login disabled (ADMIN_PASSWORD not set)")
+    if body.password != ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Invalid password")
+    return {"token": _create_admin_token(), "user": "admin"}
+
+
+@app.get("/api/auth/me")
+def auth_me(authorization: str | None = Header(None, alias="Authorization")):
+    """Return current user if valid Bearer token, else 401."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+    token = authorization[7:].strip()
+    if not _verify_admin_token(token):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    return {"user": "admin"}
 
 
 class CardLookupBody(BaseModel):
@@ -476,7 +564,33 @@ def get_metagame(
     else:
         filtered = _filter_decks_by_date(filtered, date_from, date_to)
     decks = [Deck.from_dict(d) for d in filtered]
-    return analyze(decks, placement_weighted=placement_weighted, ignore_lands=ignore_lands)
+    ignore_lands_cards = set(_get_ignore_lands_cards()) if ignore_lands else None
+    return analyze(
+        decks,
+        placement_weighted=placement_weighted,
+        ignore_lands=ignore_lands,
+        ignore_lands_cards=ignore_lands_cards,
+    )
+
+
+@app.get("/api/settings/ignore-lands-cards")
+def get_ignore_lands_cards(_: str = Depends(require_admin)):
+    """Return list of card names excluded when 'Ignore lands' is checked (admin-only)."""
+    return {"cards": _get_ignore_lands_cards()}
+
+
+class IgnoreLandsCardsBody(BaseModel):
+    cards: list[str] = []
+
+
+@app.put("/api/settings/ignore-lands-cards")
+def put_ignore_lands_cards(body: IgnoreLandsCardsBody, _: str = Depends(require_admin)):
+    """Update list of cards excluded when 'Ignore lands' is checked (admin-only)."""
+    cards = [c.strip() for c in body.cards if isinstance(c, str) and c.strip()]
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with open(_ignore_lands_cards_path(), "w", encoding="utf-8") as f:
+        json.dump({"cards": sorted(set(cards))}, f, indent=2, ensure_ascii=False)
+    return {"cards": _get_ignore_lands_cards()}
 
 
 @app.get("/api/player-aliases")
@@ -491,7 +605,7 @@ class PlayerAliasBody(BaseModel):
 
 
 @app.post("/api/player-aliases")
-def add_player_alias(body: PlayerAliasBody):
+def add_player_alias(body: PlayerAliasBody, _: str = Depends(require_admin)):
     """Merge player: map alias to canonical name. E.g. {'alias': 'Pablo Tomas Pesci', 'canonical': 'Tomas Pesci'}."""
     alias = body.alias.strip()
     canonical = body.canonical.strip()
@@ -503,7 +617,7 @@ def add_player_alias(body: PlayerAliasBody):
 
 
 @app.delete("/api/player-aliases/{alias:path}")
-def remove_player_alias(alias: str):
+def remove_player_alias(alias: str, _: str = Depends(require_admin)):
     """Remove a player alias."""
     a = unquote(alias).strip()
     if a in _player_aliases:
@@ -586,7 +700,11 @@ class LoadBody(BaseModel):
 
 
 @app.post("/api/load")
-async def load_decks(body: LoadBody | None = None, file: UploadFile | None = File(None)):
+async def load_decks(
+    body: LoadBody | None = None,
+    file: UploadFile | None = File(None),
+    _: str = Depends(require_admin),
+):
     """Load decks from JSON. Body: { "decks": [...] } or { "path": "decks.json" }, or upload file."""
     global _decks
     if file:
@@ -613,6 +731,19 @@ async def load_decks(body: LoadBody | None = None, file: UploadFile | None = Fil
     return {"loaded": len(_decks), "message": f"Loaded {len(_decks)} decks"}
 
 
+@app.get("/api/export")
+def export_decks(_: str = Depends(require_admin)):
+    """Download current scraped/loaded data as JSON (same format as load accepts)."""
+    if not _decks:
+        raise HTTPException(status_code=404, detail="No data to export. Scrape or load data first.")
+    body = json.dumps(_decks, indent=2, ensure_ascii=False).encode("utf-8")
+    return Response(
+        content=body,
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="decks.json"'},
+    )
+
+
 @app.post("/api/analyze")
 def run_analyze():
     """Re-run analysis (no-op, metagame is computed on demand)."""
@@ -628,7 +759,7 @@ class ScrapeBody(BaseModel):
 
 
 @app.post("/api/scrape")
-async def run_scrape(body: ScrapeBody):
+async def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
     """Trigger scrape with SSE progress streaming."""
     import queue
     import re
