@@ -1,6 +1,7 @@
 """FastAPI backend for MTG Metagame web app."""
 
 import json
+import os
 import threading
 import unicodedata
 from pathlib import Path
@@ -16,12 +17,20 @@ def _normalize_search(s: str) -> str:
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # Import from project - run from project root
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+_project_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_project_root))
+
+DATA_DIR = Path(os.getenv("DATA_DIR", str(_project_root)))
+if not DATA_DIR.is_absolute():
+    DATA_DIR = _project_root / DATA_DIR
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 from src.mtgtop8.analyzer import analyze, deck_analysis, player_leaderboard, similar_decks, find_duplicate_decks
 from src.mtgtop8.card_lookup import lookup_cards
@@ -30,9 +39,10 @@ from src.mtgtop8.scraper import scrape
 
 app = FastAPI(title="MTG Metagame API", version="1.0.0")
 
+_allowed_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -45,7 +55,7 @@ _player_aliases: dict[str, str] = {}  # alias -> canonical
 
 
 def _aliases_path() -> Path:
-    return Path(__file__).resolve().parent.parent / "player_aliases.json"
+    return DATA_DIR / "player_aliases.json"
 
 
 def _load_player_aliases() -> None:
@@ -62,6 +72,7 @@ def _load_player_aliases() -> None:
 
 
 def _save_player_aliases() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
     with open(_aliases_path(), "w", encoding="utf-8") as f:
         json.dump(_player_aliases, f, indent=2, ensure_ascii=False)
 
@@ -108,7 +119,7 @@ def _load_from_file(path: str) -> None:
 
 
 # Load decks.json on startup if present
-_startup_path = Path(__file__).resolve().parent.parent / "decks.json"
+_startup_path = DATA_DIR / "decks.json"
 if _startup_path.exists():
     try:
         _load_from_file(str(_startup_path))
@@ -590,7 +601,7 @@ async def load_decks(body: LoadBody | None = None, file: UploadFile | None = Fil
         elif body.path:
             path = Path(body.path)
             if not path.is_absolute():
-                path = Path(__file__).resolve().parent.parent / path
+                path = DATA_DIR / path
             if not path.exists():
                 raise HTTPException(status_code=404, detail=f"File not found: {path}")
             _load_from_file(str(path))
@@ -711,3 +722,24 @@ async def run_scrape(body: ScrapeBody):
             yield f"data: {json.dumps({'type': 'error', 'message': 'Unknown error'})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+# Serve built frontend (production); static dir is populated by Dockerfile
+STATIC_DIR = _project_root / "static"
+if STATIC_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
+    _index_path = STATIC_DIR / "index.html"
+
+    @app.get("/", include_in_schema=False)
+    def serve_index():
+        if _index_path.exists():
+            return FileResponse(_index_path)
+        raise StarletteHTTPException(status_code=404)
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def serve_spa(full_path: str):
+        if full_path.startswith("api/") or full_path.startswith("assets/"):
+            raise StarletteHTTPException(status_code=404)
+        if _index_path.exists():
+            return FileResponse(_index_path)
+        raise StarletteHTTPException(status_code=404)

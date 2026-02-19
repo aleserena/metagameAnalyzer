@@ -1,0 +1,39 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+.pytest_cache
+.coverage
+htmlcov
+*.egg-info
+.eggs
+build
+
+# Node
+node_modules
+web/node_modules
+web/dist
+
+# Data and caches (use volume at runtime)
+decks.json
+metagame.json
+player_aliases.json
+.scryfall_cache.json
+
+# Environment and IDE
+.env
+.env.*
+.idea
+.vscode
+.cursor
+
+# Docs and tests (not needed in image)
+*.md
+tests
+*.log
+.DS_Store
+Thumbs.db
