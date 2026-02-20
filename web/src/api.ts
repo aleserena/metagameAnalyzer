@@ -1,4 +1,4 @@
-import type { Deck, MetagameReport, Event, PlayerStats, SimilarDeck } from './types'
+import type { Deck, MetagameReport, Event, PlayerStats, SimilarDeck, ArchetypeDetail } from './types'
 import { getToken } from './contexts/AuthContext'
 
 const API_BASE = '/api'
@@ -172,6 +172,24 @@ export async function getMetagame(
   if (eventIds) params.set('event_ids', eventIds)
   else if (eventId != null) params.set('event_id', String(eventId))
   return fetchApi(`/metagame?${params.toString()}`)
+}
+
+export async function getArchetypeDetail(
+  archetypeName: string,
+  params?: {
+    dateFrom?: string | null
+    dateTo?: string | null
+    eventIds?: string | null
+    ignoreLands?: boolean
+  }
+): Promise<ArchetypeDetail> {
+  const search = new URLSearchParams()
+  if (params?.dateFrom) search.set('date_from', params.dateFrom)
+  if (params?.dateTo) search.set('date_to', params.dateTo)
+  if (params?.eventIds) search.set('event_ids', params.eventIds)
+  if (params?.ignoreLands) search.set('ignore_lands', String(params.ignoreLands))
+  const q = search.toString()
+  return fetchApi(`/archetypes/${encodeURIComponent(archetypeName)}${q ? `?${q}` : ''}`)
 }
 
 export async function getPlayers(dateFrom?: string | null, dateTo?: string | null): Promise<{ players: PlayerStats[] }> {

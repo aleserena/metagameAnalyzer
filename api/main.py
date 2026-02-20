@@ -41,10 +41,12 @@ from src.mtgtop8.analyzer import (
     DEFAULT_IGNORE_LANDS_SET,
     RANK_WEIGHTS as DEFAULT_RANK_WEIGHTS,
     analyze,
+    archetype_aggregate_analysis,
     deck_analysis,
     find_duplicate_decks,
     player_leaderboard,
     similar_decks,
+    top_cards_main,
 )
 from src.mtgtop8.card_lookup import clear_cache as clear_scryfall_cache, lookup_cards
 from src.mtgtop8.models import Deck
@@ -634,6 +636,69 @@ def get_metagame(
         ignore_lands_cards=ignore_lands_cards,
         rank_weights=rank_weights,
     )
+
+
+@app.get("/api/archetypes/{archetype_name:path}")
+def get_archetype_detail(
+    archetype_name: str,
+    date_from: str | None = Query(None, description="Filter from date (DD/MM/YY)"),
+    date_to: str | None = Query(None, description="Filter to date (DD/MM/YY)"),
+    event_id: int | None = Query(None, description="Filter by event ID (single)"),
+    event_ids: str | None = Query(None, description="Filter by event IDs (comma-separated)"),
+    ignore_lands: bool = Query(False),
+):
+    """Archetype detail: average analysis and top cards for decks with this archetype."""
+    if not _decks:
+        raise HTTPException(status_code=404, detail="No data loaded")
+    decoded = unquote(archetype_name)
+    filtered = _decks
+    if event_ids:
+        ids = [int(x.strip()) for x in event_ids.split(",") if x.strip()]
+        if ids:
+            filtered = [d for d in filtered if d.get("event_id") in ids]
+    elif event_id is not None:
+        filtered = [d for d in filtered if d.get("event_id") == event_id]
+    else:
+        filtered = _filter_decks_by_date(filtered, date_from, date_to)
+    filtered = [
+        d for d in filtered
+        if (d.get("archetype") or "(unknown)") == decoded
+    ]
+    if not filtered:
+        raise HTTPException(status_code=404, detail="Archetype not found or no decks in range")
+    decks = [Deck.from_dict(d) for d in filtered]
+    card_names = set()
+    for d in decks:
+        for _, c in d.mainboard:
+            card_names.add(c)
+        for _, c in d.sideboard:
+            card_names.add(c)
+    metadata = lookup_cards(list(card_names))
+    merged: dict = {}
+    for name in card_names:
+        if name in metadata and "error" not in metadata.get(name, {}):
+            merged[name] = metadata[name]
+        else:
+            for k, v in metadata.items():
+                if "error" not in v and k.lower() == name.lower():
+                    merged[name] = v
+                    break
+    ignore_lands_cards = set(_get_ignore_lands_cards()) if ignore_lands else None
+    rank_weights = _get_rank_weights()
+    average_analysis = archetype_aggregate_analysis(decks, merged)
+    top_main = top_cards_main(
+        decks,
+        placement_weighted=False,
+        ignore_lands=ignore_lands,
+        ignore_lands_cards=ignore_lands_cards,
+        rank_weights=rank_weights,
+    )
+    return {
+        "archetype": decoded,
+        "deck_count": len(decks),
+        "average_analysis": average_analysis,
+        "top_cards_main": top_main,
+    }
 
 
 @app.get("/api/settings/ignore-lands-cards")

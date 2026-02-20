@@ -124,6 +124,30 @@ def test_get_deck_by_id_404(client):
     assert r.status_code == 404
 
 
+def test_get_archetype_detail_404(client):
+    """GET /api/archetypes/{name} returns 404 when no decks match."""
+    r = client.get("/api/archetypes/NonexistentArchetype")
+    assert r.status_code == 404
+
+
+def test_get_archetype_detail_200(client, sample_decks):
+    """GET /api/archetypes/{name} returns 200 with archetype, deck_count, average_analysis, top_cards_main."""
+    archetype_name = sample_decks[0].get("archetype") or "UR Aggro"
+    r = client.get(f"/api/archetypes/{archetype_name}")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["archetype"] == archetype_name
+    assert data["deck_count"] >= 1
+    assert "average_analysis" in data
+    a = data["average_analysis"]
+    assert "mana_curve" in a
+    assert "color_distribution" in a
+    assert "lands_distribution" in a
+    assert "type_distribution" in a
+    assert "top_cards_main" in data
+    assert isinstance(data["top_cards_main"], list)
+
+
 def test_get_metagame_structure(client):
     """GET /api/metagame returns structure with top_cards_main, commander_distribution."""
     r = client.get("/api/metagame")

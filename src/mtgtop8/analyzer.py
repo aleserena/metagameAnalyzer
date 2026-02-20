@@ -353,6 +353,59 @@ def deck_analysis(deck: Deck, card_metadata: dict[str, dict]) -> dict[str, Any]:
     }
 
 
+def archetype_aggregate_analysis(
+    decks: list[Deck], card_metadata: dict[str, dict]
+) -> dict[str, Any]:
+    """Average mana curve, color distribution, lands distribution, type distribution across decks."""
+    if not decks:
+        return {
+            "mana_curve": {},
+            "color_distribution": {},
+            "lands_distribution": {"lands": 0, "nonlands": 0},
+            "type_distribution": {},
+        }
+    analyses = [deck_analysis(d, card_metadata) for d in decks]
+    n = len(analyses)
+
+    # Average mana_curve: collect all CMCs, then avg count per CMC
+    mana_curve_agg: dict[int, float] = {}
+    for a in analyses:
+        for cmc, count in a.get("mana_curve", {}).items():
+            c = int(cmc) if isinstance(cmc, str) else cmc
+            mana_curve_agg[c] = mana_curve_agg.get(c, 0) + count
+    mana_curve = {c: round(mana_curve_agg[c] / n, 1) for c in sorted(mana_curve_agg.keys())}
+
+    # Average color_distribution (already per-deck percentages)
+    color_keys = ["W", "U", "B", "R", "G", "C"]
+    color_agg = {k: 0.0 for k in color_keys}
+    for a in analyses:
+        for k in color_keys:
+            color_agg[k] += (a.get("color_distribution") or {}).get(k, 0)
+    color_distribution = {k: round(color_agg[k] / n, 1) for k in color_keys}
+
+    # Average lands_distribution
+    lands_sum = sum((a.get("lands_distribution") or {}).get("lands", 0) for a in analyses)
+    nonlands_sum = sum((a.get("lands_distribution") or {}).get("nonlands", 0) for a in analyses)
+    lands_distribution = {
+        "lands": round(lands_sum / n, 1),
+        "nonlands": round(nonlands_sum / n, 1),
+    }
+
+    # Average type_distribution (counts per type)
+    type_agg: dict[str, float] = {}
+    for a in analyses:
+        for t, count in (a.get("type_distribution") or {}).items():
+            type_agg[t] = type_agg.get(t, 0) + count
+    type_distribution = {t: round(type_agg[t] / n, 1) for t in sorted(type_agg.keys())}
+
+    return {
+        "mana_curve": mana_curve,
+        "color_distribution": color_distribution,
+        "lands_distribution": lands_distribution,
+        "type_distribution": type_distribution,
+    }
+
+
 def deck_diversity(decks: list[Deck]) -> dict[str, Any]:
     """Unique commanders/archetypes, simple diversity metrics."""
     commanders = set()

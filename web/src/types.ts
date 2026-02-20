@@ -104,3 +104,18 @@ export interface PlayerStats {
   points: number
   deck_count: number
 }
+
+/** Average deck analysis for an archetype (subset of deck analysis fields). */
+export interface ArchetypeAverageAnalysis {
+  mana_curve: Record<string, number>
+  color_distribution: Record<string, number>
+  lands_distribution: { lands: number; nonlands: number }
+  type_distribution: Record<string, number>
+}
+
+export interface ArchetypeDetail {
+  archetype: string
+  deck_count: number
+  average_analysis: ArchetypeAverageAnalysis
+  top_cards_main: TopCard[]
+}

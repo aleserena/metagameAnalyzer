@@ -5,6 +5,7 @@ from src.mtgtop8.models import Deck
 from src.mtgtop8.analyzer import (
     commander_distribution,
     archetype_distribution,
+    archetype_aggregate_analysis,
     top_cards_main,
     player_leaderboard,
     deck_diversity,
@@ -104,3 +105,22 @@ def test_deck_analysis_with_metadata(sample_deck_dict):
     assert "grouped_by_type" in result
     assert result["lands_distribution"]["lands"] >= 38  # Lands card (38 copies)
     assert 1 in result["mana_curve"]  # Lightning Bolt CMC 1
+
+
+def test_archetype_aggregate_analysis(sample_decks):
+    """archetype_aggregate_analysis returns averaged mana curve, colors, lands, types."""
+    decks = [Deck.from_dict(d) for d in sample_decks]
+    metadata = {
+        "Lightning Bolt": {"cmc": 1, "mana_cost": "{R}", "type_line": "Instant", "colors": ["R"], "color_identity": ["R"]},
+        "Spider-Man 2099": {"cmc": 3, "mana_cost": "{1}{U}{R}", "type_line": "Legendary Creature", "colors": ["U", "R"], "color_identity": ["U", "R"]},
+        "Terra, Magical Adept": {"cmc": 3, "mana_cost": "{1}{U}{R}", "type_line": "Legendary Creature", "colors": ["U", "R"], "color_identity": ["U", "R"]},
+        "Lands": {"cmc": 0, "mana_cost": "", "type_line": "Land", "colors": [], "color_identity": []},
+    }
+    result = archetype_aggregate_analysis(decks, metadata)
+    assert "mana_curve" in result
+    assert "color_distribution" in result
+    assert "lands_distribution" in result
+    assert "type_distribution" in result
+    # Averages: two decks => values should be numeric (averaged)
+    assert isinstance(result["lands_distribution"]["lands"], (int, float))
+    assert isinstance(result["lands_distribution"]["nonlands"], (int, float))

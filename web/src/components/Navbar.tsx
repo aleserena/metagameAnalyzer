@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext'
 const baseNavItems = [
   { path: '/', label: 'Dashboard' },
   { path: '/metagame', label: 'Metagame' },
+  { path: '/archetypes', label: 'Archetypes' },
   { path: '/decks', label: 'Decks' },
   { path: '/decks/compare', label: 'Compare' },
   { path: '/players', label: 'Players' },
