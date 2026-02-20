@@ -71,10 +71,21 @@ export interface SimilarDeck {
   similarity: number
 }
 
+export interface DeckDuplicateSummary {
+  deck_id: number
+  name: string
+  player: string
+  event_name: string
+  date: string
+  rank?: string
+}
+
 export interface DeckDuplicateInfo {
   is_duplicate: boolean
   duplicate_of: number | null
   same_mainboard_ids: number[]
+  same_mainboard_decks?: DeckDuplicateSummary[]
+  primary_deck?: DeckDuplicateSummary
 }
 
 export interface Event {

@@ -212,13 +212,62 @@ tr.clickable {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 1rem;
+  padding: 1.25rem;
   margin-bottom: 1.5rem;
   min-height: 300px;
+  overflow: visible;
+}
+
+.chart-container .recharts-legend-wrapper {
+  padding-bottom: 4px;
+  bottom: 15% !important;
 }
 
 .chart-container--compact {
   min-height: 0;
+}
+
+.deck-analysis-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+@media (max-width: 640px) {
+  .deck-analysis-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.deck-analysis-grid .chart-container {
+  padding: 0.75rem 1rem;
+  min-height: 0;
+  margin-bottom: 0;
+}
+
+/* Flexible chart containers: allow growth so pie and legend don't overlap; fill cell height so row is uniform */
+.deck-analysis-grid .chart-container--flex {
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+}
+
+.deck-analysis-grid .chart-container--flex .recharts-responsive-container {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+/* Grid rows grow with tallest chart; all cells in a row share the same height and width */
+.deck-analysis-grid {
+  grid-auto-rows: minmax(min-content, auto);
+  align-items: stretch;
+}
+
+/* Keep chart content below the title so the pie is never obscured */
+.deck-analysis-grid .chart-container .recharts-responsive-container {
+  margin-top: 0.5rem;
 }
 
 .form-group {

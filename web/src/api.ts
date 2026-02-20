@@ -91,6 +91,11 @@ export async function getDuplicateDecks(eventIds?: string): Promise<{
   return fetchApi(`/decks/duplicates${params}`)
 }
 
+export interface CardFaceLookup {
+  name: string
+  image_uris?: { small?: string; normal?: string; large?: string }
+}
+
 export interface CardLookupResult {
   name?: string
   image_uris?: { small?: string; normal?: string; large?: string }
@@ -99,6 +104,8 @@ export interface CardLookupResult {
   type_line?: string
   colors?: string[]
   color_identity?: string[]
+  /** Both faces for double-faced cards (name + image per face). */
+  card_faces?: CardFaceLookup[]
   error?: string
 }
 

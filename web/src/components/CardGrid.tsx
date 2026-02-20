@@ -10,9 +10,11 @@ interface DeckCard {
 interface CardGridProps {
   cards: DeckCard[]
   title?: string
+  /** When true, render without outer chart-container and use h4 for title (for use inside a parent section) */
+  embed?: boolean
 }
 
-export default function CardGrid({ cards, title }: CardGridProps) {
+export default function CardGrid({ cards, title, embed }: CardGridProps) {
   const [lookup, setLookup] = useState<Record<string, Awaited<ReturnType<typeof getCardLookup>>[string]>>({})
   const [loading, setLoading] = useState(true)
 
@@ -36,14 +38,15 @@ export default function CardGrid({ cards, title }: CardGridProps) {
 
   if (loading) return <div className="loading">Loading card images...</div>
 
-  return (
-    <div className="chart-container">
-      {title && <h3 style={{ margin: '0 0 1rem' }}>{title}</h3>}
+  const content = (
+    <>
+      {title && (embed ? <h4 style={{ margin: '0 0 0.5rem', fontSize: '0.95rem', color: 'var(--text-muted)' }}>{title}</h4> : <h3 style={{ margin: '0 0 1rem' }}>{title}</h3>)}
       <div
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
           gap: '0.5rem',
+          marginBottom: embed ? '1.25rem' : undefined,
         }}
       >
         {uniqueCards.map(([card, qty]) => {
@@ -105,6 +108,9 @@ export default function CardGrid({ cards, title }: CardGridProps) {
           )
         })}
       </div>
-    </div>
+    </>
   )
+
+  if (embed) return content
+  return <div className="chart-container">{content}</div>
 }

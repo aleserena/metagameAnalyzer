@@ -404,14 +404,42 @@ def compare_decks(ids: str = Query(..., description="Comma-separated deck IDs"))
 
 
 def _deck_duplicate_info(deck_id: int) -> dict | None:
-    """Return duplicate info for a deck: {is_duplicate, duplicate_of, same_mainboard_ids}."""
+    """Return duplicate info for a deck: is_duplicate, duplicate_of, same_mainboard_ids, same_mainboard_decks, primary_deck."""
     decks = [Deck.from_dict(d) for d in _decks]
     dup_map = find_duplicate_decks(decks)
+    deck_map = {d.get("deck_id"): d for d in _decks}
+
+    def deck_summary(did: int) -> dict:
+        d = deck_map.get(did, {})
+        return {
+            "deck_id": did,
+            "name": d.get("name"),
+            "player": d.get("player"),
+            "event_name": d.get("event_name"),
+            "date": d.get("date"),
+            "rank": d.get("rank"),
+        }
+
     for primary, others in dup_map.items():
         if deck_id == primary:
-            return {"is_duplicate": False, "duplicate_of": None, "same_mainboard_ids": others}
+            same_mainboard_decks = [deck_summary(did) for did in others]
+            return {
+                "is_duplicate": False,
+                "duplicate_of": None,
+                "same_mainboard_ids": others,
+                "same_mainboard_decks": same_mainboard_decks,
+            }
         if deck_id in others:
-            return {"is_duplicate": True, "duplicate_of": primary, "same_mainboard_ids": [x for x in others if x != deck_id]}
+            primary_deck = deck_summary(primary)
+            same_mainboard_ids = [x for x in others if x != deck_id]
+            same_mainboard_decks = [deck_summary(did) for did in same_mainboard_ids]
+            return {
+                "is_duplicate": True,
+                "duplicate_of": primary,
+                "same_mainboard_ids": same_mainboard_ids,
+                "same_mainboard_decks": same_mainboard_decks,
+                "primary_deck": primary_deck,
+            }
     return None
 
 
@@ -503,7 +531,17 @@ def get_deck_analysis(deck_id: int):
     deck = Deck.from_dict(deck_dict)
     card_names = list({c for _, c in deck.mainboard} | {c for _, c in deck.sideboard})
     metadata = lookup_cards(card_names)
-    return deck_analysis(deck, metadata)
+    # Ensure every deck card name has meta (case-insensitive fallback for name variants)
+    merged: dict = {}
+    for name in card_names:
+        if name in metadata and "error" not in metadata.get(name, {}):
+            merged[name] = metadata[name]
+        else:
+            for k, v in metadata.items():
+                if "error" not in v and k.lower() == name.lower():
+                    merged[name] = v
+                    break
+    return deck_analysis(deck, merged)
 
 
 @app.get("/api/date-range")

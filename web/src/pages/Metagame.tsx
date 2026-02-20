@@ -286,14 +286,14 @@ export default function Metagame() {
           {placementWeighted && <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>weighted by placement</span>}
         </div>
         <ResponsiveContainer width="100%" height={400}>
-          <BarChart data={commanders.slice(0, 15)} margin={{ top: 20, right: 30, left: 20, bottom: 80 }}
+          <BarChart data={commanders.slice(0, 15)} margin={{ top: 15, right: 25, left: 35, bottom: 90 }}
             style={{ cursor: 'pointer' }}
             onClick={(state) => {
               if (state?.activeLabel) navigate(`/decks?deck_name=${encodeURIComponent(state.activeLabel)}`)
             }}
           >
             <XAxis dataKey="commander" angle={-45} textAnchor="end" height={80} tick={{ fontSize: 11 }} />
-            <YAxis />
+            <YAxis width={32} />
             <Tooltip
               contentStyle={{
                 background: 'var(--bg-card)',
@@ -314,15 +314,14 @@ export default function Metagame() {
           {placementWeighted && <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginLeft: '0.5rem' }}>weighted by placement</span>}
         </h3>
         <ResponsiveContainer width="100%" height={300}>
-          <PieChart>
+          <PieChart margin={{ top: 15, right: 15, bottom: 60, left: 15 }}>
             <Pie
               data={archetypes.slice(0, 8)}
               dataKey="count"
               nameKey="archetype"
               cx="50%"
               cy="50%"
-              outerRadius={100}
-              label={({ archetype, pct }) => `${archetype} (${pct}%)`}
+              outerRadius={90}
               style={{ cursor: 'pointer' }}
               onClick={(data) => {
                 if (data?.archetype) navigate(`/decks?archetype=${encodeURIComponent(data.archetype)}`)
@@ -333,9 +332,9 @@ export default function Metagame() {
               ))}
             </Pie>
             <Tooltip />
-            <Legend onClick={(e) => {
+            <Legend layout="horizontal" verticalAlign="bottom" onClick={(e) => {
               if (e?.value) navigate(`/decks?archetype=${encodeURIComponent(String(e.value))}`)
-            }} />
+            }} formatter={(value, entry: { payload?: { archetype?: string; pct?: number } }) => entry.payload?.pct != null ? `${entry.payload.archetype} (${entry.payload.pct}%)` : value} />
           </PieChart>
         </ResponsiveContainer>
       </div>
