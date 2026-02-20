@@ -1,7 +1,4 @@
-#!/bin/sh
-. "$(dirname -- "$0")/_/husky.sh"
-
 # Block commit if build or tests fail
 npm run build || exit 1
-npm run test -- --run || exit 1
+npm run test || exit 1
 npm run test:py || exit 1

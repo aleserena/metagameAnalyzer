@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "build": "cd web && npm run build",
-    "test": "cd web && npm test",
+    "test": "cd web && npm run test:run",
     "test:py": "python -m pytest",
     "prepare": "husky"
   },
