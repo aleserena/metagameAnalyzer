@@ -6,6 +6,7 @@ import type { MetagameReport, Event } from '../types'
 import CardHover from '../components/CardHover'
 import EventSelector from '../components/EventSelector'
 import { Skeleton, SkeletonList } from '../components/Skeleton'
+import { reportError } from '../utils'
 
 export default function Dashboard() {
   const [metagame, setMetagame] = useState<MetagameReport | null>(null)
@@ -32,7 +33,7 @@ export default function Dashboard() {
       .then(setMetagame)
       .catch((e) => {
         setError(e.message)
-        toast.error(e.message)
+        toast.error(reportError(e))
       })
       .finally(() => setLoading(false))
   }, [ignoreLands, eventIds])
@@ -82,7 +83,7 @@ export default function Dashboard() {
                 .then(setMetagame)
                 .catch((e) => {
                   setError(e.message)
-                  toast.error(e.message)
+                  toast.error(reportError(e))
                 })
                 .finally(() => setLoading(false))
             }}

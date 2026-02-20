@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { useAuth } from '../contexts/AuthContext'
+import { reportError } from '../utils'
 
 export default function Login() {
   const [password, setPassword] = useState('')
@@ -22,7 +23,7 @@ export default function Login() {
       await login(password)
       navigate('/', { replace: true })
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e))
+      toast.error(reportError(e))
     } finally {
       setSubmitting(false)
     }

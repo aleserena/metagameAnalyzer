@@ -8,7 +8,7 @@ import type { DeckAnalysis, CardMeta } from '../api'
 import CardGrid from '../components/CardGrid'
 import CardHover from '../components/CardHover'
 import ManaSymbols from '../components/ManaSymbols'
-import { dateMinusDays, firstDayOfYear, pluralizeType } from '../utils'
+import { dateMinusDays, firstDayOfYear, pluralizeType, reportError } from '../utils'
 
 type ViewMode = 'list' | 'scryfall'
 type GroupMode = 'type' | 'cmc' | 'color' | 'none'
@@ -207,7 +207,7 @@ export default function DeckDetail() {
       .then(setDeck)
       .catch((e) => {
         setError(e.message)
-        toast.error(e.message)
+        toast.error(reportError(e))
       })
       .finally(() => setLoading(false))
   }, [deckId])
@@ -259,7 +259,7 @@ export default function DeckDetail() {
                 .then(setDeck)
                 .catch((e) => {
                   setError(e.message)
-                  toast.error(e.message)
+                  toast.error(reportError(e))
                 })
                 .finally(() => setLoading(false))
             }}

@@ -6,6 +6,7 @@ import { getDecks, getDeckCompare, getDeckAnalysis } from '../api'
 import type { DeckAnalysis } from '../api'
 import type { Deck } from '../types'
 import CardHover from '../components/CardHover'
+import { reportError } from '../utils'
 
 const MAX_DECKS = 4
 
@@ -34,7 +35,7 @@ export default function DeckCompare() {
         setSelectedDecks(r.decks)
         setCompareData(r.decks)
       })
-      .catch((e) => toast.error(e.message))
+      .catch((e) => toast.error(reportError(e)))
       .finally(() => setLoading(false))
   }, [searchParams, initDone])
 
@@ -70,7 +71,7 @@ export default function DeckCompare() {
     setAnalyses({})
     getDeckCompare(selectedDecks.map((d) => d.deck_id))
       .then((r) => setCompareData(r.decks))
-      .catch((e) => toast.error(e.message))
+      .catch((e) => toast.error(reportError(e)))
       .finally(() => setLoading(false))
   }
 
@@ -89,7 +90,7 @@ export default function DeckCompare() {
         })
         setAnalyses(next)
       })
-      .catch((e) => toast.error(e.message))
+      .catch((e) => toast.error(reportError(e)))
       .finally(() => setAnalysisLoading(false))
   }, [compareData])
 

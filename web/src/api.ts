@@ -23,7 +23,9 @@ async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(err.detail || res.statusText)
+    const detail = err.detail || res.statusText
+    console.error(`[API] ${res.status} ${path}`, detail, err)
+    throw new Error(detail)
   }
   return res.json()
 }
@@ -232,6 +234,14 @@ export async function putRankWeights(weights: Record<string, number>): Promise<{
   })
 }
 
+export async function clearScryfallCache(): Promise<{ message: string }> {
+  return fetchApi('/settings/clear-cache', { method: 'POST' })
+}
+
+export async function clearDecks(): Promise<{ message: string }> {
+  return fetchApi('/settings/clear-decks', { method: 'POST' })
+}
+
 export async function getSimilarPlayers(name: string, limit = 10): Promise<{ similar: string[] }> {
   return fetchApi(`/players/similar?name=${encodeURIComponent(name)}&limit=${limit}`)
 }
@@ -250,7 +260,9 @@ export async function loadDecks(file: File): Promise<{ loaded: number; message: 
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(err.detail || res.statusText)
+    const detail = err.detail || res.statusText
+    console.error('[API]', res.status, '/load', detail, err)
+    throw new Error(detail)
   }
   return res.json()
 }
@@ -263,7 +275,9 @@ export async function exportDecks(): Promise<Blob> {
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(err.detail || res.statusText)
+    const detail = err.detail || res.statusText
+    console.error('[API]', res.status, '/export', detail, err)
+    throw new Error(detail)
   }
   return res.blob()
 }

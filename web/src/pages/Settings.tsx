@@ -9,7 +9,10 @@ import {
   putIgnoreLandsCards,
   getRankWeights,
   putRankWeights,
+  clearScryfallCache,
+  clearDecks,
 } from '../api'
+import { reportError } from '../utils'
 
 const RANK_KEYS = ['1', '2', '3-4', '5-8', '9-16', '17-32'] as const
 const DEFAULT_RANK_WEIGHTS: Record<string, number> = {
@@ -32,25 +35,27 @@ export default function Settings() {
   const [rankWeights, setRankWeights] = useState<Record<string, number>>(DEFAULT_RANK_WEIGHTS)
   const [loadingRankWeights, setLoadingRankWeights] = useState(true)
   const [savingRankWeights, setSavingRankWeights] = useState(false)
+  const [clearingCache, setClearingCache] = useState(false)
+  const [clearingDecks, setClearingDecks] = useState(false)
 
   useEffect(() => {
     getPlayerAliases()
       .then((r) => setAliases(r.aliases))
-      .catch((e) => toast.error(e instanceof Error ? e.message : String(e)))
+      .catch((e) => toast.error(reportError(e)))
       .finally(() => setLoadingAliases(false))
   }, [])
 
   useEffect(() => {
     getIgnoreLandsCards()
       .then((r) => setIgnoreLandsCards(r.cards))
-      .catch((e) => toast.error(e instanceof Error ? e.message : String(e)))
+      .catch((e) => toast.error(reportError(e)))
       .finally(() => setLoadingCards(false))
   }, [])
 
   useEffect(() => {
     getRankWeights()
       .then((r) => setRankWeights({ ...DEFAULT_RANK_WEIGHTS, ...r.weights }))
-      .catch((e) => toast.error(e instanceof Error ? e.message : String(e)))
+      .catch((e) => toast.error(reportError(e)))
       .finally(() => setLoadingRankWeights(false))
   }, [])
 
@@ -63,7 +68,7 @@ export default function Settings() {
         setNewCanonical('')
         toast.success('Alias added')
       })
-      .catch((e) => toast.error(e instanceof Error ? e.message : String(e)))
+      .catch((e) => toast.error(reportError(e)))
   }
 
   const handleRemoveAlias = (alias: string) => {
@@ -72,7 +77,7 @@ export default function Settings() {
         setAliases(r.aliases)
         toast.success('Alias removed')
       })
-      .catch((e) => toast.error(e instanceof Error ? e.message : String(e)))
+      .catch((e) => toast.error(reportError(e)))
   }
 
   const handleAddIgnoreCard = () => {
@@ -89,7 +94,7 @@ export default function Settings() {
         setNewIgnoreCard('')
         toast.success('Card added to ignore list')
       })
-      .catch((e) => toast.error(e instanceof Error ? e.message : String(e)))
+      .catch((e) => toast.error(reportError(e)))
   }
 
   const handleRemoveIgnoreCard = (card: string) => {
@@ -99,7 +104,7 @@ export default function Settings() {
         setIgnoreLandsCards(r.cards)
         toast.success('Card removed from ignore list')
       })
-      .catch((e) => toast.error(e instanceof Error ? e.message : String(e)))
+      .catch((e) => toast.error(reportError(e)))
   }
 
   const handleSaveRankWeights = () => {
@@ -114,8 +119,26 @@ export default function Settings() {
         setRankWeights({ ...DEFAULT_RANK_WEIGHTS, ...r.weights })
         toast.success('Points per position saved')
       })
-      .catch((e) => toast.error(e instanceof Error ? e.message : String(e)))
+      .catch((e) => toast.error(reportError(e)))
       .finally(() => setSavingRankWeights(false))
+  }
+
+  const handleClearCache = () => {
+    if (!window.confirm('Clear the Scryfall card lookup cache? Card images and metadata will be re-fetched on next use.')) return
+    setClearingCache(true)
+    clearScryfallCache()
+      .then(() => toast.success('Scryfall cache cleared'))
+      .catch((e) => toast.error(reportError(e)))
+      .finally(() => setClearingCache(false))
+  }
+
+  const handleClearDecks = () => {
+    if (!window.confirm('Clear all decks? This removes all loaded/scraped data and overwrites decks.json. This cannot be undone.')) return
+    setClearingDecks(true)
+    clearDecks()
+      .then(() => toast.success('Decks cleared'))
+      .catch((e) => toast.error(reportError(e)))
+      .finally(() => setClearingDecks(false))
   }
 
   return (
@@ -231,6 +254,33 @@ export default function Settings() {
             </button>
           </div>
         )}
+      </div>
+
+      <div className="chart-container" style={{ maxWidth: 600, marginBottom: '2rem' }}>
+        <h2 style={{ margin: '0 0 1rem', fontSize: '1.25rem' }}>Data &amp; cache</h2>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1rem' }}>
+          Clear the Scryfall cache to force re-fetching card images and metadata. Clear decks to remove all loaded/scraped data and reset decks.json.
+        </p>
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            className="btn"
+            style={{ padding: '0.35rem 0.75rem' }}
+            onClick={handleClearCache}
+            disabled={clearingCache}
+          >
+            {clearingCache ? 'Clearing...' : 'Clear Scryfall cache'}
+          </button>
+          <button
+            type="button"
+            className="btn"
+            style={{ padding: '0.35rem 0.75rem' }}
+            onClick={handleClearDecks}
+            disabled={clearingDecks}
+          >
+            {clearingDecks ? 'Clearing...' : 'Clear decks.json'}
+          </button>
+        </div>
       </div>
 
       <div className="chart-container" style={{ maxWidth: 600 }}>

@@ -4,7 +4,7 @@ import toast from 'react-hot-toast'
 import { getPlayers, getDateRange } from '../api'
 import type { PlayerStats } from '../types'
 import Skeleton from '../components/Skeleton'
-import { dateMinusDays, firstDayOfYear } from '../utils'
+import { dateMinusDays, firstDayOfYear, reportError } from '../utils'
 
 type SortKey = 'player' | 'wins' | 'top2' | 'top4' | 'top8' | 'points' | 'deck_count'
 
@@ -32,7 +32,7 @@ export default function Players() {
       .then((r) => setPlayers(r.players))
       .catch((e) => {
         setError(e.message)
-        toast.error(e.message)
+        toast.error(reportError(e))
       })
       .finally(() => setLoading(false))
   }, [dateFrom, dateTo])
@@ -133,7 +133,7 @@ export default function Players() {
                 .then((r) => setPlayers(r.players))
                 .catch((e) => {
                   setError(e.message)
-                  toast.error(e.message)
+                  toast.error(reportError(e))
                 })
                 .finally(() => setLoading(false))
             }}

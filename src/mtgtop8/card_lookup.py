@@ -36,6 +36,17 @@ def _save_cache() -> None:
         pass
 
 
+def clear_cache() -> None:
+    """Clear in-memory card cache and delete the cache file."""
+    global _card_cache
+    _card_cache = {}
+    try:
+        if CACHE_FILE.exists():
+            CACHE_FILE.unlink()
+    except Exception:
+        pass
+
+
 def _scryfall_lookup_name(name: str) -> str:
     """For split cards like 'Fire // Ice', Scryfall collection API needs just the first half."""
     if " // " in name:

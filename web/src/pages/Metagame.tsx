@@ -19,6 +19,7 @@ import CardHover from '../components/CardHover'
 import EventSelector from '../components/EventSelector'
 import ManaSymbols from '../components/ManaSymbols'
 import Skeleton from '../components/Skeleton'
+import { reportError } from '../utils'
 import type { MetagameReport, Event } from '../types'
 
 const COLORS = ['#1d9bf0', '#00ba7c', '#f7931a', '#e91e63', '#9c27b0', '#00bcd4', '#ff9800', '#4caf50']
@@ -103,7 +104,7 @@ export default function Metagame() {
       .then(setMetagame)
       .catch((e) => {
         setError(e.message)
-        toast.error(e.message)
+        toast.error(reportError(e))
       })
       .finally(() => setLoading(false))
   }, [placementWeighted, ignoreLands, eventIds])
@@ -169,7 +170,7 @@ export default function Metagame() {
                 .then(setMetagame)
                 .catch((e) => {
                   setError(e.message)
-                  toast.error(e.message)
+                  toast.error(reportError(e))
                 })
                 .finally(() => setLoading(false))
             }}

@@ -1,6 +1,7 @@
 """FastAPI backend for MTG Metagame web app."""
 
 import json
+import logging
 import os
 import threading
 import time
@@ -9,6 +10,8 @@ from pathlib import Path
 from urllib.parse import unquote
 
 import jwt
+
+logger = logging.getLogger(__name__)
 
 def _normalize_search(s: str) -> str:
     """Lowercase and strip accents for relaxed substring matching."""
@@ -43,7 +46,7 @@ from src.mtgtop8.analyzer import (
     player_leaderboard,
     similar_decks,
 )
-from src.mtgtop8.card_lookup import lookup_cards
+from src.mtgtop8.card_lookup import clear_cache as clear_scryfall_cache, lookup_cards
 from src.mtgtop8.models import Deck
 from src.mtgtop8.scraper import scrape
 
@@ -206,8 +209,8 @@ _startup_path = DATA_DIR / "decks.json"
 if _startup_path.exists():
     try:
         _load_from_file(str(_startup_path))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.exception("Failed to load %s: %s", _startup_path, e)
 
 
 _RANK_ORDER = {"1": 0, "2": 1, "3-4": 2, "5-8": 3, "9-16": 4, "17-32": 5}
@@ -673,6 +676,29 @@ def put_rank_weights(body: RankWeightsBody, _: str = Depends(require_admin)):
     return {"weights": _get_rank_weights()}
 
 
+@app.post("/api/settings/clear-cache")
+def post_clear_scryfall_cache(_: str = Depends(require_admin)):
+    """Clear Scryfall card lookup cache (in-memory and .scryfall_cache.json). Admin-only."""
+    clear_scryfall_cache()
+    return {"message": "Scryfall cache cleared"}
+
+
+@app.post("/api/settings/clear-decks")
+def post_clear_decks(_: str = Depends(require_admin)):
+    """Clear all loaded decks (in-memory and decks.json). Admin-only."""
+    global _decks
+    _decks = []
+    _invalidate_metagame()
+    decks_path = DATA_DIR / "decks.json"
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        with open(decks_path, "w", encoding="utf-8") as f:
+            json.dump([], f, indent=2, ensure_ascii=False)
+    except OSError:
+        pass
+    return {"message": "Decks cleared"}
+
+
 @app.get("/api/player-aliases")
 def get_player_aliases():
     """List player alias mappings (alias -> canonical)."""
@@ -794,6 +820,7 @@ async def load_decks(
         try:
             _decks = _normalize_split_cards(json.loads(content.decode("utf-8")))
         except json.JSONDecodeError as e:
+            logger.warning("Load decks: invalid JSON from upload: %s", e)
             raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
     elif body:
         if body.decks is not None:
@@ -804,7 +831,11 @@ async def load_decks(
                 path = DATA_DIR / path
             if not path.exists():
                 raise HTTPException(status_code=404, detail=f"File not found: {path}")
-            _load_from_file(str(path))
+            try:
+                _load_from_file(str(path))
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning("Load decks from path %s failed: %s", path, e)
+                raise HTTPException(status_code=400, detail=f"Failed to load file: {e}") from e
         else:
             raise HTTPException(status_code=400, detail="Provide 'decks' array or 'path'")
     else:
@@ -871,6 +902,7 @@ async def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
             )
             result_holder.append(decks)
         except Exception as e:
+            logger.exception("Scrape failed: %s", e)
             error_holder.append(str(e))
         finally:
             q.put(None)

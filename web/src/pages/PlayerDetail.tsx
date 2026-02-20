@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { getPlayerDetail, getSimilarPlayers, addPlayerAlias, getPlayerAliases } from '../api'
 import { useAuth } from '../contexts/AuthContext'
+import { reportError } from '../utils'
 
 export default function PlayerDetail() {
   const { playerName } = useParams<{ playerName: string }>()
@@ -20,8 +21,9 @@ export default function PlayerDetail() {
     getPlayerDetail(decodeURIComponent(playerName))
       .then(setData)
       .catch((e) => {
-        setError(e.message)
-        toast.error(e.message)
+        const msg = reportError(e)
+        setError(msg)
+        toast.error(msg)
       })
       .finally(() => setLoading(false))
   }, [playerName])
@@ -48,8 +50,9 @@ export default function PlayerDetail() {
               getPlayerDetail(decodeURIComponent(playerName!))
                 .then(setData)
                 .catch((e) => {
-                  setError(e.message)
-                  toast.error(e.message)
+                  const msg = reportError(e)
+                  setError(msg)
+                  toast.error(msg)
                 })
                 .finally(() => setLoading(false))
             }}

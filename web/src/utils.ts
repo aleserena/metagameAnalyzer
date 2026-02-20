@@ -1,3 +1,43 @@
+const GENERIC_ERROR_MESSAGE = 'There was an issue with the application, please refresh the page'
+
+const GENERIC_ERROR_PHRASES = new Set([
+  '',
+  'error',
+  'unknown error',
+  'internal server error',
+  'bad gateway',
+  'service unavailable',
+  'failed to fetch',
+  'networkerror when attempting to fetch resource',
+  'load failed',
+  'gateway timeout',
+  'network request failed',
+  'timeout',
+  'request timeout',
+  'not found',
+])
+
+/**
+ * Returns a user-facing error message. For generic/unknown errors, returns a friendly message
+ * asking the user to refresh the page.
+ */
+export function getErrorMessage(e: unknown): string {
+  const msg = (e instanceof Error ? e.message : String(e ?? '')).trim()
+  if (!msg || GENERIC_ERROR_PHRASES.has(msg.toLowerCase())) {
+    return GENERIC_ERROR_MESSAGE
+  }
+  return msg
+}
+
+/**
+ * Logs the error to the console and returns a user-facing message. Use in catch blocks
+ * before showing a toast so the real error is available for debugging.
+ */
+export function reportError(e: unknown): string {
+  console.error('[App error]', e)
+  return getErrorMessage(e)
+}
+
 /** Parse DD/MM/YY to sortable key (YYMMDD) for comparison */
 export function dateSortKey(ddMmYy: string): string {
   const [d, m, y] = ddMmYy.split('/').map(Number)

@@ -3,6 +3,7 @@ import { useBlocker } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { loadDecks, exportDecks } from '../api'
 import { getToken } from '../contexts/AuthContext'
+import { reportError } from '../utils'
 import { FORMATS, META_EDH } from '../config'
 
 const FORMAT_OPTIONS = Object.entries(FORMATS)
@@ -90,7 +91,7 @@ export default function Scrape() {
               toast.success(data.message)
               setPct(100)
             } else if (data.type === 'error') {
-              toast.error(data.message)
+              toast.error(reportError(data.message))
             }
           } catch {
             // ignore malformed lines
@@ -98,7 +99,7 @@ export default function Scrape() {
         }
       }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e))
+      toast.error(reportError(e))
     } finally {
       setLoading(false)
     }
@@ -116,7 +117,7 @@ export default function Scrape() {
       toast.success(result.message)
       input.value = ''
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e))
+      toast.error(reportError(e))
     } finally {
       setLoading(false)
     }
@@ -133,7 +134,7 @@ export default function Scrape() {
       URL.revokeObjectURL(url)
       toast.success('Download started (decks.json)')
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e))
+      toast.error(reportError(e))
     }
   }
 

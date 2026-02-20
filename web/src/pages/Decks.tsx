@@ -5,6 +5,7 @@ import { getDecks, getEvents, getDateRange, getDuplicateDecks } from '../api'
 import type { Deck, Event } from '../types'
 import EventSelector from '../components/EventSelector'
 import { Skeleton, SkeletonTable } from '../components/Skeleton'
+import { reportError } from '../utils'
 
 const DEBOUNCE_MS = 300
 
@@ -123,7 +124,7 @@ export default function Decks() {
       })
       .catch((e) => {
         setError(e.message)
-        toast.error(e.message)
+        toast.error(reportError(e))
       })
       .finally(() => setLoading(false))
   }, [eventIdsParam, deckName, archetype, player, card, sort, order, skip, limit])
@@ -173,7 +174,7 @@ export default function Decks() {
       })
       .catch((e) => {
         setError(e.message)
-        toast.error(e.message)
+        toast.error(reportError(e))
       })
       .finally(() => setLoading(false))
   }
