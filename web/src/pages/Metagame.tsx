@@ -334,7 +334,10 @@ export default function Metagame() {
             <Tooltip />
             <Legend layout="horizontal" verticalAlign="bottom" onClick={(e) => {
               if (e?.value) navigate(`/decks?archetype=${encodeURIComponent(String(e.value))}`)
-            }} formatter={(value, entry: { payload?: { archetype?: string; pct?: number } }) => entry.payload?.pct != null ? `${entry.payload.archetype} (${entry.payload.pct}%)` : value} />
+            }} formatter={(value, entry: unknown) => {
+              const p = entry && typeof entry === 'object' && 'payload' in entry ? (entry as { payload?: { archetype?: string; pct?: number } }).payload : undefined
+              return p?.pct != null ? `${p.archetype ?? ''} (${p.pct}%)` : value
+            }} />
           </PieChart>
         </ResponsiveContainer>
       </div>

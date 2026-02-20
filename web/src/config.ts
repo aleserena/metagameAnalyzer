@@ -18,6 +18,8 @@ export const FORMATS: Record<string, string> = {
   CHL: 'Canadian Highlander',
 }
 
+export const GITHUB_REPO = 'https://github.com/aserena/mtgtop8scrapper'
+
 export const META_EDH: Record<string, string> = {
   'Last 7 Days': '328',
   'Last 2 Weeks': '115',

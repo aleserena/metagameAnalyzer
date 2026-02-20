@@ -10,7 +10,9 @@ pip install -r requirements.txt
 
 ## Testing
 
-Run tests before committing to catch regressions.
+Run tests before committing to catch regressions. A **pre-commit hook** is configured so that commits are blocked unless the web app build and frontend tests pass.
+
+**One-time setup (enable the hook):** from the project root run `npm install`. This installs Husky and registers the hook; afterward every `git commit` will run `npm run build` and `npm run test` (web) and abort if either fails.
 
 **Backend (pytest):**
 

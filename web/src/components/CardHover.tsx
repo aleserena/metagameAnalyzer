@@ -26,8 +26,8 @@ export default function CardHover({ cardName, children, linkTo = false }: CardHo
   const cached = lookupCache[cardName]
   const isDfc = (cached?.card_faces?.length ?? 0) >= 2
   const defaultImg = cached && !isDfc ? (cached.image_uris?.normal ?? cached.image_uris?.small ?? null) : null
-  const defaultDfcUrls = cached?.card_faces?.length >= 2
-    ? cached.card_faces.map((f) => getFaceUrl(f))
+  const defaultDfcUrls = (cached?.card_faces?.length ?? 0) >= 2
+    ? (cached?.card_faces ?? []).map((f) => getFaceUrl(f))
     : []
 
   const [img, setImg] = useState<string | null>(defaultImg)

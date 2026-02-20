@@ -1,0 +1,13 @@
+{
+  "name": "mtgtop8scrapper",
+  "private": true,
+  "scripts": {
+    "build": "cd web && npm run build",
+    "test": "cd web && npm test",
+    "test:py": "python -m pytest",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7"
+  }
+}

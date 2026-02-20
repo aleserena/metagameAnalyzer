@@ -99,6 +99,24 @@ body {
   width: 100%;
 }
 
+.app-footer {
+  padding: 1rem 1.5rem;
+  text-align: center;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+  background: var(--bg-card);
+}
+
+.app-footer a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.app-footer a:hover {
+  text-decoration: underline;
+}
+
 .page-title {
   margin: 0 0 1.5rem;
   font-size: 1.5rem;

@@ -372,8 +372,8 @@ export default function DeckCompare() {
                             layout="horizontal"
                             verticalAlign="bottom"
                             wrapperStyle={{ paddingTop: 4 }}
-                            formatter={(_, entry: { payload?: { name: string; value: number } }) =>
-                              entry.payload ? `${entry.payload.name} ${entry.payload.value}%` : ''
+                            formatter={(_, entry: { payload?: { name?: string; value?: number } }) =>
+                              entry?.payload ? `${entry.payload.name ?? ''} ${entry.payload.value ?? ''}%` : ''
                             }
                           />
                         </PieChart>
@@ -427,10 +427,10 @@ export default function DeckCompare() {
                             layout="horizontal"
                             verticalAlign="bottom"
                             wrapperStyle={{ paddingTop: 4 }}
-                            formatter={(_, entry: { payload?: { name: string; value: number } }) => {
-                              const p = entry.payload
+                            formatter={(_, entry: { payload?: { name?: string; value?: number } }) => {
+                              const p = entry?.payload
                               if (!p) return ''
-                              const pct = total ? Math.round((100 * p.value) / total) : 0
+                              const pct = total ? Math.round((100 * (p.value ?? 0)) / total) : 0
                               return `${p.name} ${p.value} (${pct}%)`
                             }}
                           />
@@ -500,8 +500,8 @@ export default function DeckCompare() {
                                 layout="horizontal"
                                 verticalAlign="bottom"
                                 wrapperStyle={{ paddingTop: 4 }}
-                                formatter={(_, entry: { payload?: { name: string; value: number } }) =>
-                                  entry.payload ? `${entry.payload.name} ${entry.payload.value}` : ''
+                                formatter={(_, entry: { payload?: { name?: string; value?: number } }) =>
+                                  entry?.payload ? `${entry.payload.name ?? ''} ${entry.payload.value ?? ''}` : ''
                                 }
                               />
                             </PieChart>

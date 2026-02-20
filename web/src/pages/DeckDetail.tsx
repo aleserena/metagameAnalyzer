@@ -472,7 +472,7 @@ export default function DeckDetail() {
                       ))}
                   </Pie>
                   <Tooltip />
-                  <Legend layout="horizontal" verticalAlign="bottom" wrapperStyle={{ paddingTop: 4 }} formatter={(_, entry: { payload?: { name: string; value: number } }) => entry.payload ? `${entry.payload.name} ${entry.payload.value}%` : ''} />
+                  <Legend layout="horizontal" verticalAlign="bottom" wrapperStyle={{ paddingTop: 4 }} formatter={(_, entry: { payload?: { name?: string; value?: number } }) => entry?.payload ? `${entry.payload.name ?? ''} ${entry.payload.value ?? ''}%` : ''} />
                 </PieChart>
               </ResponsiveContainer>
             </div>
@@ -501,12 +501,12 @@ export default function DeckDetail() {
                       ))}
                   </Pie>
                   <Tooltip />
-                  <Legend layout="horizontal" verticalAlign="bottom" formatter={(_, entry: { payload?: { name: string; value: number } }) => {
-                    const p = entry.payload
+                  <Legend layout="horizontal" verticalAlign="bottom" formatter={(_, entry: { payload?: { name?: string; value?: number } }) => {
+                    const p = entry?.payload
                     if (!p) return ''
                     const total = analysis.lands_distribution.lands + analysis.lands_distribution.nonlands
-                    const pct = total ? Math.round((100 * p.value) / total) : 0
-                    return `${p.name} ${p.value} (${pct}%)`
+                    const pct = total ? Math.round((100 * (p.value ?? 0)) / total) : 0
+                    return `${p.name ?? ''} ${p.value ?? ''} (${pct}%)`
                   }} wrapperStyle={{ paddingTop: 4 }} />
                 </PieChart>
               </ResponsiveContainer>
@@ -540,7 +540,7 @@ export default function DeckDetail() {
                         ))}
                     </Pie>
                     <Tooltip />
-                    <Legend layout="horizontal" verticalAlign="bottom" wrapperStyle={{ paddingTop: 4 }} formatter={(_, entry: { payload?: { name: string; value: number } }) => entry.payload ? `${entry.payload.name} ${entry.payload.value}` : ''} />
+                    <Legend layout="horizontal" verticalAlign="bottom" wrapperStyle={{ paddingTop: 4 }} formatter={(_, entry: { payload?: { name?: string; value?: number } }) => entry?.payload ? `${entry.payload.name ?? ''} ${entry.payload.value ?? ''}` : ''} />
                   </PieChart>
                 </ResponsiveContainer>
               </div>
