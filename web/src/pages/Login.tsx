@@ -7,6 +7,7 @@ import { reportError } from '../utils'
 export default function Login() {
   const [password, setPassword] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const { login, user } = useAuth()
   const navigate = useNavigate()
 
@@ -18,12 +19,15 @@ export default function Login() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    setErrorMessage(null)
     setSubmitting(true)
     try {
       await login(password)
+      toast.success('Signed in successfully')
       navigate('/', { replace: true })
     } catch (e) {
-      toast.error(reportError(e))
+      const msg = reportError(e)
+      setErrorMessage(msg)
     } finally {
       setSubmitting(false)
     }
@@ -32,17 +36,32 @@ export default function Login() {
   return (
     <div className="chart-container" style={{ maxWidth: 400, margin: '2rem auto' }}>
       <h1 className="page-title">Admin login</h1>
-      <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
-        Sign in to access Scrape and Settings.
-      </p>
       <form onSubmit={handleSubmit}>
+        {errorMessage && (
+          <div
+            className="form-error"
+            role="alert"
+            style={{
+              marginBottom: '1rem',
+              padding: '0.75rem 1rem',
+              borderRadius: 'var(--radius)',
+              backgroundColor: 'var(--danger-bg, rgba(220, 53, 69, 0.15))',
+              color: 'var(--danger, #dc3545)',
+            }}
+          >
+            {errorMessage}
+          </div>
+        )}
         <div className="form-group">
           <label htmlFor="password">Password</label>
           <input
             id="password"
             type="password"
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            onChange={(e) => {
+              setPassword(e.target.value)
+              setErrorMessage(null)
+            }}
             autoComplete="current-password"
             autoFocus
             disabled={submitting}
