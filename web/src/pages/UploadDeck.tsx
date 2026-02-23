@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { Toaster } from 'react-hot-toast'
 import toast from 'react-hot-toast'
 import { getUploadLinkInfo, submitDeckWithUploadLink } from '../api'
-import { parseMoxfieldDeckList } from '../lib/deckListParser'
+import { parseMoxfieldDeckList, formatMoxfieldDeckList } from '../lib/deckListParser'
 import { reportError } from '../utils'
 
 export default function UploadDeck() {
@@ -13,6 +13,17 @@ export default function UploadDeck() {
     event_name: string
     format_id: string
     date: string
+    mode: 'create' | 'update'
+    deck_id?: number
+    deck?: {
+      deck_id: number
+      name: string
+      player: string
+      rank: string
+      mainboard: { qty: number; card: string }[]
+      sideboard: { qty: number; card: string }[]
+      commanders: string[]
+    } | null
   } | null>(null)
   const [invalid, setInvalid] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -30,7 +41,21 @@ export default function UploadDeck() {
       return
     }
     getUploadLinkInfo(token)
-      .then(setInfo)
+      .then((data) => {
+        setInfo(data)
+        if (data.mode === 'update' && data.deck) {
+          setPlayer(data.deck.player)
+          setDeckName(data.deck.name)
+          setRank(data.deck.rank)
+          setDeckListText(
+            formatMoxfieldDeckList(
+              data.deck.commanders || [],
+              data.deck.mainboard || [],
+              data.deck.sideboard || []
+            )
+          )
+        }
+      })
       .catch(() => setInvalid(true))
       .finally(() => setLoading(false))
   }, [token])
@@ -51,7 +76,7 @@ export default function UploadDeck() {
         commanders,
       })
       setSubmitted(true)
-      toast.success('Deck submitted successfully.')
+      toast.success(info.mode === 'update' ? 'Deck updated successfully.' : 'Deck submitted successfully.')
     } catch (err) {
       toast.error(reportError(err))
     } finally {
@@ -102,13 +127,14 @@ export default function UploadDeck() {
   }
 
   if (submitted) {
+    const isUpdate = info?.mode === 'update'
     return (
       <>
         {toaster}
         <div className="page" style={{ maxWidth: 560, margin: '2rem auto' }}>
-          <h1 className="page-title">Deck submitted</h1>
+          <h1 className="page-title">{isUpdate ? 'Deck updated' : 'Deck submitted'}</h1>
           <p style={{ color: 'var(--text)', marginBottom: '1rem' }}>
-            Your deck was submitted successfully. Thank you!
+            {isUpdate ? 'Your deck was updated successfully.' : 'Your deck was submitted successfully. Thank you!'}
           </p>
           <Link to="/" className="btn">
             Go to home
@@ -122,8 +148,8 @@ export default function UploadDeck() {
     <>
       {toaster}
       <div className="page" style={{ maxWidth: 560, margin: '2rem auto' }}>
-        <h1 className="page-title">Upload deck</h1>
-      {info && (
+      <h1 className="page-title">{info?.mode === 'update' ? 'Update your deck' : 'Upload deck'}</h1>
+        {info && (
         <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
           Event: <strong style={{ color: 'var(--text)' }}>{info.event_name}</strong>
           {info.date && ` · ${info.date}`}
@@ -180,7 +206,7 @@ export default function UploadDeck() {
             </span>
           </label>
           <button type="submit" className="btn" disabled={submitting}>
-            {submitting ? 'Submitting…' : 'Submit deck'}
+            {submitting ? (info?.mode === 'update' ? 'Updating…' : 'Submitting…') : (info?.mode === 'update' ? 'Update deck' : 'Submit deck')}
           </button>
         </div>
       </form>

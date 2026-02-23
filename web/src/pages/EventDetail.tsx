@@ -33,7 +33,8 @@ export default function EventDetail() {
   const [addingDeck, setAddingDeck] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [generatingLinks, setGeneratingLinks] = useState(false)
-  const [generatedLinks, setGeneratedLinks] = useState<Array<{ token: string; url: string; expires_at: string | null }>>([])
+  const [generatedLinks, setGeneratedLinks] = useState<Array<{ token: string; url: string; expires_at: string | null; deck_id?: number }>>([])
+  const [generatingUpdateLinkFor, setGeneratingUpdateLinkFor] = useState<number | null>(null)
 
   useEffect(() => {
     if (!eventId) return
@@ -145,6 +146,24 @@ export default function EventDetail() {
       () => toast.success('Copied to clipboard'),
       () => { /* ignore */ }
     )
+  }
+
+  const handleGenerateUpdateLink = (deckId: number) => {
+    if (!eventId) return
+    setGeneratingUpdateLinkFor(deckId)
+    createEventUploadLinks(eventId, { deck_id: deckId })
+      .then((res) => {
+        if (res.links.length > 0) {
+          const base = typeof window !== 'undefined' ? window.location.origin : ''
+          const url = `${base}/upload/${res.links[0].token}`
+          window.navigator.clipboard.writeText(url).then(
+            () => toast.success('Update link copied to clipboard'),
+            () => toast.success('Update link generated')
+          )
+        }
+      })
+      .catch((e) => toast.error(reportError(e)))
+      .finally(() => setGeneratingUpdateLinkFor(null))
   }
 
   if (loading) return <div className="page"><p>Loading…</p></div>
@@ -285,6 +304,7 @@ export default function EventDetail() {
                 <th scope="col">Player</th>
                 <th scope="col">Rank</th>
                 <th scope="col">Archetype</th>
+                {user === 'admin' && <th scope="col">Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -296,6 +316,19 @@ export default function EventDetail() {
                   <td>{cellStr(d.player)}</td>
                   <td>{cellStr(d.rank) || '—'}</td>
                   <td>{cellStr(d.archetype)}</td>
+                  {user === 'admin' && (
+                    <td>
+                      <button
+                        type="button"
+                        className="btn"
+                        style={{ fontSize: '0.875rem', padding: '0.25rem 0.5rem' }}
+                        disabled={generatingUpdateLinkFor === d.deck_id}
+                        onClick={() => handleGenerateUpdateLink(d.deck_id)}
+                      >
+                        {generatingUpdateLinkFor === d.deck_id ? '…' : 'Update link'}
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>

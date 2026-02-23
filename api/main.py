@@ -904,6 +904,7 @@ def add_blank_deck_to_event(event_id: str):
 class CreateUploadLinksBody(BaseModel):
     count: int = 1
     expires_in_days: int | None = None
+    deck_id: int | None = None  # when set, create one link for updating this deck (one-time)
 
 
 class SubmitDeckBody(BaseModel):
@@ -925,11 +926,10 @@ def _upload_link_base_url(request: Request) -> str:
 
 @app.post("/api/events/{event_id}/upload-links", dependencies=[Depends(require_admin)])
 def create_upload_links(event_id: str, request: Request, body: CreateUploadLinksBody | None = None):
-    """Create one or more one-time upload links for an event (admin-only)."""
+    """Create one or more one-time upload links for an event (admin-only). Pass deck_id to create a link that updates that deck."""
     if not _database_available():
         raise HTTPException(status_code=503, detail="Database not configured")
     body = body or CreateUploadLinksBody()
-    count = max(1, min(body.count, 50))
     expires_at = None
     if body.expires_in_days is not None and body.expires_in_days > 0:
         expires_at = datetime.utcnow() + timedelta(days=body.expires_in_days)
@@ -939,20 +939,38 @@ def create_upload_links(event_id: str, request: Request, body: CreateUploadLinks
             raise HTTPException(status_code=404, detail="Event not found")
         base_url = _upload_link_base_url(request)
         links = []
-        for _ in range(count):
+        if body.deck_id is not None:
+            # One-time link to update an existing deck
+            deck_row = session.query(_db.DeckRow).filter(
+                _db.DeckRow.deck_id == body.deck_id,
+                _db.DeckRow.event_id == _db._event_id_str(event_id),
+            ).first()
+            if not deck_row:
+                raise HTTPException(status_code=404, detail="Deck not found in this event")
             token = secrets.token_urlsafe(32)
-            _db.create_upload_link(session, token, event_id, expires_at=expires_at)
+            _db.create_upload_link(session, token, event_id, expires_at=expires_at, deck_id=body.deck_id)
             links.append({
                 "token": token,
                 "url": f"{base_url}/upload/{token}",
                 "expires_at": expires_at.isoformat() if expires_at else None,
+                "deck_id": body.deck_id,
             })
+        else:
+            count = max(1, min(body.count, 50))
+            for _ in range(count):
+                token = secrets.token_urlsafe(32)
+                _db.create_upload_link(session, token, event_id, expires_at=expires_at)
+                links.append({
+                    "token": token,
+                    "url": f"{base_url}/upload/{token}",
+                    "expires_at": expires_at.isoformat() if expires_at else None,
+                })
         return {"links": links}
 
 
 @app.get("/api/upload/{token}")
 def get_upload_link_info(token: str):
-    """Return event info for a valid one-time upload link (public)."""
+    """Return event info for a valid one-time upload link (public). For update links, also return current deck."""
     if not _database_available():
         raise HTTPException(status_code=503, detail="Database not configured")
     with _db.session_scope() as session:
@@ -967,12 +985,30 @@ def get_upload_link_info(token: str):
         if not ev:
             raise HTTPException(status_code=404, detail="Event not found")
         event_name = event_display_name(ev.name, ev.store or "", ev.location or "")
-        return {
+        out = {
             "event_id": row.event_id,
             "event_name": event_name,
             "format_id": ev.format_id or "",
             "date": ev.date or "",
+            "mode": "update" if getattr(row, "deck_id", None) else "create",
         }
+        if getattr(row, "deck_id", None) is not None:
+            deck = next((d for d in _decks if d.get("deck_id") == row.deck_id), None)
+            if deck:
+                out["deck_id"] = deck["deck_id"]
+                out["deck"] = {
+                    "deck_id": deck["deck_id"],
+                    "name": deck.get("name", ""),
+                    "player": deck.get("player", ""),
+                    "rank": deck.get("rank", ""),
+                    "mainboard": deck.get("mainboard", []),
+                    "sideboard": deck.get("sideboard", []),
+                    "commanders": deck.get("commanders", []),
+                }
+            else:
+                out["deck_id"] = row.deck_id
+                out["deck"] = None
+        return out
 
 
 def _validate_deck_payload(body: SubmitDeckBody) -> None:
@@ -999,9 +1035,40 @@ def _validate_deck_payload(body: SubmitDeckBody) -> None:
             raise HTTPException(status_code=400, detail="sideboard entries must be { qty, card }")
 
 
-@app.post("/api/upload/{token}", status_code=201)
+def _submit_create_with_upload_link(session, row, ev, event_name: str, body: SubmitDeckBody):
+    """Create a new deck via upload link. Returns (deck_id, status_code)."""
+    deck_id = _db.next_manual_deck_id(session)
+    commanders = body.commanders if body.commanders is not None else []
+    if not isinstance(commanders, list):
+        commanders = []
+    mainboard = [{"qty": int(c.get("qty", 1)), "card": _normalize_card_name(str(c.get("card", "")))} for c in (body.mainboard or []) if _normalize_card_name(str(c.get("card", "")))]
+    sideboard = [{"qty": int(c.get("qty", 1)), "card": _normalize_card_name(str(c.get("card", "")))} for c in (body.sideboard or []) if _normalize_card_name(str(c.get("card", "")))]
+    commanders = [_normalize_card_name(c) for c in commanders if _normalize_card_name(c)]
+    format_id = (ev.format_id or "").upper()
+    if format_id == "EDH" and not commanders and mainboard:
+        commanders = [mainboard[0]["card"]]
+    deck = {
+        "deck_id": deck_id,
+        "event_id": row.event_id,
+        "event_name": event_name,
+        "date": ev.date or "",
+        "format_id": ev.format_id or "",
+        "name": (body.name or "").strip(),
+        "player": (body.player or "").strip(),
+        "rank": (body.rank or "").strip(),
+        "player_count": 0,
+        "commanders": commanders,
+        "mainboard": mainboard,
+        "sideboard": sideboard,
+    }
+    deck_list = _normalize_split_cards([deck])
+    _db.upsert_deck(session, deck_list[0], origin=_db.ORIGIN_MANUAL)
+    return deck_id
+
+
+@app.post("/api/upload/{token}")
 def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
-    """Submit one deck using a one-time upload link (public)."""
+    """Submit or update a deck using a one-time upload link (public). Update links modify the linked deck."""
     if not _database_available():
         raise HTTPException(status_code=503, detail="Database not configured")
     _validate_deck_payload(body)
@@ -1017,37 +1084,44 @@ def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
         if not ev:
             raise HTTPException(status_code=400, detail="Event not found")
         event_name = event_display_name(ev.name, ev.store or "", ev.location or "")
-        deck_id = _db.next_manual_deck_id(session)
-        commanders = body.commanders if body.commanders is not None else []
-        if not isinstance(commanders, list):
-            commanders = []
-        mainboard = [{"qty": int(c.get("qty", 1)), "card": _normalize_card_name(str(c.get("card", "")))} for c in (body.mainboard or []) if _normalize_card_name(str(c.get("card", "")))]
-        sideboard = [{"qty": int(c.get("qty", 1)), "card": _normalize_card_name(str(c.get("card", "")))} for c in (body.sideboard or []) if _normalize_card_name(str(c.get("card", "")))]
-        commanders = [_normalize_card_name(c) for c in commanders if _normalize_card_name(c)]
-        # EDH: if no commander present, use first mainboard card as commander
-        format_id = (ev.format_id or "").upper()
-        if format_id == "EDH" and not commanders and mainboard:
-            commanders = [mainboard[0]["card"]]
-        deck = {
-            "deck_id": deck_id,
-            "event_id": row.event_id,
-            "event_name": event_name,
-            "date": ev.date or "",
-            "format_id": ev.format_id or "",
-            "name": (body.name or "").strip(),
-            "player": (body.player or "").strip(),
-            "rank": (body.rank or "").strip(),
-            "player_count": 0,
-            "commanders": commanders,
-            "mainboard": mainboard,
-            "sideboard": sideboard,
-        }
-        deck_list = _normalize_split_cards([deck])
-        deck = deck_list[0]
-        _db.upsert_deck(session, deck, origin=_db.ORIGIN_MANUAL)
-        _db.mark_upload_link_used(session, token)
-    _load_decks_from_db()
-    return {"deck_id": deck_id, "message": "Deck submitted successfully"}
+
+        deck_id = getattr(row, "deck_id", None)
+        if deck_id is not None:
+            # Update existing deck
+            current = next((d for d in _decks if d.get("deck_id") == deck_id), None)
+            if not current:
+                raise HTTPException(status_code=400, detail="Deck not found")
+            current = dict(current)
+            commanders = body.commanders if body.commanders is not None else []
+            if not isinstance(commanders, list):
+                commanders = []
+            mainboard = [{"qty": int(c.get("qty", 1)), "card": _normalize_card_name(str(c.get("card", "")))} for c in (body.mainboard or []) if _normalize_card_name(str(c.get("card", "")))]
+            sideboard = [{"qty": int(c.get("qty", 1)), "card": _normalize_card_name(str(c.get("card", "")))} for c in (body.sideboard or []) if _normalize_card_name(str(c.get("card", "")))]
+            commanders = [_normalize_card_name(c) for c in commanders if _normalize_card_name(c)]
+            format_id = (current.get("format_id") or "").upper()
+            if format_id == "EDH" and not commanders and mainboard:
+                commanders = [mainboard[0]["card"]]
+            current["name"] = (body.name or "").strip()
+            current["player"] = (body.player or "").strip()
+            current["rank"] = (body.rank or "").strip()
+            current["mainboard"] = mainboard
+            current["sideboard"] = sideboard
+            current["commanders"] = commanders
+            deck_list = _normalize_split_cards([current])
+            _db.upsert_deck(session, deck_list[0], origin=current.get("origin", _db.ORIGIN_MANUAL))
+            _db.mark_upload_link_used(session, token)
+            _load_decks_from_db()
+            return {"deck_id": deck_id, "message": "Deck updated successfully"}
+        else:
+            # Create new deck
+            deck_id = _submit_create_with_upload_link(session, row, ev, event_name, body)
+            _db.mark_upload_link_used(session, token)
+            _load_decks_from_db()
+            return Response(
+                content=json.dumps({"deck_id": deck_id, "message": "Deck submitted successfully"}),
+                status_code=201,
+                media_type="application/json",
+            )
 
 
 class DeckCardUpdate(BaseModel):
@@ -1398,6 +1472,29 @@ def post_clear_decks(_: str = Depends(require_admin)):
         except OSError:
             pass
     return {"message": "Decks cleared"}
+
+
+@app.get("/api/settings/upload-links")
+def get_settings_upload_links(_: str = Depends(require_admin)):
+    """List all one-time upload links (admin-only). Requires database."""
+    if not _database_available():
+        raise HTTPException(status_code=503, detail="Database not configured")
+    with _db.session_scope() as session:
+        links = _db.get_all_upload_links(session)
+    return {"links": links}
+
+
+@app.delete("/api/settings/upload-links")
+def delete_settings_upload_links(
+    used_only: bool = Query(False, description="If true, only delete links that have been used"),
+    _: str = Depends(require_admin),
+):
+    """Clear one-time upload links (admin-only). used_only=true clears only used links. Requires database."""
+    if not _database_available():
+        raise HTTPException(status_code=503, detail="Database not configured")
+    with _db.session_scope() as session:
+        deleted = _db.delete_all_upload_links(session, used_only=used_only)
+    return {"deleted": deleted, "message": f"Cleared {deleted} link(s)"}
 
 
 @app.get("/api/player-aliases")

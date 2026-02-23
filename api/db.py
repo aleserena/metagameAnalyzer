@@ -85,6 +85,7 @@ class EventUploadLinkRow(Base):
     __tablename__ = "event_upload_links"
     token = Column(String(64), primary_key=True)
     event_id = Column(String(32), nullable=False)
+    deck_id = Column(Integer, nullable=True)  # when set, link is for updating this deck (one-time)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     used_at = Column(DateTime, nullable=True)
     expires_at = Column(DateTime, nullable=True)
@@ -427,12 +428,14 @@ def create_upload_link(
     event_id: str,
     label: str | None = None,
     expires_at: datetime | None = None,
+    deck_id: int | None = None,
 ) -> EventUploadLinkRow:
-    """Insert a one-time upload link. Token should be from secrets.token_urlsafe(32)."""
+    """Insert a one-time upload link. Token from secrets.token_urlsafe(32). If deck_id is set, link is for updating that deck."""
     eid = _event_id_str(event_id)
     row = EventUploadLinkRow(
         token=token,
         event_id=eid,
+        deck_id=deck_id,
         label=label,
         expires_at=expires_at,
     )
@@ -450,6 +453,41 @@ def mark_upload_link_used(session: Session, token: str) -> bool:
         return False
     row.used_at = datetime.utcnow()
     return True
+
+
+def get_all_upload_links(session: Session) -> list[dict]:
+    """Return all upload links for admin listing."""
+    rows = session.query(EventUploadLinkRow).order_by(EventUploadLinkRow.created_at.desc()).all()
+    return [
+        {
+            "token": r.token,
+            "event_id": r.event_id,
+            "deck_id": getattr(r, "deck_id", None),
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "used_at": r.used_at.isoformat() if r.used_at else None,
+            "expires_at": r.expires_at.isoformat() if r.expires_at else None,
+            "label": r.label,
+        }
+        for r in rows
+    ]
+
+
+def delete_upload_link(session: Session, token: str) -> bool:
+    row = session.query(EventUploadLinkRow).filter(EventUploadLinkRow.token == token).first()
+    if not row:
+        return False
+    session.delete(row)
+    return True
+
+
+def delete_all_upload_links(session: Session, used_only: bool = False) -> int:
+    """Delete upload links. If used_only=True, only delete links that have been used. Returns count deleted."""
+    q = session.query(EventUploadLinkRow)
+    if used_only:
+        q = q.filter(EventUploadLinkRow.used_at.isnot(None))
+    count = q.count()
+    q.delete()
+    return count
 
 
 # --- Repository helpers: player_aliases ---
