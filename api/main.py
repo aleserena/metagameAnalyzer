@@ -1579,7 +1579,9 @@ async def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
                 _decks = deck_dicts
                 _invalidate_metagame()
             loaded = len(_decks)
-            yield f"data: {json.dumps({'type': 'done', 'message': f'Scraped {len(decks)} decks', 'loaded': loaded, 'pct': 100})}\n\n"
+            num_events = len({d.get("event_id") for d in deck_dicts if d.get("event_id") is not None})
+            message = f"Scraped {len(decks)} decks from {num_events} event{'s' if num_events != 1 else ''}"
+            yield f"data: {json.dumps({'type': 'done', 'message': message, 'loaded': loaded, 'pct': 100})}\n\n"
         else:
             yield f"data: {json.dumps({'type': 'error', 'message': 'Unknown error'})}\n\n"
 

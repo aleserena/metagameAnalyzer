@@ -244,9 +244,11 @@ export default function Dashboard() {
             {recentEvents.map((e) => (
               <li key={`${e.event_id}-${e.date}`} style={{ padding: '0.5rem 0', borderBottom: '1px solid var(--border)' }}>
                 <Link to={`/decks?event_ids=${encodeURIComponent(String(e.event_id))}`} style={{ color: 'var(--accent)' }}>
-                  {e.event_name}
+                  {(typeof e.event_name === 'string' && e.event_name.trim()) ? e.event_name : 'Unnamed'}
                 </Link>
-                <span style={{ color: 'var(--text-muted)', marginLeft: '0.5rem' }}>{e.date}</span>
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: '0.15rem' }}>
+                  {[e.date, e.store, e.location].filter(Boolean).join(' · ')}
+                </div>
               </li>
             ))}
           </ul>
@@ -255,11 +257,6 @@ export default function Dashboard() {
         )}
       </div>
 
-      <div style={{ marginTop: '1.5rem', display: 'flex', gap: '1rem' }}>
-        <Link to="/metagame" className="btn">View Metagame</Link>
-        <Link to="/decks" className="btn">Browse Decks</Link>
-        <Link to="/players" className="btn">Player Leaderboard</Link>
-      </div>
     </div>
   )
 }
