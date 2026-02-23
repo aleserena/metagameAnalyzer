@@ -80,7 +80,7 @@ export default function EventSelector({
   }
 
   return (
-    <div className="form-group" style={{ marginBottom: 0, width: 280 }} ref={ref}>
+    <div className="form-group event-selector-wrap" style={{ marginBottom: 0, width: '100%', maxWidth: 280, minWidth: 0 }} ref={ref}>
       <label>Events</label>
       {showDatePresets && (
         <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -153,7 +153,7 @@ export default function EventSelector({
           aria-label="Select events"
           style={{
             width: '100%',
-            minWidth: 280,
+            minWidth: 0,
             padding: '0.5rem 0.75rem',
             background: 'var(--bg)',
             border: '1px solid var(--border)',

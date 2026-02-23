@@ -128,6 +128,32 @@ body {
   gap: 1rem;
 }
 
+/* Dashboard stat pills: 2 columns when narrow, 4 in a row when wide (avoid 3+1). */
+.dashboard-stat-grid {
+  grid-template-columns: repeat(2, 1fr);
+}
+@media (min-width: 560px) {
+  .dashboard-stat-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+/* When events filter wraps to its own row (no pill beside it), use full width. */
+.dashboard-events-filter {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+/* EventSelector inside dashboard: use full width (override inline max-width). */
+.dashboard-events-filter .event-selector-wrap {
+  max-width: none !important;
+  width: 100% !important;
+}
+.dashboard-events-filter .event-selector-wrap .events-dropdown {
+  width: 100% !important;
+  max-width: none !important;
+}
+
 .stat-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
@@ -401,7 +427,7 @@ textarea:focus {
   .main {
     padding: 1rem;
   }
-  .card-grid {
+  .card-grid:not(.dashboard-stat-grid) {
     grid-template-columns: 1fr;
   }
   .deck-columns {
@@ -409,5 +435,15 @@ textarea:focus {
   }
   .scrape-sections-grid {
     grid-template-columns: 1fr !important;
+  }
+  .filters-group .form-group,
+  .filters-group .event-selector-wrap {
+    flex: 1 1 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+  .dashboard-events-filter {
+    width: 100%;
+    min-width: 100%;
   }
 }
