@@ -1,13 +1,52 @@
 """MTGTop8 scraper: fetch events and deck lists."""
 
 import re
+from typing import Tuple
+
+
+def parse_event_display(s: str) -> Tuple[str, str, str]:
+    """Parse event title into (name, store, location).
+    Expected format: "Event Name" @ "Store" ("Location")
+    If the string doesn't match, return (s.strip(), "", "").
+    """
+    s = (s or "").strip()
+    if not s:
+        return "", "", ""
+    if " (" in s and ")" in s and " @ " in s:
+        loc_end = s.rindex(")")
+        loc_start = s.rindex(" (")
+        location = s[loc_start + 2 : loc_end].strip()
+        before_loc = s[:loc_start].strip()
+        if " @ " in before_loc:
+            name, store = before_loc.split(" @ ", 1)
+            return name.strip(), store.strip(), location
+    return s, "", ""
+
+
+def event_display_name(name: str, store: str = "", location: str = "") -> str:
+    """Build display string: Name @ Store (Location) or just Name."""
+    name = (name or "").strip()
+    store = (store or "").strip()
+    location = (location or "").strip()
+    if store and location:
+        return f"{name} @ {store} ({location})"
+    if store:
+        return f"{name} @ {store}"
+    return name or "Unknown"
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
 
 import requests
 from bs4 import BeautifulSoup
 
-from .config import BASE_URL, DEFAULT_META, REQUEST_DELAY_SECONDS, get_meta_value
+from .config import (
+    BASE_URL,
+    DEFAULT_META,
+    REQUEST_DELAY_SECONDS,
+    SCRAPER_MAX_WORKERS,
+    get_meta_value,
+)
 from .models import Deck, Event
 
 
@@ -53,8 +92,9 @@ def scrape_events_from_format(
     meta: int,
     store_filter: str | None,
     session: requests.Session,
+    skip_event_ids: set[int] | None = None,
 ) -> list[Event]:
-    """Scrape format page(s) and return matching events."""
+    """Scrape format page(s) and return matching events. Events in skip_event_ids are not included."""
     events: list[Event] = []
     page = 1
     seen_ids: set[int] = set()
@@ -85,11 +125,13 @@ def scrape_events_from_format(
                 event_id = int(m.group(1))
                 if event_id in seen_ids:
                     continue
+                if skip_event_ids and event_id in skip_event_ids:
+                    continue
                 seen_ids.add(event_id)
 
                 link_cell = link.find_parent("td")
-                event_name = link_cell.get_text(separator=" ", strip=True) if link_cell else link.get_text(strip=True)
-                event_name = re.sub(r"\s*NEW\s*$", "", event_name)
+                raw_title = link_cell.get_text(separator=" ", strip=True) if link_cell else link.get_text(strip=True)
+                raw_title = re.sub(r"\s*NEW\s*$", "", raw_title)
 
                 date_text = ""
                 for cell in reversed(cells):
@@ -102,14 +144,17 @@ def scrape_events_from_format(
 
                 page_has_events = True
 
-                if store_filter and store_filter.lower() not in event_name.lower():
+                if store_filter and store_filter.lower() not in raw_title.lower():
                     continue
 
+                name, store, location = parse_event_display(raw_title)
                 events.append(
                     Event(
                         event_id=event_id,
                         format_id=format_id,
-                        name=event_name,
+                        name=name,
+                        store=store,
+                        location=location,
                         date=date_text,
                     )
                 )
@@ -285,6 +330,7 @@ def scrape(
     store: str | None = None,
     event_ids: list[int] | None = None,
     on_progress: Callable[[str], None] | None = None,
+    skip_event_ids: set[int] | None = None,
 ) -> list[Deck]:
     """
     Scrape decks from MTGTop8.
@@ -296,6 +342,7 @@ def scrape(
         store: Substring to filter events by name
         event_ids: If set, scrape only these event IDs (skip format page)
         on_progress: Optional callback for progress messages
+        skip_event_ids: If set, events whose event_id is in this set are not scraped at all.
     """
     session = requests.Session()
     session.trust_env = False
@@ -309,13 +356,47 @@ def scrape(
 
     events: list[Event] = []
     if event_ids:
-        events = [Event(event_id=eid, format_id=format_id, name="", date="") for eid in event_ids]
+        filtered_ids = [
+            eid for eid in event_ids
+            if not skip_event_ids or eid not in skip_event_ids
+        ]
+        events = [
+            Event(event_id=eid, format_id=format_id, name="", store="", location="", date="")
+            for eid in filtered_ids
+        ]
     else:
         if on_progress:
             on_progress("Fetching events from format page...")
-        events = scrape_events_from_format(format_id, meta_val, store, session)
+        events = scrape_events_from_format(
+            format_id, meta_val, store, session, skip_event_ids=skip_event_ids
+        )
         if on_progress:
             on_progress(f"Found {len(events)} events")
+
+    def _normalize_deck(deck: Deck, ev: Event) -> Deck:
+        display_name = event_display_name(ev.name, ev.store, ev.location)
+        return Deck(
+            deck_id=deck.deck_id,
+            event_id=deck.event_id,
+            format_id=deck.format_id,
+            name=deck.name,
+            player=deck.player,
+            event_name=display_name,
+            date=deck.date or ev.date,
+            rank=deck.rank,
+            player_count=deck.player_count,
+            mainboard=deck.mainboard,
+            sideboard=deck.sideboard,
+            commanders=deck.commanders,
+            archetype=deck.archetype,
+        )
+
+    def _fetch_deck_with_session(eid: int, did: int, fmt: str) -> Deck | None:
+        """Fetch one deck using a dedicated session (for use in thread pool)."""
+        worker_session = requests.Session()
+        worker_session.trust_env = False
+        worker_session.headers.update({"User-Agent": "MTGTop8Scraper/1.0"})
+        return scrape_deck_robust(eid, did, fmt, worker_session)
 
     decks: list[Deck] = []
     for i, ev in enumerate(events, 1):
@@ -325,28 +406,36 @@ def scrape(
         deck_ids = scrape_deck_ids_from_event(ev.event_id, format_id, session)
         if on_progress:
             on_progress(f"  Found {len(deck_ids)} decks")
-        for j, did in enumerate(deck_ids, 1):
-            if on_progress:
-                on_progress(f"  Parsing deck {j}/{len(deck_ids)} (id={did})...")
-            deck = scrape_deck_robust(ev.event_id, did, format_id, session)
-            if deck:
-                if ev.name and (not deck.event_name or deck.event_name == "Unknown"):
-                    deck = Deck(
-                        deck_id=deck.deck_id,
-                        event_id=deck.event_id,
-                        format_id=deck.format_id,
-                        name=deck.name,
-                        player=deck.player,
-                        event_name=ev.name,
-                        date=deck.date or ev.date,
-                        rank=deck.rank,
-                        player_count=deck.player_count,
-                        mainboard=deck.mainboard,
-                        sideboard=deck.sideboard,
-                        commanders=deck.commanders,
-                        archetype=deck.archetype,
-                    )
-                decks.append(deck)
+        if SCRAPER_MAX_WORKERS <= 1:
+            for j, did in enumerate(deck_ids, 1):
+                if on_progress:
+                    on_progress(f"  Parsing deck {j}/{len(deck_ids)} (id={did})...")
+                deck = scrape_deck_robust(ev.event_id, did, format_id, session)
+                if deck:
+                    if not ev.name and (deck.event_name and deck.event_name != "Unknown"):
+                        ev.name, ev.store, ev.location = parse_event_display(deck.event_name)
+                    decks.append(_normalize_deck(deck, ev))
+        else:
+            with ThreadPoolExecutor(max_workers=SCRAPER_MAX_WORKERS) as executor:
+                futures = [
+                    executor.submit(_fetch_deck_with_session, ev.event_id, did, format_id)
+                    for did in deck_ids
+                ]
+                for j, (future, did) in enumerate(zip(futures, deck_ids), 1):
+                    if on_progress:
+                        on_progress(f"  Parsing deck {j}/{len(deck_ids)} (id={did})...")
+                    try:
+                        deck = future.result()
+                    except Exception:
+                        deck = None
+                    if deck:
+                        if not ev.name and (
+                            deck.event_name and deck.event_name != "Unknown"
+                        ):
+                            ev.name, ev.store, ev.location = parse_event_display(
+                                deck.event_name
+                            )
+                        decks.append(_normalize_deck(deck, ev))
 
     if on_progress:
         on_progress(f"Done. Total: {len(decks)} decks from {len(events)} events.")

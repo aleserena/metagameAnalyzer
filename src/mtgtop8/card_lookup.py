@@ -11,6 +11,13 @@ SCRYFALL_SEARCH = "https://api.scryfall.com/cards/search"
 CACHE_FILE = Path(__file__).resolve().parent.parent.parent / ".scryfall_cache.json"
 REQUEST_DELAY = 0.1  # ~10 req/s rate limit
 
+# Alternate names that Scryfall may not match (e.g. Universes Within vs in-universe name).
+# Map: name-as-typed -> canonical name to look up.
+CARD_NAME_ALIASES: dict[str, str] = {
+    "Helm's Deep": "Shinko, the Bloodsoaked Keep",
+    "Helms Deep": "Shinko, the Bloodsoaked Keep",
+}
+
 
 _card_cache: dict[str, dict] = {}
 
@@ -87,6 +94,44 @@ def _card_is_paper(card: dict) -> bool:
     return "paper" in games
 
 
+def _build_entry(card: dict) -> dict:
+    """Build the standard lookup entry from a Scryfall card object."""
+    image_uris = card.get("image_uris")
+    faces = card.get("card_faces") or []
+    first_face = faces[0] if faces else {}
+    if not image_uris and faces:
+        image_uris = first_face.get("image_uris")
+    mana_cost = card.get("mana_cost") or first_face.get("mana_cost", "")
+    type_line = card.get("type_line") or first_face.get("type_line", "")
+    cmc = card.get("cmc")
+    if cmc is None and first_face:
+        cmc = first_face.get("cmc", 0)
+    cmc = cmc if cmc is not None else 0
+    colors = card.get("colors")
+    if not colors and first_face:
+        colors = first_face.get("colors", [])
+    colors = colors or []
+    entry = {
+        "name": card.get("name"),
+        "image_uris": image_uris,
+        "mana_cost": mana_cost,
+        "cmc": cmc,
+        "type_line": type_line,
+        "colors": colors,
+        "color_identity": card.get("color_identity", []),
+    }
+    if len(faces) >= 2:
+        entry["card_faces"] = [
+            {"name": f.get("name", ""), "image_uris": f.get("image_uris")}
+            for f in faces
+        ]
+    else:
+        entry["card_faces"] = [
+            {"name": card.get("name", ""), "image_uris": image_uris}
+        ]
+    return entry
+
+
 def lookup_cards(card_names: list[str]) -> dict[str, dict]:
     """Look up cards by name. Returns {card_name: {image_uris, mana_cost, cmc, type_line, ...}}."""
     _load_cache()
@@ -146,40 +191,28 @@ def lookup_cards(card_names: list[str]) -> dict[str, dict]:
                 if paper_card:
                     card = paper_card
 
-            image_uris = card.get("image_uris")
-            faces = card.get("card_faces") or []
-            first_face = faces[0] if faces else {}
-            if not image_uris and faces:
-                image_uris = first_face.get("image_uris")
-            # Multi-faced cards report mana_cost and type_line on card_faces, not at root
-            mana_cost = card.get("mana_cost") or first_face.get("mana_cost", "")
-            type_line = card.get("type_line") or first_face.get("type_line", "")
-            cmc = card.get("cmc")
-            if cmc is None and first_face:
-                cmc = first_face.get("cmc", 0)
-            cmc = cmc if cmc is not None else 0
-            colors = card.get("colors")
-            if not colors and first_face:
-                colors = first_face.get("colors", [])
-            colors = colors or []
-            entry = {
-                "name": card.get("name"),
-                "image_uris": image_uris,
-                "mana_cost": mana_cost,
-                "cmc": cmc,
-                "type_line": type_line,
-                "colors": colors,
-                "color_identity": card.get("color_identity", []),
-            }
-            if len(faces) >= 2:
-                entry["card_faces"] = [
-                    {"name": f.get("name", ""), "image_uris": f.get("image_uris")}
-                    for f in faces
-                ]
-            else:
-                entry["card_faces"] = [
-                    {"name": card.get("name", ""), "image_uris": image_uris}
-                ]
+            entry = _build_entry(card)
+            result[orig_name] = entry
+            _card_cache[orig_name] = entry
+            _card_cache[card.get("name", "")] = entry
+
+    # Retry not-found names via alias map (e.g. "Helm's Deep" -> "Shinko, the Bloodsoaked Keep")
+    still_missing = [n for n in names if n not in result or result.get(n, {}).get("error")]
+    for orig_name in still_missing:
+        canonical = CARD_NAME_ALIASES.get(orig_name) or CARD_NAME_ALIASES.get(
+            _name_for_scryfall(orig_name)
+        )
+        if not canonical:
+            continue
+        cached = _card_cache.get(canonical)
+        if cached and "error" not in cached and "card_faces" in cached:
+            result[orig_name] = cached
+            _card_cache[orig_name] = cached
+            continue
+        time.sleep(REQUEST_DELAY)
+        card = _fetch_paper_printing(canonical)
+        if card:
+            entry = _build_entry(card)
             result[orig_name] = entry
             _card_cache[orig_name] = entry
             _card_cache[card.get("name", "")] = entry

@@ -11,7 +11,9 @@ class Event:
     event_id: int
     format_id: str
     name: str
-    date: str  # DD/MM/YY
+    store: str = ""
+    location: str = ""
+    date: str = ""  # DD/MM/YY
 
 
 @dataclass

@@ -1,8 +1,20 @@
 """FastAPI backend for MTG Metagame web app."""
 
+import hashlib
 import json
 import logging
 import os
+from pathlib import Path
+
+# Load .env from project root so DATABASE_URL (and others) are set before any config
+_env_path = Path(__file__).resolve().parent.parent / ".env"
+if _env_path.exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_env_path)
+    except ImportError:
+        pass
+import re
 import threading
 import time
 import unicodedata
@@ -10,6 +22,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 import jwt
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +63,15 @@ from src.mtgtop8.analyzer import (
 )
 from src.mtgtop8.card_lookup import clear_cache as clear_scryfall_cache, lookup_cards
 from src.mtgtop8.models import Deck
-from src.mtgtop8.scraper import scrape
+from src.mtgtop8.scraper import event_display_name, parse_event_display, scrape
+
+try:
+    from api import db as _db
+except ImportError:
+    _db = None
+
+def _database_available() -> bool:
+    return _db is not None and _db.is_database_available()
 
 app = FastAPI(title="MTG Metagame API", version="1.0.0")
 
@@ -66,6 +87,8 @@ app.add_middleware(
 # Admin auth: single user, password from env, JWT for session
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 JWT_SECRET = os.getenv("JWT_SECRET", ADMIN_PASSWORD or "dev-secret-change-in-production")
+# PyJWT recommends at least 32 bytes for HS256; derive a 32-byte key if secret is shorter to avoid InsecureKeyLengthWarning
+_JWT_KEY = JWT_SECRET.encode("utf-8") if len(JWT_SECRET.encode("utf-8")) >= 32 else hashlib.sha256(JWT_SECRET.encode("utf-8")).digest()
 JWT_ALGORITHM = "HS256"
 JWT_EXP_SECONDS = 7 * 24 * 3600  # 7 days
 
@@ -73,14 +96,14 @@ JWT_EXP_SECONDS = 7 * 24 * 3600  # 7 days
 def _create_admin_token() -> str:
     return jwt.encode(
         {"sub": "admin", "exp": int(time.time()) + JWT_EXP_SECONDS},
-        JWT_SECRET,
+        _JWT_KEY,
         algorithm=JWT_ALGORITHM,
     )
 
 
 def _verify_admin_token(token: str) -> bool:
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        payload = jwt.decode(token, _JWT_KEY, algorithms=[JWT_ALGORITHM])
         return payload.get("sub") == "admin"
     except jwt.PyJWTError:
         return False
@@ -148,6 +171,14 @@ def _get_ignore_lands_cards() -> list[str]:
 
 def _load_player_aliases() -> None:
     global _player_aliases
+    if _database_available():
+        try:
+            with _db.session_scope() as session:
+                _player_aliases = _db.get_player_aliases(session)
+        except Exception as e:
+            logger.exception("Failed to load player aliases from DB: %s", e)
+            _player_aliases = {}
+        return
     p = _aliases_path()
     if p.exists():
         try:
@@ -160,6 +191,14 @@ def _load_player_aliases() -> None:
 
 
 def _save_player_aliases() -> None:
+    if _database_available():
+        try:
+            with _db.session_scope() as session:
+                for alias, canonical in _player_aliases.items():
+                    _db.set_player_alias(session, alias, canonical)
+        except Exception as e:
+            logger.exception("Failed to save player aliases to DB: %s", e)
+        return
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     with open(_aliases_path(), "w", encoding="utf-8") as f:
         json.dump(_player_aliases, f, indent=2, ensure_ascii=False)
@@ -206,9 +245,56 @@ def _load_from_file(path: str) -> None:
     _invalidate_metagame()
 
 
-# Load decks.json on startup if present
+def _load_decks_from_db() -> None:
+    """Load all decks from DB into _decks. No-op if DB not available."""
+    global _decks
+    if not _database_available():
+        return
+    try:
+        with _db.session_scope() as session:
+            _decks = _db.get_all_decks(session)
+        _invalidate_metagame()
+    except Exception as e:
+        logger.exception("Failed to load decks from DB: %s", e)
+
+
+def _persist_decks_to_db(decks: list[dict], origin: str = None) -> None:
+    """Write decks to DB (upsert each). Then reload _decks from DB."""
+    if not _database_available() or _db is None:
+        return
+    if origin is None:
+        origin = _db.ORIGIN_MTGTOP8
+    try:
+        with _db.session_scope() as session:
+            for d in decks:
+                _db.upsert_deck(session, d, origin=origin)
+        _load_decks_from_db()
+    except Exception as e:
+        logger.exception("Failed to persist decks to DB: %s", e)
+
+
+def _clear_decks_in_db() -> None:
+    """Delete all decks in DB, then clear _decks."""
+    if not _database_available() or _db is None:
+        return
+    try:
+        with _db.session_scope() as session:
+            session.query(_db.DeckRow).delete()
+        global _decks
+        _decks = []
+        _invalidate_metagame()
+    except Exception as e:
+        logger.exception("Failed to clear decks in DB: %s", e)
+
+
+# Load decks on startup: from DB if available, else from decks.json
 _startup_path = DATA_DIR / "decks.json"
-if _startup_path.exists():
+if _database_available():
+    try:
+        _load_decks_from_db()
+    except Exception as e:
+        logger.exception("Failed to load decks from DB at startup: %s", e)
+elif _startup_path.exists():
     try:
         _load_from_file(str(_startup_path))
     except Exception as e:
@@ -324,7 +410,7 @@ def _deck_sort_key_by(sort: str, order: str):
 
 @app.get("/api/decks")
 def list_decks(
-    event_id: int | None = Query(None, description="Filter by event ID (single, for backward compatibility)"),
+    event_id: str | None = Query(None, description="Filter by event ID (single, for backward compatibility)"),
     event_ids: str | None = Query(None, description="Filter by event IDs (comma-separated)"),
     commander: str | None = Query(None, description="Filter by commander name (substring)"),
     deck_name: str | None = Query(None, description="Filter by deck name (substring)"),
@@ -334,16 +420,16 @@ def list_decks(
     sort: str = Query("date", description="Sort by: date, rank, player, name"),
     order: str = Query("desc", description="Sort order: asc, desc"),
     skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(50, ge=1, le=500),
 ):
     """List decks with optional filters and pagination."""
     filtered = _decks
     if event_ids:
-        ids = [int(x.strip()) for x in event_ids.split(",") if x.strip()]
+        ids = [x.strip() for x in event_ids.split(",") if x.strip()]
         if ids:
-            filtered = [d for d in filtered if d.get("event_id") in ids]
+            filtered = [d for d in filtered if str(d.get("event_id")) in ids]
     elif event_id is not None:
-        filtered = [d for d in filtered if d.get("event_id") == event_id]
+        filtered = [d for d in filtered if str(d.get("event_id")) == str(event_id)]
     if commander:
         c_norm = _normalize_search(commander)
         filtered = [
@@ -455,9 +541,9 @@ def list_duplicate_decks(
     """Decks with identical mainboard (duplicates across events)."""
     candidate = _decks
     if event_ids:
-        ids = [int(x.strip()) for x in event_ids.split(",") if x.strip()]
+        ids = [x.strip() for x in event_ids.split(",") if x.strip()]
         if ids:
-            candidate = [d for d in _decks if d.get("event_id") in ids]
+            candidate = [d for d in _decks if str(d.get("event_id")) in ids]
     decks = [Deck.from_dict(d) for d in candidate]
     dup_map = find_duplicate_decks(decks)
     deck_map = {d.get("deck_id"): d for d in _decks}
@@ -516,9 +602,9 @@ def get_similar_decks(
     deck = Deck.from_dict(deck_dict)
     candidate_decks = _decks
     if event_ids:
-        ids = [int(x.strip()) for x in event_ids.split(",") if x.strip()]
+        ids = [x.strip() for x in event_ids.split(",") if x.strip()]
         if ids:
-            candidate_decks = [d for d in _decks if d.get("event_id") in ids]
+            candidate_decks = [d for d in _decks if str(d.get("event_id")) in ids]
     all_decks = [Deck.from_dict(d) for d in candidate_decks]
     return {"similar": similar_decks(deck, all_decks, limit=limit)}
 
@@ -584,18 +670,393 @@ def get_format_info():
 
 @app.get("/api/events")
 def list_events():
-    """List unique events from current data."""
-    seen: dict[tuple[int, str], dict] = {}
+    """List unique events from current data (from DB events table when DB used, else from decks)."""
+    if _database_available():
+        try:
+            with _db.session_scope() as session:
+                rows = _db.get_all_events(session)
+            return {"events": [{"event_id": e["event_id"], "event_name": e["event_name"], "store": e.get("store", ""), "location": e.get("location", ""), "date": e["date"], "format_id": e["format_id"], "player_count": e.get("player_count", 0)} for e in rows]}
+        except Exception as e:
+            logger.exception("Failed to list events from DB: %s", e)
+    seen: dict[tuple[int | str, str], dict] = {}
     for d in _decks:
         key = (d.get("event_id"), d.get("event_name", ""))
         if key not in seen:
             seen[key] = {
                 "event_id": d.get("event_id"),
                 "event_name": d.get("event_name"),
+                "store": "",
+                "location": "",
                 "date": d.get("date"),
                 "format_id": d.get("format_id"),
+                "player_count": d.get("player_count", 0),
             }
     return {"events": list(seen.values())}
+
+
+# --- Admin-only: events and deck management (DB required for create/update/delete) ---
+
+class CreateEventBody(BaseModel):
+    event_name: str = ""
+    date: str = ""  # DD/MM/YY
+    format_id: str = "EDH"
+    player_count: int = 0  # number of players in the event
+    event_id: int | str | None = None  # optional; manual gets m1, m2, ... if omitted
+    store: str = ""
+    location: str = ""
+
+
+@app.post("/api/events", dependencies=[Depends(require_admin)])
+def create_event(body: CreateEventBody):
+    """Create a new event (admin-only). Manual events get IDs in a separate namespace from MTGTop8."""
+    if not _database_available():
+        raise HTTPException(status_code=503, detail="Database not configured")
+    try:
+        with _db.session_scope() as session:
+            row = _db.create_event(
+                session,
+                event_name=body.event_name.strip() or "Unnamed",
+                date=body.date.strip() or "",
+                format_id=body.format_id.strip() or "EDH",
+                origin=_db.ORIGIN_MANUAL,
+                event_id=body.event_id,
+                player_count=body.player_count or 0,
+                store=(body.store or "").strip(),
+                location=(body.location or "").strip(),
+            )
+            return {"event_id": row.event_id, "event_name": row.name, "store": row.store or "", "location": row.location or "", "date": row.date, "format_id": row.format_id, "player_count": row.player_count or 0}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("Create event failed: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to create event")
+
+
+@app.get("/api/events/{event_id}")
+def get_event_by_id(event_id: str):
+    """Get a single event by ID. Returns 404 if not found."""
+    if _database_available():
+        try:
+            with _db.session_scope() as session:
+                row = _db.get_event(session, event_id)
+                if row:
+                    return {"event_id": row.event_id, "event_name": row.name, "store": row.store or "", "location": row.location or "", "date": row.date, "format_id": row.format_id, "player_count": row.player_count or 0}
+        except Exception as e:
+            logger.exception("Failed to get event: %s", e)
+    # Fallback: find from _decks
+    for d in _decks:
+        if str(d.get("event_id")) == str(event_id):
+            return {"event_id": d.get("event_id"), "event_name": d.get("event_name", ""), "store": "", "location": "", "date": d.get("date", ""), "format_id": d.get("format_id", ""), "player_count": d.get("player_count", 0)}
+    raise HTTPException(status_code=404, detail="Event not found")
+
+
+@app.put("/api/events/{event_id}", dependencies=[Depends(require_admin)])
+def update_event_endpoint(
+    event_id: str,
+    event_name: str | None = Query(None),
+    date: str | None = Query(None),
+    format_id: str | None = Query(None),
+    player_count: int | None = Query(None),
+    store: str | None = Query(None),
+    location: str | None = Query(None),
+):
+    """Update event metadata (admin-only)."""
+    if not _database_available():
+        raise HTTPException(status_code=503, detail="Database not configured")
+    try:
+        with _db.session_scope() as session:
+            ok = _db.update_event(session, event_id, event_name=event_name, date=date, format_id=format_id, player_count=player_count, store=store, location=location)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Event not found")
+        _load_decks_from_db()
+        return {"event_id": event_id, "message": "updated"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Update event failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/events/{event_id}", dependencies=[Depends(require_admin)])
+def delete_event_endpoint(event_id: str):
+    """Delete an event and all its decks (admin-only)."""
+    if not _database_available():
+        raise HTTPException(status_code=503, detail="Database not configured")
+    try:
+        with _db.session_scope() as session:
+            ok = _db.delete_event(session, event_id, delete_decks=True)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Event not found")
+        _load_decks_from_db()
+        return {"event_id": event_id, "message": "deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Delete event failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class UploadDecksBody(BaseModel):
+    decks: list[dict] | None = None
+
+
+@app.post("/api/events/{event_id}/decks", dependencies=[Depends(require_admin)])
+async def upload_decks_to_event(
+    event_id: str,
+    body: UploadDecksBody | None = None,
+    file: UploadFile | None = File(None),
+):
+    """Upload decks to an existing event (admin-only). Decks are assigned this event_id and event_name/date from the event."""
+    if not _database_available():
+        raise HTTPException(status_code=503, detail="Database not configured")
+    with _db.session_scope() as session:
+        ev = _db.get_event(session, event_id)
+        if not ev:
+            raise HTTPException(status_code=404, detail="Event not found")
+        event_name = event_display_name(ev.name, ev.store or "", ev.location or "")
+        date, format_id = ev.date, ev.format_id
+    if file:
+        content = await file.read()
+        try:
+            raw = json.loads(content.decode("utf-8"))
+            decks = raw if isinstance(raw, list) else raw.get("decks", [])
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+    elif body and body.decks is not None:
+        decks = body.decks
+    else:
+        raise HTTPException(status_code=400, detail="Provide JSON body with 'decks' or file upload")
+    decks = _normalize_split_cards(decks)
+    try:
+        with _db.session_scope() as session:
+            next_id = _db.next_manual_deck_id(session)
+        out = []
+        for i, d in enumerate(decks):
+            d = dict(d)
+            d["event_id"] = event_id
+            d["event_name"] = event_name
+            d["date"] = date
+            d["format_id"] = format_id
+            if "deck_id" not in d or d.get("deck_id") is None:
+                d["deck_id"] = next_id + i
+            out.append(d)
+        with _db.session_scope() as session:
+            for d in out:
+                _db.upsert_deck(session, d, origin=_db.ORIGIN_MANUAL)
+        _load_decks_from_db()
+        return {"event_id": event_id, "loaded": len(out), "message": f"Uploaded {len(out)} decks"}
+    except Exception as e:
+        logger.exception("Upload decks to event failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/events/{event_id}/decks/add", dependencies=[Depends(require_admin)])
+def add_blank_deck_to_event(event_id: str):
+    """Add one blank deck to an event (admin-only)."""
+    if not _database_available():
+        raise HTTPException(status_code=503, detail="Database not configured")
+    with _db.session_scope() as session:
+        ev = _db.get_event(session, event_id)
+        if not ev:
+            raise HTTPException(status_code=404, detail="Event not found")
+        event_name = event_display_name(ev.name, ev.store or "", ev.location or "")
+        deck_id = _db.next_manual_deck_id(session)
+        blank = {
+            "deck_id": deck_id,
+            "event_id": event_id,
+            "event_name": event_name,
+            "date": ev.date,
+            "format_id": ev.format_id,
+            "name": "Unnamed",
+            "player": "",
+            "rank": "",
+            "player_count": 0,
+            "commanders": [],
+            "mainboard": [],
+            "sideboard": [],
+        }
+        _db.upsert_deck(session, blank, origin=_db.ORIGIN_MANUAL)
+    _load_decks_from_db()
+    return {"event_id": event_id, "deck_id": deck_id, "message": "Deck added"}
+
+
+class DeckCardUpdate(BaseModel):
+    qty: int = 1
+    card: str = ""
+
+
+class UpdateDeckBody(BaseModel):
+    """Optional fields for updating a deck (admin-only)."""
+    name: str | None = None
+    player: str | None = None
+    rank: str | None = None
+    archetype: str | None = None
+    event_id: int | str | None = None  # move deck to another event (must exist)
+    commanders: list[str] | None = None
+    mainboard: list[DeckCardUpdate] | None = None
+    sideboard: list[DeckCardUpdate] | None = None
+
+
+@app.put("/api/decks/{deck_id}", dependencies=[Depends(require_admin)])
+def update_deck_endpoint(deck_id: int, body: UpdateDeckBody):
+    """Update deck metadata (admin-only)."""
+    if not _database_available():
+        raise HTTPException(status_code=503, detail="Database not configured")
+    # Find current deck
+    current = None
+    for d in _decks:
+        if d.get("deck_id") == deck_id:
+            current = dict(d)
+            break
+    if not current:
+        raise HTTPException(status_code=404, detail="Deck not found")
+    # Merge body into current
+    if body.name is not None:
+        current["name"] = body.name
+    if body.player is not None:
+        current["player"] = body.player
+    if body.rank is not None:
+        current["rank"] = body.rank
+    if body.archetype is not None:
+        current["archetype"] = body.archetype
+    if body.event_id is not None:
+        with _db.session_scope() as session:
+            ev = _db.get_event(session, body.event_id)
+            if not ev:
+                raise HTTPException(status_code=400, detail="Event not found")
+            current["event_id"] = _db._event_id_str(body.event_id)
+            current["event_name"] = event_display_name(ev.name, ev.store or "", ev.location or "")
+            current["date"] = ev.date
+            current["format_id"] = ev.format_id
+    if body.commanders is not None:
+        current["commanders"] = [c.strip() for c in body.commanders if c and str(c).strip()]
+    if body.mainboard is not None:
+        current["mainboard"] = [{"qty": c.qty, "card": (c.card or "").strip()} for c in body.mainboard if (c.card or "").strip()]
+    if body.sideboard is not None:
+        current["sideboard"] = [{"qty": c.qty, "card": (c.card or "").strip()} for c in body.sideboard if (c.card or "").strip()]
+    try:
+        with _db.session_scope() as session:
+            _db.upsert_deck(session, current, origin=current.get("origin", _db.ORIGIN_MTGTOP8))
+        _load_decks_from_db()
+        return {"deck_id": deck_id, "message": "updated"}
+    except Exception as e:
+        logger.exception("Update deck failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/decks/{deck_id}", dependencies=[Depends(require_admin)])
+def delete_deck_endpoint(deck_id: int):
+    """Delete a single deck (admin-only)."""
+    if not _database_available():
+        raise HTTPException(status_code=503, detail="Database not configured")
+    try:
+        with _db.session_scope() as session:
+            ok = _db.delete_deck(session, deck_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Deck not found")
+        _load_decks_from_db()
+        return {"deck_id": deck_id, "message": "deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Delete deck failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _parse_moxfield_board(obj) -> list[dict]:
+    """Turn Moxfield board (dict of id -> {quantity/qty, card: {name} or string}) into [{qty, card}]."""
+    if not obj:
+        return []
+    out = []
+    if isinstance(obj, dict):
+        for v in obj.values():
+            if not isinstance(v, dict):
+                continue
+            qty = v.get("quantity") or v.get("qty", 1) or 1
+            try:
+                qty = max(1, int(qty) if isinstance(qty, (int, float)) else 1)
+            except (TypeError, ValueError):
+                qty = 1
+            card = v.get("card")
+            if card is None:
+                continue
+            if isinstance(card, dict):
+                name = (card.get("name") or card.get("cardName") or "").strip()
+            else:
+                name = str(card or "").strip()
+            if name:
+                out.append({"qty": qty, "card": name})
+    return out
+
+
+def _parse_moxfield_commanders(obj) -> list[str]:
+    """Turn Moxfield commanders into list of card names."""
+    entries = _parse_moxfield_board(obj)
+    return [e["card"] for e in entries for _ in range(e["qty"])]
+
+
+class ImportMoxfieldBody(BaseModel):
+    url: str = ""
+
+
+@app.post("/api/decks/import-moxfield", dependencies=[Depends(require_admin)])
+def import_moxfield_deck(body: ImportMoxfieldBody):
+    """Fetch a public Moxfield deck by URL and return commanders, mainboard, sideboard for the editor."""
+    url = (body.url or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="URL is required")
+    match = re.search(r"moxfield\.com/decks/([a-zA-Z0-9_-]+)", url, re.IGNORECASE)
+    if not match:
+        match = re.match(r"^([a-zA-Z0-9_-]+)$", url.strip())
+    deck_id = match.group(1) if match else None
+    if not deck_id:
+        raise HTTPException(status_code=400, detail="Invalid Moxfield URL or deck ID")
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.moxfield.com/",
+    }
+    # Try v2 first; some environments get 403 (e.g. Cloudflare). v3 may work as fallback.
+    urls_to_try = [
+        f"https://api.moxfield.com/v2/decks/all/{deck_id}",
+        f"https://api.moxfield.com/v3/decks/all/{deck_id}",
+    ]
+    data = None
+    last_error = None
+    for api_url in urls_to_try:
+        try:
+            r = requests.get(api_url, timeout=15, headers=headers)
+            if r.status_code == 403:
+                last_error = "Moxfield blocked the request (403)."
+                continue
+            r.raise_for_status()
+            data = r.json()
+            break
+        except requests.RequestException as e:
+            last_error = str(e)
+            logger.warning("Moxfield fetch %s failed: %s", api_url, e)
+            continue
+    if data is None:
+        logger.warning("Moxfield import failed for deck %s: %s", deck_id, last_error)
+        raise HTTPException(
+            status_code=502,
+            detail="Could not fetch deck from Moxfield. The deck may be private, or Moxfield may be blocking requests. Try again later or paste the deck list manually (Export from Moxfield → Moxfield format).",
+        )
+    try:
+        commanders = _parse_moxfield_commanders(data.get("commanders"))
+        mainboard = _parse_moxfield_board(data.get("mainboard"))
+        sideboard = _parse_moxfield_board(data.get("sideboard"))
+        return {
+            "commanders": commanders,
+            "mainboard": mainboard,
+            "sideboard": sideboard,
+            "name": (data.get("name") or "").strip() or None,
+            "format": (data.get("format") or "").strip() or None,
+        }
+    except (ValueError, TypeError) as e:
+        logger.warning("Moxfield parse error for deck %s: %s", deck_id, e)
+        raise HTTPException(status_code=502, detail="Invalid response from Moxfield")
 
 
 @app.get("/api/metagame")
@@ -604,7 +1065,7 @@ def get_metagame(
     ignore_lands: bool = Query(False),
     date_from: str | None = Query(None, description="Filter from date (DD/MM/YY)"),
     date_to: str | None = Query(None, description="Filter to date (DD/MM/YY)"),
-    event_id: int | None = Query(None, description="Filter by event ID (single, backward compat)"),
+    event_id: str | None = Query(None, description="Filter by event ID (single, backward compat)"),
     event_ids: str | None = Query(None, description="Filter by event IDs (comma-separated)"),
 ):
     """Full metagame report."""
@@ -619,11 +1080,11 @@ def get_metagame(
         }
     filtered = _decks
     if event_ids:
-        ids = [int(x.strip()) for x in event_ids.split(",") if x.strip()]
+        ids = [x.strip() for x in event_ids.split(",") if x.strip()]
         if ids:
-            filtered = [d for d in filtered if d.get("event_id") in ids]
+            filtered = [d for d in filtered if str(d.get("event_id")) in ids]
     elif event_id is not None:
-        filtered = [d for d in filtered if d.get("event_id") == event_id]
+        filtered = [d for d in filtered if str(d.get("event_id")) == str(event_id)]
     else:
         filtered = _filter_decks_by_date(filtered, date_from, date_to)
     decks = [Deck.from_dict(d) for d in filtered]
@@ -643,7 +1104,7 @@ def get_archetype_detail(
     archetype_name: str,
     date_from: str | None = Query(None, description="Filter from date (DD/MM/YY)"),
     date_to: str | None = Query(None, description="Filter to date (DD/MM/YY)"),
-    event_id: int | None = Query(None, description="Filter by event ID (single)"),
+    event_id: str | None = Query(None, description="Filter by event ID (single)"),
     event_ids: str | None = Query(None, description="Filter by event IDs (comma-separated)"),
     ignore_lands: bool = Query(False),
 ):
@@ -653,11 +1114,11 @@ def get_archetype_detail(
     decoded = unquote(archetype_name)
     filtered = _decks
     if event_ids:
-        ids = [int(x.strip()) for x in event_ids.split(",") if x.strip()]
+        ids = [x.strip() for x in event_ids.split(",") if x.strip()]
         if ids:
-            filtered = [d for d in filtered if d.get("event_id") in ids]
+            filtered = [d for d in filtered if str(d.get("event_id")) in ids]
     elif event_id is not None:
-        filtered = [d for d in filtered if d.get("event_id") == event_id]
+        filtered = [d for d in filtered if str(d.get("event_id")) == str(event_id)]
     else:
         filtered = _filter_decks_by_date(filtered, date_from, date_to)
     filtered = [
@@ -750,17 +1211,19 @@ def post_clear_scryfall_cache(_: str = Depends(require_admin)):
 
 @app.post("/api/settings/clear-decks")
 def post_clear_decks(_: str = Depends(require_admin)):
-    """Clear all loaded decks (in-memory and decks.json). Admin-only."""
+    """Clear all loaded decks (in-memory, decks.json, and DB when used). Admin-only."""
     global _decks
     _decks = []
     _invalidate_metagame()
-    decks_path = DATA_DIR / "decks.json"
-    try:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        with open(decks_path, "w", encoding="utf-8") as f:
-            json.dump([], f, indent=2, ensure_ascii=False)
-    except OSError:
-        pass
+    if _database_available():
+        _clear_decks_in_db()
+    else:
+        try:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            with open(DATA_DIR / "decks.json", "w", encoding="utf-8") as f:
+                json.dump([], f, indent=2, ensure_ascii=False)
+        except OSError:
+            pass
     return {"message": "Decks cleared"}
 
 
@@ -867,9 +1330,17 @@ def get_player_detail(player_name: str):
     }
 
 
+class NewEventBody(BaseModel):
+    event_name: str = ""
+    date: str = ""
+    format_id: str = "EDH"
+
+
 class LoadBody(BaseModel):
     decks: list[dict] | None = None
     path: str | None = None
+    event_id: int | str | None = None  # attach uploaded decks to this existing event (DB only)
+    new_event: NewEventBody | None = None  # create this event and attach decks (DB only)
 
 
 @app.post("/api/load")
@@ -906,6 +1377,48 @@ async def load_decks(
     else:
         raise HTTPException(status_code=400, detail="Provide JSON body or file upload")
     _invalidate_metagame()
+    if _database_available():
+        if body and (body.event_id is not None or body.new_event is not None):
+            event_id = body.event_id
+            event_name = date = format_id = None
+            if body.new_event:
+                with _db.session_scope() as session:
+                    row = _db.create_event(
+                        session,
+                        event_name=body.new_event.event_name.strip() or "Unnamed",
+                        date=body.new_event.date.strip() or "",
+                        format_id=body.new_event.format_id.strip() or "EDH",
+                        origin=_db.ORIGIN_MANUAL,
+                        event_id=None,
+                    )
+                    event_id, event_name, date, format_id = row.event_id, row.name, row.date, row.format_id
+            elif body.event_id is not None:
+                with _db.session_scope() as session:
+                    ev = _db.get_event(session, body.event_id)
+                    if not ev:
+                        raise HTTPException(status_code=404, detail="Event not found")
+                    event_id, event_name, date, format_id = ev.event_id, ev.name, ev.date, ev.format_id
+            if event_id is not None and event_name is not None:
+                next_id = None
+                with _db.session_scope() as session:
+                    next_id = _db.next_manual_deck_id(session)
+                for i, d in enumerate(_decks):
+                    d = dict(d)
+                    d["event_id"] = event_id
+                    d["event_name"] = event_name or d.get("event_name", "")
+                    d["date"] = date or d.get("date", "")
+                    d["format_id"] = format_id or d.get("format_id", "")
+                    if d.get("deck_id") is None or (isinstance(d.get("deck_id"), int) and d["deck_id"] < _db.MANUAL_DECK_ID_START):
+                        d["deck_id"] = next_id + i
+                    _decks[i] = d
+        _persist_decks_to_db(_decks, origin=_db.ORIGIN_MANUAL if (body and (body.event_id is not None or body.new_event)) else _db.ORIGIN_MTGTOP8)
+    else:
+        try:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            with open(DATA_DIR / "decks.json", "w", encoding="utf-8") as f:
+                json.dump(_decks, f, indent=2, ensure_ascii=False)
+        except OSError:
+            pass
     return {"loaded": len(_decks), "message": f"Loaded {len(_decks)} decks"}
 
 
@@ -934,6 +1447,8 @@ class ScrapeBody(BaseModel):
     period: str | None = None
     store: str | None = None
     event_ids: str | list[int] | None = None
+    ignore_existing_events: bool = True
+    force_replace: bool = False
 
 
 @app.post("/api/scrape")
@@ -947,7 +1462,36 @@ async def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
     store = body.store
     event_ids = body.event_ids
     if isinstance(event_ids, str):
-        event_ids = [int(x.strip()) for x in event_ids.split(",") if x.strip()] or None
+        event_ids = [x.strip() for x in event_ids.split(",") if x.strip()] or None
+    # Scraper expects list[int]; ignore non-numeric IDs (e.g. manual "m1")
+    scrape_event_ids: list[int] | None = None
+    if event_ids:
+        scrape_event_ids = [int(x) for x in event_ids if str(x).isdigit()]
+        if not scrape_event_ids:
+            scrape_event_ids = None
+
+    # When not forcing, skip events already in DB (or in _decks when no DB)
+    skip_event_ids: set[int] | None = None
+    if not body.force_replace and body.ignore_existing_events:
+        if _database_available():
+            try:
+                with _db.session_scope() as session:
+                    skip_event_ids = _db.get_mtgtop8_event_ids(session)
+            except Exception as e:
+                logger.warning("Could not load existing event IDs for skip list: %s", e)
+        elif _decks:
+            skip_event_ids = {
+                int(eid)
+                for eid in {d.get("event_id") for d in _decks}
+                if eid is not None and str(eid).isdigit()
+            }
+
+    start_time = time.time()
+    logger.info(
+        "Scrape started: format=%s period=%s store=%s event_ids=%s ignore_existing=%s force_replace=%s db_available=%s skip_count=%s",
+        format_id, period, store, scrape_event_ids, body.ignore_existing_events, body.force_replace,
+        _database_available(), len(skip_event_ids) if skip_event_ids else 0,
+    )
 
     q: queue.Queue[str | None] = queue.Queue()
     result_holder: list = []
@@ -962,12 +1506,16 @@ async def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
                 format_id=format_id,
                 period=period,
                 store=store,
-                event_ids=event_ids,
+                event_ids=scrape_event_ids,
                 on_progress=on_progress,
+                skip_event_ids=None if body.force_replace else skip_event_ids,
             )
             result_holder.append(decks)
         except Exception as e:
-            logger.exception("Scrape failed: %s", e)
+            logger.exception(
+                "Scrape failed: format=%s period=%s event_ids=%s error=%s",
+                format_id, period, scrape_event_ids, e,
+            )
             error_holder.append(str(e))
         finally:
             q.put(None)
@@ -1022,13 +1570,102 @@ async def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
             yield f"data: {json.dumps({'type': 'progress', 'message': msg, 'pct': round(pct, 1)})}\n\n"
 
         if error_holder:
+            duration = time.time() - start_time
+            logger.warning("Scrape failed after %.1fs: %s", duration, error_holder[0])
             yield f"data: {json.dumps({'type': 'error', 'message': error_holder[0]})}\n\n"
         elif result_holder:
             decks = result_holder[0]
-            _decks = [d.to_dict() for d in decks]
-            _invalidate_metagame()
-            yield f"data: {json.dumps({'type': 'done', 'message': f'Scraped {len(decks)} decks', 'loaded': len(decks), 'pct': 100})}\n\n"
+            deck_dicts = [d.to_dict() for d in decks]
+            events_in_run = {str(d.get("event_id")) for d in deck_dicts if d.get("event_id") is not None}
+            if _database_available():
+                try:
+                    with _db.session_scope() as session:
+                        if body.force_replace:
+                            # Hybrid forced replace: update event metadata, delete MTGTop8 decks per event, then upsert fresh decks
+                            for eid in events_in_run:
+                                sample = next((d for d in deck_dicts if str(d.get("event_id")) == eid), None)
+                                if not sample:
+                                    continue
+                                ev_name_raw = sample.get("event_name", "")
+                                ev_name, ev_store, ev_location = parse_event_display(ev_name_raw)
+                                existing = _db.get_event(session, eid)
+                                if existing is None:
+                                    _db.create_event(
+                                        session,
+                                        event_name=ev_name or ev_name_raw or "Unnamed",
+                                        date=sample.get("date", ""),
+                                        format_id=sample.get("format_id", ""),
+                                        origin=_db.ORIGIN_MTGTOP8,
+                                        event_id=eid,
+                                        player_count=int(sample.get("player_count", 0)),
+                                        store=ev_store,
+                                        location=ev_location,
+                                    )
+                                else:
+                                    _db.update_event(
+                                        session,
+                                        eid,
+                                        event_name=ev_name or ev_name_raw or existing.name,
+                                        date=sample.get("date", existing.date),
+                                        format_id=sample.get("format_id", existing.format_id),
+                                        player_count=int(sample.get("player_count", 0) or existing.player_count or 0),
+                                        store=ev_store or existing.store,
+                                        location=ev_location or existing.location,
+                                    )
+                                session.query(_db.DeckRow).filter(
+                                    _db.DeckRow.event_id == eid,
+                                    _db.DeckRow.origin == _db.ORIGIN_MTGTOP8,
+                                ).delete(synchronize_session=False)
+                            for d in deck_dicts:
+                                _db.upsert_deck(session, d, origin=_db.ORIGIN_MTGTOP8)
+                        else:
+                            # Default: create events only if missing, upsert decks by deck_id
+                            seen_event_ids = set()
+                            for d in deck_dicts:
+                                ev_id = d.get("event_id")
+                                if ev_id is not None and ev_id not in seen_event_ids:
+                                    seen_event_ids.add(ev_id)
+                                    if _db.get_event(session, ev_id) is None:
+                                        ev_name_raw = d.get("event_name", "")
+                                        ev_name, ev_store, ev_location = parse_event_display(ev_name_raw)
+                                        _db.create_event(
+                                            session,
+                                            event_name=ev_name or ev_name_raw or "Unnamed",
+                                            date=d.get("date", ""),
+                                            format_id=d.get("format_id", ""),
+                                            origin=_db.ORIGIN_MTGTOP8,
+                                            event_id=ev_id,
+                                            player_count=int(d.get("player_count", 0)),
+                                            store=ev_store,
+                                            location=ev_location,
+                                        )
+                            for d in deck_dicts:
+                                _db.upsert_deck(session, d, origin=_db.ORIGIN_MTGTOP8)
+                    _load_decks_from_db()
+                    duration = time.time() - start_time
+                    logger.info(
+                        "Scrape completed: decks=%s events=%s duration_sec=%.1f force_replace=%s",
+                        len(decks), len(events_in_run), duration, body.force_replace,
+                    )
+                except Exception as e:
+                    logger.exception("Failed to persist scraped decks to DB: %s", e)
+                    _decks = deck_dicts
+                    _invalidate_metagame()
+            else:
+                _decks = deck_dicts
+                _invalidate_metagame()
+                duration = time.time() - start_time
+                logger.info(
+                    "Scrape completed: decks=%s events=%s duration_sec=%.1f (no DB)",
+                    len(decks), len(events_in_run), duration,
+                )
+            loaded = len(_decks)
+            num_events = len(events_in_run)
+            message = f"Scraped {len(decks)} decks from {num_events} event{'s' if num_events != 1 else ''}"
+            yield f"data: {json.dumps({'type': 'done', 'message': message, 'loaded': loaded, 'pct': 100})}\n\n"
         else:
+            duration = time.time() - start_time
+            logger.warning("Scrape ended with unknown error after %.1fs", duration)
             yield f"data: {json.dumps({'type': 'error', 'message': 'Unknown error'})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useBlocker } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { loadDecks, exportDecks } from '../api'
 import { getToken } from '../contexts/AuthContext'
 import { reportError } from '../utils'
 import { FORMATS, META_EDH } from '../config'
@@ -14,10 +13,10 @@ export default function Scrape() {
   const [period, setPeriod] = useState('Last 2 Months')
   const [store, setStore] = useState('')
   const [eventIds, setEventIds] = useState('')
+  const [forceReplace, setForceReplace] = useState(false)
   const [loading, setLoading] = useState(false)
   const [progress, setProgress] = useState<string[]>([])
   const [pct, setPct] = useState(0)
-  const [fileInput, setFileInput] = useState<HTMLInputElement | null>(null)
   const logRef = useRef<HTMLDivElement>(null)
   const blockerDialogRef = useRef<HTMLDivElement>(null)
 
@@ -58,6 +57,7 @@ export default function Scrape() {
           period: period || undefined,
           store: store || undefined,
           event_ids: eventIds || undefined,
+          ...(forceReplace ? { force_replace: true } : {}),
         }),
       })
 
@@ -105,82 +105,9 @@ export default function Scrape() {
     }
   }
 
-  const handleLoadFile = async () => {
-    const input = fileInput
-    if (!input?.files?.length) {
-      toast.error('Select a file first')
-      return
-    }
-    setLoading(true)
-    try {
-      const result = await loadDecks(input.files[0])
-      toast.success(result.message)
-      input.value = ''
-    } catch (e) {
-      toast.error(reportError(e))
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const handleDownload = async () => {
-    try {
-      const blob = await exportDecks()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = 'decks.json'
-      a.click()
-      URL.revokeObjectURL(url)
-      toast.success('Download started (decks.json)')
-    } catch (e) {
-      toast.error(reportError(e))
-    }
-  }
-
   return (
     <div>
-      <h1 className="page-title">Scrape & Load Data</h1>
-
-      <div
-        className="scrape-sections-grid"
-        style={{
-          display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
-          gap: '1.5rem',
-          marginBottom: '1.5rem',
-        }}
-      >
-        <div className="chart-container chart-container--compact">
-          <h3 style={{ margin: '0 0 1rem' }}>Load from file</h3>
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
-            <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
-              <label htmlFor="scrape-file-input">JSON file (decks.json)</label>
-              <input
-                id="scrape-file-input"
-                type="file"
-                accept=".json"
-                ref={setFileInput}
-                onChange={() => {}}
-                aria-label="Select JSON file to load decks"
-              />
-            </div>
-            <button className="btn" onClick={handleLoadFile} disabled={loading}>
-              Load
-            </button>
-          </div>
-        </div>
-
-        <div className="chart-container chart-container--compact">
-          <h3 style={{ margin: '0 0 1rem' }}>Download current data</h3>
-          <p style={{ margin: '0 0 0.75rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-            Export all loaded or scraped decks as JSON (same format as Load accepts).
-          </p>
-          <button className="btn" onClick={handleDownload} disabled={loading}>
-            Download decks.json
-          </button>
-        </div>
-      </div>
+      <h1 className="page-title">Scrape</h1>
 
       <div className="chart-container chart-container--compact" style={{ maxWidth: 500 }}>
         <h3 style={{ margin: '0 0 1rem' }}>Scrape from MTGTop8</h3>
@@ -221,6 +148,21 @@ export default function Scrape() {
             onChange={(e) => setEventIds(e.target.value)}
             aria-label="Event IDs"
           />
+        </div>
+        <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+            <input
+              id="scrape-force-replace"
+              type="checkbox"
+              checked={forceReplace}
+              onChange={(e) => setForceReplace(e.target.checked)}
+              aria-label="Force replace existing events"
+            />
+            Force replace existing events
+          </label>
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+            Re-scrape and refresh MTGTop8 events; manual decks attached to those events are kept.
+          </span>
         </div>
         <button className="btn" onClick={handleScrape} disabled={loading}>
           {loading ? 'Scraping...' : 'Run Scrape'}

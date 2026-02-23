@@ -1,8 +1,17 @@
 """Configuration: format IDs, meta values, constants."""
 
+import os
+
 BASE_URL = "https://www.mtgtop8.com"
 REQUEST_DELAY_SECONDS = 1.5
 MAX_RETRIES = 3
+
+# Parallel deck page fetches per event (1 = sequential; 2–8 for bounded parallelism)
+_workers = os.getenv("SCRAPER_MAX_WORKERS", "1").strip()
+try:
+    SCRAPER_MAX_WORKERS = max(1, min(8, int(_workers)))
+except ValueError:
+    SCRAPER_MAX_WORKERS = 1
 
 # Format IDs (f parameter)
 FORMATS: dict[str, str] = {

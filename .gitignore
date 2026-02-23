@@ -17,6 +17,8 @@ htmlcov/
 .eggs/
 dist/
 build/
+.cursor/plans
+pytest-cache*
 
 # Node
 node_modules/

@@ -4,8 +4,8 @@ import { dateMinusDays, dateInRange, firstDayOfYear } from '../utils'
 
 export interface EventSelectorProps {
   events: Event[]
-  selectedIds: number[]
-  onChange: (ids: number[]) => void
+  selectedIds: (number | string)[]
+  onChange: (ids: (number | string)[]) => void
   showDatePresets?: boolean
   maxDate?: string | null
   lastEventDate?: string | null
@@ -72,7 +72,7 @@ export default function EventSelector({
     onChange(ids)
   }
 
-  const toggleEvent = (id: number) => {
+  const toggleEvent = (id: number | string) => {
     const next = new Set(selectedIds)
     if (next.has(id)) next.delete(id)
     else next.add(id)

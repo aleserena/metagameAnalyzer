@@ -12,10 +12,10 @@ export default function Archetypes() {
   const [metagame, setMetagame] = useState<MetagameReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [eventIds, setEventIds] = useState<number[]>(() => {
+  const [eventIds, setEventIds] = useState<(number | string)[]>(() => {
     const param = searchParams.get('event_ids') ?? searchParams.get('event_id')
     if (!param) return []
-    return param.split(',').map((s) => parseInt(s.trim(), 10)).filter((n) => !isNaN(n))
+    return param.split(',').map((s) => s.trim()).filter(Boolean)
   })
   const [maxDate, setMaxDate] = useState<string | null>(null)
   const [lastEventDate, setLastEventDate] = useState<string | null>(null)
@@ -25,7 +25,7 @@ export default function Archetypes() {
   useEffect(() => {
     const param = searchParams.get('event_ids') ?? searchParams.get('event_id')
     if (!param) setEventIds([])
-    else setEventIds(param.split(',').map((s) => parseInt(s.trim(), 10)).filter((n) => !isNaN(n)))
+    else setEventIds(param.split(',').map((s) => s.trim()).filter(Boolean))
   }, [searchParams])
 
   useEffect(() => {
@@ -39,7 +39,7 @@ export default function Archetypes() {
 
   useEffect(() => {
     setLoading(true)
-    const eventIdsParam = eventIds.length ? eventIds.join(',') : undefined
+    const eventIdsParam = eventIds.length ? eventIds.map(String).join(',') : undefined
     getMetagame(false, false, undefined, undefined, undefined, eventIdsParam)
       .then(setMetagame)
       .catch((e) => {
@@ -49,12 +49,12 @@ export default function Archetypes() {
       .finally(() => setLoading(false))
   }, [eventIds])
 
-  const setEventFilter = (ids: number[]) => {
+  const setEventFilter = (ids: (number | string)[]) => {
     setEventIds(ids)
     if (ids.length === 0) {
       setSearchParams({})
     } else {
-      setSearchParams({ event_ids: ids.join(',') })
+      setSearchParams({ event_ids: ids.map(String).join(',') })
     }
   }
 
@@ -87,7 +87,7 @@ export default function Archetypes() {
             onClick={() => {
               setError(null)
               setLoading(true)
-              const eventIdsParam = eventIds.length ? eventIds.join(',') : undefined
+              const eventIdsParam = eventIds.length ? eventIds.map(String).join(',') : undefined
               getMetagame(false, false, undefined, undefined, undefined, eventIdsParam)
                 .then(setMetagame)
                 .catch((e) => {
@@ -157,7 +157,7 @@ export default function Archetypes() {
                   <tr key={row.archetype}>
                     <td>
                       <Link
-                        to={`/archetypes/${encodeURIComponent(row.archetype)}${eventIds.length ? `?event_ids=${eventIds.join(',')}` : ''}`}
+                        to={`/archetypes/${encodeURIComponent(row.archetype)}${eventIds.length ? `?event_ids=${encodeURIComponent(eventIds.map(String).join(','))}` : ''}`}
                         style={{ color: 'var(--accent)', fontWeight: 500 }}
                       >
                         {row.archetype}

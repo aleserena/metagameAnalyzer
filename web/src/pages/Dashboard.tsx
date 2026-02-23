@@ -14,7 +14,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [ignoreLands, setIgnoreLands] = useState(false)
-  const [eventIds, setEventIds] = useState<number[]>([])
+  const [eventIds, setEventIds] = useState<(number | string)[]>([])
   const [maxDate, setMaxDate] = useState<string | null>(null)
   const [lastEventDate, setLastEventDate] = useState<string | null>(null)
 
@@ -28,7 +28,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     setLoading(true)
-    const eventIdsParam = eventIds.length ? eventIds.join(',') : undefined
+    const eventIdsParam = eventIds.length ? eventIds.map(String).join(',') : undefined
     getMetagame(false, ignoreLands, undefined, undefined, undefined, eventIdsParam)
       .then(setMetagame)
       .catch((e) => {
@@ -78,7 +78,7 @@ export default function Dashboard() {
             onClick={() => {
               setError(null)
               setLoading(true)
-              const eventIdsParam = eventIds.length ? eventIds.join(',') : undefined
+              const eventIdsParam = eventIds.length ? eventIds.map(String).join(',') : undefined
               getMetagame(false, ignoreLands, undefined, undefined, undefined, eventIdsParam)
                 .then(setMetagame)
                 .catch((e) => {
@@ -99,7 +99,22 @@ export default function Dashboard() {
   const topCommanders = metagame?.commander_distribution?.slice(0, 5) ?? []
   const topArchetypes = metagame?.archetype_distribution?.slice(0, 5) ?? []
   const topCards = metagame?.top_cards_main?.slice(0, 5) ?? []
-  const recentEvents = [...events].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5)
+  // Parse DD/MM/YY (or DD/MM/YYYY) to YYYYMMDD for chronological sort; invalid/empty => 0 (sort last)
+  const eventDateKey = (e: Event) => {
+    const s = (e.date || '').trim()
+    if (!s) return 0
+    const parts = s.split('/').map((p) => p.trim())
+    if (parts.length < 3) return 0
+    const day = parseInt(parts[0], 10)
+    const month = parseInt(parts[1], 10)
+    let y = parseInt(parts[2], 10)
+    if (isNaN(day) || isNaN(month) || isNaN(y)) return 0
+    if (y < 100) y += 2000 // 24 -> 2024
+    return y * 10000 + month * 100 + day
+  }
+  const recentEvents = [...events]
+    .sort((a, b) => eventDateKey(b) - eventDateKey(a))
+    .slice(0, 5)
   const isEmpty = summary.total_decks === 0
 
   if (isEmpty) {
@@ -243,10 +258,12 @@ export default function Dashboard() {
           <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
             {recentEvents.map((e) => (
               <li key={`${e.event_id}-${e.date}`} style={{ padding: '0.5rem 0', borderBottom: '1px solid var(--border)' }}>
-                <Link to={`/decks?event_ids=${e.event_id}`} style={{ color: 'var(--accent)' }}>
-                  {e.event_name}
+                <Link to={`/decks?event_ids=${encodeURIComponent(String(e.event_id))}`} style={{ color: 'var(--accent)' }}>
+                  {(typeof e.event_name === 'string' && e.event_name.trim()) ? e.event_name : 'Unnamed'}
                 </Link>
-                <span style={{ color: 'var(--text-muted)', marginLeft: '0.5rem' }}>{e.date}</span>
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: '0.15rem' }}>
+                  {[e.date, e.store, e.location].filter(Boolean).join(' · ')}
+                </div>
               </li>
             ))}
           </ul>
@@ -255,11 +272,6 @@ export default function Dashboard() {
         )}
       </div>
 
-      <div style={{ marginTop: '1.5rem', display: 'flex', gap: '1rem' }}>
-        <Link to="/metagame" className="btn">View Metagame</Link>
-        <Link to="/decks" className="btn">Browse Decks</Link>
-        <Link to="/players" className="btn">Player Leaderboard</Link>
-      </div>
     </div>
   )
 }

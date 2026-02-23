@@ -3,6 +3,8 @@ import Layout from './components/Layout'
 import ErrorBoundary from './components/ErrorBoundary'
 import AdminGuard from './components/AdminGuard'
 import Dashboard from './pages/Dashboard'
+import Events from './pages/Events'
+import EventDetail from './pages/EventDetail'
 import Metagame from './pages/Metagame'
 import Decks from './pages/Decks'
 import DeckDetail from './pages/DeckDetail'
@@ -26,6 +28,8 @@ const router = createBrowserRouter([
     ),
     children: [
       { index: true, element: <Dashboard /> },
+      { path: 'events', element: <Events /> },
+      { path: 'events/:eventId', element: <EventDetail /> },
       { path: 'metagame', element: <Metagame /> },
       { path: 'archetypes', element: <Archetypes /> },
       { path: 'archetypes/:archetypeName', element: <ArchetypeDetail /> },
