@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts'
@@ -442,6 +442,12 @@ export default function DeckDetail() {
   const [similarDecksSameEventOnly, setSimilarDecksSameEventOnly] = useState(true)
   const [compareSelectedIds, setCompareSelectedIds] = useState<Set<number>>(new Set())
   const MAX_COMPARE = 4
+
+  // Exclude 100% overlap (duplicate) decks from the similar list
+  const displayedSimilarDecks = useMemo(
+    () => similarDecks.filter((s) => s.similarity < 100),
+    [similarDecks]
+  )
 
   useEffect(() => {
     if (!deckId) return
@@ -1092,9 +1098,9 @@ export default function DeckDetail() {
               ? 'Decks with high card overlap from the same event'
               : 'Decks with high card overlap across all events'}
           </p>
-          {similarDecks.length > 0 ? (
+          {displayedSimilarDecks.length > 0 ? (
             <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-                {similarDecks.map((s) => {
+                {displayedSimilarDecks.map((s) => {
                   const selected = compareSelectedIds.has(s.deck_id)
                   const atMax = compareSelectedIds.size >= MAX_COMPARE - 1 && !selected
                   return (

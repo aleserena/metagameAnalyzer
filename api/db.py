@@ -295,6 +295,16 @@ def get_all_events(session: Session) -> list[dict]:
     ]
 
 
+def get_mtgtop8_event_ids(session: Session) -> set[int]:
+    """Return set of numeric MTGTop8 event IDs. Manual IDs (e.g. m1) are excluded."""
+    rows = session.query(EventRow.event_id).filter(EventRow.origin == ORIGIN_MTGTOP8).all()
+    result: set[int] = set()
+    for (eid,) in rows:
+        if eid and str(eid).isdigit():
+            result.add(int(eid))
+    return result
+
+
 def _event_id_str(value: int | str) -> str:
     """Normalize event_id to string for DB (scraped: 80454 -> '80454'; manual: 'm1')."""
     if value is None:

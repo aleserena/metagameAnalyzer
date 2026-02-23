@@ -99,7 +99,22 @@ export default function Dashboard() {
   const topCommanders = metagame?.commander_distribution?.slice(0, 5) ?? []
   const topArchetypes = metagame?.archetype_distribution?.slice(0, 5) ?? []
   const topCards = metagame?.top_cards_main?.slice(0, 5) ?? []
-  const recentEvents = [...events].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5)
+  // Parse DD/MM/YY (or DD/MM/YYYY) to YYYYMMDD for chronological sort; invalid/empty => 0 (sort last)
+  const eventDateKey = (e: Event) => {
+    const s = (e.date || '').trim()
+    if (!s) return 0
+    const parts = s.split('/').map((p) => p.trim())
+    if (parts.length < 3) return 0
+    const day = parseInt(parts[0], 10)
+    const month = parseInt(parts[1], 10)
+    let y = parseInt(parts[2], 10)
+    if (isNaN(day) || isNaN(month) || isNaN(y)) return 0
+    if (y < 100) y += 2000 // 24 -> 2024
+    return y * 10000 + month * 100 + day
+  }
+  const recentEvents = [...events]
+    .sort((a, b) => eventDateKey(b) - eventDateKey(a))
+    .slice(0, 5)
   const isEmpty = summary.total_decks === 0
 
   if (isEmpty) {
