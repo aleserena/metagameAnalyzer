@@ -64,6 +64,40 @@ Scrape and Settings are available only to an admin user. Set the environment var
 
 If `ADMIN_PASSWORD` is not set, admin login is disabled and those tabs are hidden.
 
+### Database and Railway
+
+With a PostgreSQL database (e.g. on [Railway](https://railway.app)), the API persists decks, events, and player aliases in the database instead of JSON files.
+
+#### How to connect the database and run migrations
+
+1. **Get the connection URL**
+   - **Railway:** In the project dashboard, open the PostgreSQL service → **Variables** (or **Connect**). Copy **`DATABASE_URL`** (or build it from `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`).
+   - **Local Postgres:** Use e.g. `postgresql://user:password@localhost:5432/your_db`.
+
+2. **Put the URL in `.env`**  
+   In the project root, create or edit `.env` (do not commit it; it’s in `.gitignore`) and add:
+   ```env
+   DATABASE_URL=postgresql://user:password@host:port/database
+   ```
+   Replace with your real URL. Railway often gives `postgres://`; the app accepts that and converts it to `postgresql://` internally.
+
+3. **Install dependencies and run migrations**  
+   From the project root:
+   ```bash
+   pip install -r requirements.txt
+   python -m alembic upgrade head
+   ```
+   The app and Alembic load `.env` automatically, so `DATABASE_URL` is read from that file.
+
+4. **Start the API**  
+   As usual: `python -m uvicorn api.main:app --reload --port 8000`. The API will connect to the database and load decks/aliases from it.
+
+- **Without `DATABASE_URL`**: Decks load from/save to `decks.json`; aliases use `player_aliases.json`. Behaviour is unchanged from before.
+- **With `DATABASE_URL`**: Decks and events are stored in PostgreSQL. Scrapes upsert by deck ID (no duplicates on re-scrape). Manual events and deck uploads use separate ID ranges from MTGTop8.
+- **Data tab** (admin): Create events, upload decks to an event, edit/delete events, delete decks. Requires database.
+
+If you use the Railway DB from your machine, avoid destructive operations (e.g. “Clear decks”) unless you mean to change that shared database.
+
 ### Player aliases (merge duplicate names)
 
 If the same player appears under different names (e.g. "Tomas Pesci" and "Pablo Tomas Pesci"), an admin can merge them in **Settings → Player aliases**: add mappings (alias → canonical). On the Player detail page, similar names are suggested with a "Merge into X" button (merge requires admin login). Aliases are stored in `player_aliases.json` (in `DATA_DIR`). Merged players share stats and deck lists.

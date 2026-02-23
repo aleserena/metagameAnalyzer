@@ -5,7 +5,7 @@ export interface DeckCard {
 
 export interface Deck {
   deck_id: number
-  event_id: number
+  event_id: number | string  // scraped: numeric string "80454"; manual: "m1", "m2"
   format_id: string
   name: string
   player: string
@@ -89,10 +89,13 @@ export interface DeckDuplicateInfo {
 }
 
 export interface Event {
-  event_id: number
+  event_id: number | string  // scraped: "80454"; manual: "m1", "m2"
   event_name: string
+  store?: string
+  location?: string
   date: string
   format_id: string
+  player_count?: number  // number of players in the event
 }
 
 export interface PlayerStats {

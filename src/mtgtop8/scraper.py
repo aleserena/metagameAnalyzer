@@ -1,6 +1,38 @@
 """MTGTop8 scraper: fetch events and deck lists."""
 
 import re
+from typing import Tuple
+
+
+def parse_event_display(s: str) -> Tuple[str, str, str]:
+    """Parse event title into (name, store, location).
+    Expected format: "Event Name" @ "Store" ("Location")
+    If the string doesn't match, return (s.strip(), "", "").
+    """
+    s = (s or "").strip()
+    if not s:
+        return "", "", ""
+    if " (" in s and ")" in s and " @ " in s:
+        loc_end = s.rindex(")")
+        loc_start = s.rindex(" (")
+        location = s[loc_start + 2 : loc_end].strip()
+        before_loc = s[:loc_start].strip()
+        if " @ " in before_loc:
+            name, store = before_loc.split(" @ ", 1)
+            return name.strip(), store.strip(), location
+    return s, "", ""
+
+
+def event_display_name(name: str, store: str = "", location: str = "") -> str:
+    """Build display string: Name @ Store (Location) or just Name."""
+    name = (name or "").strip()
+    store = (store or "").strip()
+    location = (location or "").strip()
+    if store and location:
+        return f"{name} @ {store} ({location})"
+    if store:
+        return f"{name} @ {store}"
+    return name or "Unknown"
 import time
 from typing import Callable
 
@@ -88,8 +120,8 @@ def scrape_events_from_format(
                 seen_ids.add(event_id)
 
                 link_cell = link.find_parent("td")
-                event_name = link_cell.get_text(separator=" ", strip=True) if link_cell else link.get_text(strip=True)
-                event_name = re.sub(r"\s*NEW\s*$", "", event_name)
+                raw_title = link_cell.get_text(separator=" ", strip=True) if link_cell else link.get_text(strip=True)
+                raw_title = re.sub(r"\s*NEW\s*$", "", raw_title)
 
                 date_text = ""
                 for cell in reversed(cells):
@@ -102,14 +134,17 @@ def scrape_events_from_format(
 
                 page_has_events = True
 
-                if store_filter and store_filter.lower() not in event_name.lower():
+                if store_filter and store_filter.lower() not in raw_title.lower():
                     continue
 
+                name, store, location = parse_event_display(raw_title)
                 events.append(
                     Event(
                         event_id=event_id,
                         format_id=format_id,
-                        name=event_name,
+                        name=name,
+                        store=store,
+                        location=location,
                         date=date_text,
                     )
                 )
@@ -309,7 +344,10 @@ def scrape(
 
     events: list[Event] = []
     if event_ids:
-        events = [Event(event_id=eid, format_id=format_id, name="", date="") for eid in event_ids]
+        events = [
+            Event(event_id=eid, format_id=format_id, name="", store="", location="", date="")
+            for eid in event_ids
+        ]
     else:
         if on_progress:
             on_progress("Fetching events from format page...")
@@ -330,22 +368,24 @@ def scrape(
                 on_progress(f"  Parsing deck {j}/{len(deck_ids)} (id={did})...")
             deck = scrape_deck_robust(ev.event_id, did, format_id, session)
             if deck:
-                if ev.name and (not deck.event_name or deck.event_name == "Unknown"):
-                    deck = Deck(
-                        deck_id=deck.deck_id,
-                        event_id=deck.event_id,
-                        format_id=deck.format_id,
-                        name=deck.name,
-                        player=deck.player,
-                        event_name=ev.name,
-                        date=deck.date or ev.date,
-                        rank=deck.rank,
-                        player_count=deck.player_count,
-                        mainboard=deck.mainboard,
-                        sideboard=deck.sideboard,
-                        commanders=deck.commanders,
-                        archetype=deck.archetype,
-                    )
+                if not ev.name and (deck.event_name and deck.event_name != "Unknown"):
+                    ev.name, ev.store, ev.location = parse_event_display(deck.event_name)
+                display_name = event_display_name(ev.name, ev.store, ev.location)
+                deck = Deck(
+                    deck_id=deck.deck_id,
+                    event_id=deck.event_id,
+                    format_id=deck.format_id,
+                    name=deck.name,
+                    player=deck.player,
+                    event_name=display_name,
+                    date=deck.date or ev.date,
+                    rank=deck.rank,
+                    player_count=deck.player_count,
+                    mainboard=deck.mainboard,
+                    sideboard=deck.sideboard,
+                    commanders=deck.commanders,
+                    archetype=deck.archetype,
+                )
                 decks.append(deck)
 
     if on_progress:

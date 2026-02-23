@@ -83,6 +83,36 @@ export function firstDayOfYear(ddMmYy: string): string {
   return `01/01/${yy}`
 }
 
+/** Convert DD/MM/YY to YYYY-MM-DD for use with input type="date". Returns '' if invalid. */
+export function ddMmYyToIso(ddMmYy: string): string {
+  const t = ddMmYy.trim()
+  if (!t) return ''
+  const parts = t.split('/').map(Number)
+  const [d, m, y] = parts
+  if (!d || !m) return ''
+  const year = (y < 100 ? 2000 + y : y)
+  const date = new Date(year, m - 1, d)
+  if (isNaN(date.getTime()) || date.getFullYear() !== year || date.getMonth() !== m - 1 || date.getDate() !== d) return ''
+  const yy = String(date.getFullYear())
+  const mm = String(date.getMonth() + 1).padStart(2, '0')
+  const dd = String(date.getDate()).padStart(2, '0')
+  return `${yy}-${mm}-${dd}`
+}
+
+/** Convert YYYY-MM-DD (from input type="date") to DD/MM/YY. Returns '' if invalid. */
+export function isoToDdMmYy(iso: string): string {
+  const t = iso.trim()
+  if (!t) return ''
+  const [y, m, d] = t.split('-').map(Number)
+  if (!y || !m || !d) return ''
+  const date = new Date(y, m - 1, d)
+  if (isNaN(date.getTime()) || date.getFullYear() !== y || date.getMonth() !== m - 1 || date.getDate() !== d) return ''
+  const yy = String(y).slice(-2)
+  const mm = String(m).padStart(2, '0')
+  const dd = String(d).padStart(2, '0')
+  return `${dd}/${mm}/${yy}`
+}
+
 const PLURAL_MAP: Record<string, string> = {
   Sorcery: 'Sorceries',
   Other: 'Other',

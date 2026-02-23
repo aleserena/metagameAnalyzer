@@ -14,7 +14,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [ignoreLands, setIgnoreLands] = useState(false)
-  const [eventIds, setEventIds] = useState<number[]>([])
+  const [eventIds, setEventIds] = useState<(number | string)[]>([])
   const [maxDate, setMaxDate] = useState<string | null>(null)
   const [lastEventDate, setLastEventDate] = useState<string | null>(null)
 
@@ -28,7 +28,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     setLoading(true)
-    const eventIdsParam = eventIds.length ? eventIds.join(',') : undefined
+    const eventIdsParam = eventIds.length ? eventIds.map(String).join(',') : undefined
     getMetagame(false, ignoreLands, undefined, undefined, undefined, eventIdsParam)
       .then(setMetagame)
       .catch((e) => {
@@ -78,7 +78,7 @@ export default function Dashboard() {
             onClick={() => {
               setError(null)
               setLoading(true)
-              const eventIdsParam = eventIds.length ? eventIds.join(',') : undefined
+              const eventIdsParam = eventIds.length ? eventIds.map(String).join(',') : undefined
               getMetagame(false, ignoreLands, undefined, undefined, undefined, eventIdsParam)
                 .then(setMetagame)
                 .catch((e) => {
@@ -243,7 +243,7 @@ export default function Dashboard() {
           <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
             {recentEvents.map((e) => (
               <li key={`${e.event_id}-${e.date}`} style={{ padding: '0.5rem 0', borderBottom: '1px solid var(--border)' }}>
-                <Link to={`/decks?event_ids=${e.event_id}`} style={{ color: 'var(--accent)' }}>
+                <Link to={`/decks?event_ids=${encodeURIComponent(String(e.event_id))}`} style={{ color: 'var(--accent)' }}>
                   {e.event_name}
                 </Link>
                 <span style={{ color: 'var(--text-muted)', marginLeft: '0.5rem' }}>{e.date}</span>

@@ -20,8 +20,8 @@ export default function Decks() {
   const navigate = useNavigate()
 
   const eventIdsParam = searchParams.get('event_ids') ?? searchParams.get('event_id')
-  const eventIds = eventIdsParam
-    ? eventIdsParam.split(',').map((s) => parseInt(s.trim(), 10)).filter((n) => !isNaN(n))
+  const eventIds: (number | string)[] = eventIdsParam
+    ? eventIdsParam.split(',').map((s) => s.trim()).filter(Boolean)
     : []
   const [maxDate, setMaxDate] = useState<string | null>(null)
   const [lastEventDate, setLastEventDate] = useState<string | null>(null)
@@ -42,8 +42,8 @@ export default function Decks() {
   const [localCard, setLocalCard] = useState(card ?? '')
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const setEventIdsFilter = (ids: number[]) => {
-    setFilter('event_ids', ids.length ? ids.join(',') : null)
+  const setEventIdsFilter = (ids: (number | string)[]) => {
+    setFilter('event_ids', ids.length ? ids.map(String).join(',') : null)
   }
 
   const toggleSelect = (id: number) => {
@@ -93,7 +93,7 @@ export default function Decks() {
   }, [])
 
   useEffect(() => {
-    getDuplicateDecks(eventIds.length ? eventIds.join(',') : undefined)
+    getDuplicateDecks(eventIds.length ? eventIds.map(String).join(',') : undefined)
       .then((r) => {
         const ids = new Set<number>()
         for (const g of r.duplicates) {
@@ -108,7 +108,7 @@ export default function Decks() {
   useEffect(() => {
     setLoading(true)
     getDecks({
-      event_ids: eventIds.length ? eventIds.join(',') : undefined,
+      event_ids: eventIds.length ? eventIds.map(String).join(',') : undefined,
       deck_name: deckName ?? undefined,
       archetype: archetype ?? undefined,
       player: player ?? undefined,
@@ -158,7 +158,7 @@ export default function Decks() {
     setError(null)
     setLoading(true)
     getDecks({
-      event_ids: eventIds.length ? eventIds.join(',') : undefined,
+      event_ids: eventIds.length ? eventIds.map(String).join(',') : undefined,
       deck_name: deckName ?? undefined,
       archetype: archetype ?? undefined,
       player: player ?? undefined,
@@ -409,7 +409,7 @@ export default function Decks() {
                     </td>
                     <td
                       style={{ cursor: 'pointer', color: 'var(--accent)' }}
-                      onClick={(e) => { e.stopPropagation(); navigate(`/decks?event_ids=${d.event_id}`) }}
+                      onClick={(e) => { e.stopPropagation(); navigate(`/decks?event_ids=${encodeURIComponent(String(d.event_id))}`) }}
                     >
                       {d.event_name}
                     </td>

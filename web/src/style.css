@@ -288,6 +288,36 @@ tr.clickable {
   margin-top: 0.5rem;
 }
 
+/* Shared look for all form controls across the app */
+input[type="text"],
+input[type="number"],
+input[type="date"],
+input[type="email"],
+input[type="password"],
+input[type="url"],
+select,
+textarea {
+  padding: 0.5rem 0.75rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 1rem;
+  font-family: inherit;
+}
+
+input[type="text"]:focus,
+input[type="number"]:focus,
+input[type="date"]:focus,
+input[type="email"]:focus,
+input[type="password"]:focus,
+input[type="url"]:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .form-group {
   margin-bottom: 1rem;
 }
@@ -300,15 +330,23 @@ tr.clickable {
 }
 
 .form-group input,
-.form-group select {
+.form-group select,
+.form-group textarea {
   width: 100%;
   max-width: 400px;
-  padding: 0.5rem 0.75rem;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text);
-  font-size: 1rem;
+}
+
+.form-group textarea {
+  min-height: 200px;
+  resize: vertical;
+}
+
+/* Label used outside .form-group (e.g. Events, EventDetail) */
+.label {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-size: 0.875rem;
+  color: var(--text-muted);
 }
 
 .events-dropdown input[type="checkbox"] {

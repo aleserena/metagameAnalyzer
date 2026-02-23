@@ -23,15 +23,16 @@ async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
-    const detail = err.detail || res.statusText
+    const detail = err.detail ?? res.statusText
+    const message = typeof detail === 'string' ? detail : JSON.stringify(detail)
     console.error(`[API] ${res.status} ${path}`, detail, err)
-    throw new Error(detail)
+    throw new Error(message)
   }
   return res.json()
 }
 
 export async function getDecks(params?: {
-  event_id?: number
+  event_id?: number | string
   event_ids?: string
   commander?: string
   deck_name?: string
@@ -144,8 +145,81 @@ export async function getDeckAnalysis(deckId: number): Promise<DeckAnalysis> {
   return fetchApi(`/decks/${deckId}/analysis`)
 }
 
-export async function getEvents(): Promise<{ events: Event[] }> {
+export interface EventWithOrigin extends Event {}
+
+export async function getEvents(): Promise<{ events: EventWithOrigin[] }> {
   return fetchApi('/events')
+}
+
+export async function getEvent(eventId: number | string): Promise<EventWithOrigin & { player_count?: number }> {
+  return fetchApi(`/events/${encodeURIComponent(String(eventId))}`)
+}
+
+export async function createEvent(body: {
+  event_name: string
+  date: string
+  format_id: string
+  player_count?: number
+  event_id?: number | string
+  store?: string
+  location?: string
+}): Promise<{ event_id: string; event_name: string; store: string; location: string; date: string; format_id: string; player_count: number }> {
+  return fetchApi('/events', { method: 'POST', body: JSON.stringify(body) })
+}
+
+export async function updateEvent(
+  eventId: number | string,
+  params: { event_name?: string; date?: string; format_id?: string; player_count?: number; store?: string; location?: string }
+): Promise<{ event_id: string; message: string }> {
+  const search = new URLSearchParams()
+  if (params.event_name != null) search.set('event_name', params.event_name)
+  if (params.date != null) search.set('date', params.date)
+  if (params.format_id != null) search.set('format_id', params.format_id)
+  if (params.player_count != null) search.set('player_count', String(params.player_count))
+  if (params.store != null) search.set('store', params.store)
+  if (params.location != null) search.set('location', params.location)
+  const q = search.toString()
+  return fetchApi(`/events/${encodeURIComponent(String(eventId))}${q ? `?${q}` : ''}`, { method: 'PUT' })
+}
+
+export async function deleteEvent(eventId: number | string): Promise<{ event_id: string; message: string }> {
+  return fetchApi(`/events/${encodeURIComponent(String(eventId))}`, { method: 'DELETE' })
+}
+
+export async function addDeckToEvent(
+  eventId: number | string
+): Promise<{ event_id: string; deck_id: number; message: string }> {
+  return fetchApi(`/events/${encodeURIComponent(String(eventId))}/decks/add`, { method: 'POST' })
+}
+
+export async function updateDeck(
+  deckId: number,
+  body: {
+    name?: string
+    player?: string
+    rank?: string
+    archetype?: string
+    event_id?: number | string
+    commanders?: string[]
+    mainboard?: { qty: number; card: string }[]
+    sideboard?: { qty: number; card: string }[]
+  }
+): Promise<{ deck_id: number; message: string }> {
+  return fetchApi(`/decks/${deckId}`, { method: 'PUT', body: JSON.stringify(body) })
+}
+
+export async function deleteDeck(deckId: number): Promise<{ deck_id: number; message: string }> {
+  return fetchApi(`/decks/${deckId}`, { method: 'DELETE' })
+}
+
+export async function importDeckFromMoxfield(url: string): Promise<{
+  commanders: string[]
+  mainboard: { qty: number; card: string }[]
+  sideboard: { qty: number; card: string }[]
+  name?: string | null
+  format?: string | null
+}> {
+  return fetchApi('/decks/import-moxfield', { method: 'POST', body: JSON.stringify({ url }) })
 }
 
 export async function getDateRange(): Promise<{ min_date: string | null; max_date: string | null; last_event_date: string | null }> {
@@ -161,7 +235,7 @@ export async function getMetagame(
   ignoreLands = false,
   dateFrom?: string | null,
   dateTo?: string | null,
-  eventId?: number | null,
+  eventId?: number | string | null,
   eventIds?: string | null
 ): Promise<MetagameReport> {
   const params = new URLSearchParams()

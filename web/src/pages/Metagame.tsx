@@ -66,10 +66,10 @@ export default function Metagame() {
   const [error, setError] = useState<string | null>(null)
   const [placementWeighted, setPlacementWeighted] = useState(false)
   const [ignoreLands, setIgnoreLands] = useState(false)
-  const [eventIds, setEventIds] = useState<number[]>(() => {
+  const [eventIds, setEventIds] = useState<(number | string)[]>(() => {
     const param = searchParams.get('event_ids') ?? searchParams.get('event_id')
     if (!param) return []
-    return param.split(',').map((s) => parseInt(s.trim(), 10)).filter((n) => !isNaN(n))
+    return param.split(',').map((s) => s.trim()).filter(Boolean)
   })
   const [topCardsPage, setTopCardsPage] = useState(0)
   const [cardMeta, setCardMeta] = useState<Record<string, CardLookupResult>>({})
@@ -85,7 +85,7 @@ export default function Metagame() {
   useEffect(() => {
     const param = searchParams.get('event_ids') ?? searchParams.get('event_id')
     if (!param) setEventIds([])
-    else setEventIds(param.split(',').map((s) => parseInt(s.trim(), 10)).filter((n) => !isNaN(n)))
+    else setEventIds(param.split(',').map((s) => s.trim()).filter(Boolean))
   }, [searchParams])
 
   useEffect(() => {
@@ -99,7 +99,7 @@ export default function Metagame() {
 
   useEffect(() => {
     setLoading(true)
-    const eventIdsParam = eventIds.length ? eventIds.join(',') : undefined
+    const eventIdsParam = eventIds.length ? eventIds.map(String).join(',') : undefined
     getMetagame(placementWeighted, ignoreLands, undefined, undefined, undefined, eventIdsParam)
       .then(setMetagame)
       .catch((e) => {
@@ -121,10 +121,10 @@ export default function Metagame() {
       .finally(() => setLoadingCardMeta(false))
   }, [metagame?.top_cards_main])
 
-  const setEventFilter = (ids: number[]) => {
+  const setEventFilter = (ids: (number | string)[]) => {
     setEventIds(ids)
     const p = new URLSearchParams(searchParams)
-    if (ids.length) p.set('event_ids', ids.join(','))
+    if (ids.length) p.set('event_ids', ids.map(String).join(','))
     else {
       p.delete('event_ids')
       p.delete('event_id')
@@ -165,7 +165,7 @@ export default function Metagame() {
             onClick={() => {
               setError(null)
               setLoading(true)
-              const eventIdsParam = eventIds.length ? eventIds.join(',') : undefined
+              const eventIdsParam = eventIds.length ? eventIds.map(String).join(',') : undefined
               getMetagame(placementWeighted, ignoreLands, undefined, undefined, undefined, eventIdsParam)
                 .then(setMetagame)
                 .catch((e) => {

@@ -3,6 +3,7 @@ import { useAuth } from '../contexts/AuthContext'
 
 const baseNavItems = [
   { path: '/', label: 'Dashboard' },
+  { path: '/events', label: 'Events' },
   { path: '/metagame', label: 'Metagame' },
   { path: '/archetypes', label: 'Archetypes' },
   { path: '/decks', label: 'Decks' },
@@ -26,16 +27,16 @@ export default function Navbar() {
         MTG Metagame
       </Link>
       <ul className="navbar-nav">
-        {navItems.map(({ path, label }) => (
-          <li key={path}>
-            <Link
-              to={path}
-              className={location.pathname === path ? 'nav-link active' : 'nav-link'}
-            >
-              {label}
-            </Link>
-          </li>
-        ))}
+        {navItems.map(({ path, label }) => {
+          const isActive = path === '/events' ? location.pathname.startsWith('/events') : location.pathname === path
+          return (
+            <li key={path}>
+              <Link to={path} className={isActive ? 'nav-link active' : 'nav-link'}>
+                {label}
+              </Link>
+            </li>
+          )
+        })}
         {user === 'admin' ? (
           <li>
             <button
