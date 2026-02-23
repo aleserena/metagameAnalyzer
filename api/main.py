@@ -6,8 +6,12 @@ import logging
 import os
 from pathlib import Path
 
-# Load .env from project root so DATABASE_URL (and others) are set before any config
-_env_path = Path(__file__).resolve().parent.parent / ".env"
+# Load .env from project root so DATABASE_URL (and others) are set before any config.
+# For dev: set DB_ENV=dev|staging|prod to load .env.dev, .env.staging, or .env.prod instead.
+_project_root_for_env = Path(__file__).resolve().parent.parent
+_db_env = os.getenv("DB_ENV", "").strip().lower()
+_env_name = f".env.{_db_env}" if _db_env in ("dev", "staging", "prod") else ".env"
+_env_path = _project_root_for_env / _env_name
 if _env_path.exists():
     try:
         from dotenv import load_dotenv
@@ -125,6 +129,7 @@ def require_admin(authorization: str | None = Header(None, alias="Authorization"
 _decks: list[dict] = []
 _metagame_cache: dict | None = None
 _player_aliases: dict[str, str] = {}  # alias -> canonical
+_scrape_cancel_event: threading.Event | None = None
 
 
 def _aliases_path() -> Path:
@@ -1486,6 +1491,8 @@ async def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
                 if eid is not None and str(eid).isdigit()
             }
 
+    global _scrape_cancel_event
+    _scrape_cancel_event = threading.Event()
     start_time = time.time()
     logger.info(
         "Scrape started: format=%s period=%s store=%s event_ids=%s ignore_existing=%s force_replace=%s db_available=%s skip_count=%s",
@@ -1509,6 +1516,7 @@ async def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
                 event_ids=scrape_event_ids,
                 on_progress=on_progress,
                 skip_event_ids=None if body.force_replace else skip_event_ids,
+                should_stop=lambda: _scrape_cancel_event.is_set() if _scrape_cancel_event else False,
             )
             result_holder.append(decks)
         except Exception as e:
@@ -1661,14 +1669,26 @@ async def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
                 )
             loaded = len(_decks)
             num_events = len(events_in_run)
+            cancelled = _scrape_cancel_event is not None and _scrape_cancel_event.is_set()
             message = f"Scraped {len(decks)} decks from {num_events} event{'s' if num_events != 1 else ''}"
-            yield f"data: {json.dumps({'type': 'done', 'message': message, 'loaded': loaded, 'pct': 100})}\n\n"
+            if cancelled:
+                message = f"Stopped. {message}"
+            yield f"data: {json.dumps({'type': 'cancelled' if cancelled else 'done', 'message': message, 'loaded': loaded, 'pct': 100})}\n\n"
         else:
             duration = time.time() - start_time
             logger.warning("Scrape ended with unknown error after %.1fs", duration)
             yield f"data: {json.dumps({'type': 'error', 'message': 'Unknown error'})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.post("/api/scrape/stop")
+def stop_scrape(_: str = Depends(require_admin)):
+    """Request the current scrape to stop. Takes effect after the next progress check."""
+    global _scrape_cancel_event
+    if _scrape_cancel_event is not None:
+        _scrape_cancel_event.set()
+    return {"message": "Stop requested"}
 
 
 # Serve built frontend (production); static dir is populated by Dockerfile

@@ -12,11 +12,20 @@ import sys
 sys.path.insert(0, str(_project_root))
 
 # Load .env so DATABASE_URL is set when running: alembic upgrade head
-_env_path = _project_root / ".env"
+# If DB_ENV=dev|staging|prod, load .env.dev / .env.staging / .env.prod (for scripts/run_alembic.py or DB_ENV=dev alembic ...)
+_db_env = os.getenv("DB_ENV", "").strip().lower()
+_env_name = f".env.{_db_env}" if _db_env in ("dev", "staging", "prod") else ".env"
+_env_path = _project_root / _env_name
 if _env_path.exists():
     try:
         from dotenv import load_dotenv
         load_dotenv(_env_path)
+    except ImportError:
+        pass
+elif _project_root.joinpath(".env").exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_project_root / ".env")
     except ImportError:
         pass
 

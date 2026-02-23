@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useBlocker } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { getToken } from '../contexts/AuthContext'
+import { stopScrape } from '../api'
 import { reportError } from '../utils'
 import { FORMATS, META_EDH } from '../config'
 
@@ -17,8 +18,10 @@ export default function Scrape() {
   const [loading, setLoading] = useState(false)
   const [progress, setProgress] = useState<string[]>([])
   const [pct, setPct] = useState(0)
+  const [errors, setErrors] = useState<string[]>([])
   const logRef = useRef<HTMLDivElement>(null)
   const blockerDialogRef = useRef<HTMLDivElement>(null)
+  const abortControllerRef = useRef<AbortController | null>(null)
 
   const blocker = useBlocker(loading)
 
@@ -43,11 +46,15 @@ export default function Scrape() {
     setLoading(true)
     setProgress([])
     setPct(0)
+    setErrors([])
+    abortControllerRef.current = new AbortController()
+    const signal = abortControllerRef.current.signal
 
     try {
       const token = getToken()
       const res = await fetch('/api/scrape', {
         method: 'POST',
+        signal,
         headers: {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -63,7 +70,7 @@ export default function Scrape() {
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: res.statusText }))
-        throw new Error(err.detail || res.statusText)
+        throw new Error(typeof err.detail === 'string' ? err.detail : res.statusText)
       }
 
       const reader = res.body?.getReader()
@@ -90,8 +97,13 @@ export default function Scrape() {
             } else if (data.type === 'done') {
               toast.success(data.message)
               setPct(100)
+            } else if (data.type === 'cancelled') {
+              toast(data.message, { icon: '⏹' })
+              setPct(100)
             } else if (data.type === 'error') {
-              toast.error(reportError(data.message))
+              const errMsg = typeof data.message === 'string' ? data.message : reportError(data.message)
+              setErrors((prev) => [...prev, errMsg])
+              toast.error(errMsg)
             }
           } catch {
             // ignore malformed lines
@@ -99,7 +111,11 @@ export default function Scrape() {
         }
       }
     } catch (e) {
-      toast.error(reportError(e))
+      if (!(e instanceof Error && e.name === 'AbortError')) {
+        const errMsg = reportError(e)
+        setErrors((prev) => [...prev, errMsg])
+        toast.error(errMsg)
+      }
     } finally {
       setLoading(false)
     }
@@ -164,9 +180,24 @@ export default function Scrape() {
             Re-scrape and refresh MTGTop8 events; manual decks attached to those events are kept.
           </span>
         </div>
-        <button className="btn" onClick={handleScrape} disabled={loading}>
-          {loading ? 'Scraping...' : 'Run Scrape'}
-        </button>
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <button className="btn" onClick={handleScrape} disabled={loading}>
+            {loading ? 'Scraping...' : 'Run Scrape'}
+          </button>
+          {loading && (
+            <button
+              type="button"
+              className="btn"
+              style={{ background: 'var(--danger, #e53e3e)' }}
+              onClick={() => {
+                stopScrape().catch(() => {})
+                abortControllerRef.current?.abort()
+              }}
+            >
+              Stop
+            </button>
+          )}
+        </div>
 
         {loading && (
           <div style={{ marginTop: '1rem' }}>
@@ -207,6 +238,27 @@ export default function Scrape() {
           {progress.map((p, i) => (
             <div key={i} style={{ padding: '0.1rem 0', color: 'var(--text-muted)' }}>{p}</div>
           ))}
+        </div>
+      )}
+
+      {errors.length > 0 && (
+        <div
+          style={{
+            marginTop: '1rem',
+            padding: '0.75rem 1rem',
+            background: 'rgba(229, 62, 62, 0.1)',
+            border: '1px solid var(--danger, #e53e3e)',
+            borderRadius: 8,
+            fontSize: '0.875rem',
+          }}
+          role="alert"
+        >
+          <strong style={{ display: 'block', marginBottom: '0.5rem' }}>Errors</strong>
+          <ul style={{ margin: 0, paddingLeft: '1.25rem' }}>
+            {errors.map((err, i) => (
+              <li key={i} style={{ marginBottom: '0.25rem', wordBreak: 'break-word' }}>{err}</li>
+            ))}
+          </ul>
         </div>
       )}
 

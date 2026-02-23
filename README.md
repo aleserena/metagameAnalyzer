@@ -98,6 +98,33 @@ With a PostgreSQL database (e.g. on [Railway](https://railway.app)), the API per
 
 If you use the Railway DB from your machine, avoid destructive operations (e.g. “Clear decks”) unless you mean to change that shared database.
 
+#### Development: dev / staging / prod databases
+
+To switch between dev, staging, and prod DBs without editing `.env` each time:
+
+1. **Create one env file per target** in the project root (do not commit; they're in `.gitignore`):
+   - `.env.dev` — local or dev DB
+   - `.env.staging` — staging DB
+   - `.env.prod` — production DB  
+   Each file has the same format as `.env` (e.g. `DATABASE_URL=...`, `ADMIN_PASSWORD=...`). Copy from `.env.example` if needed.
+
+2. **Run the API against a given env:**
+   ```bash
+   python scripts/run_api.py dev      # uses .env.dev
+   python scripts/run_api.py staging  # uses .env.staging
+   python scripts/run_api.py prod     # uses .env.prod
+   ```
+   Extra args are passed to uvicorn (e.g. `python scripts/run_api.py dev --reload`).
+
+3. **Run Alembic against a given env:**
+   ```bash
+   python scripts/run_alembic.py dev upgrade head
+   python scripts/run_alembic.py staging current
+   python scripts/run_alembic.py prod revision --autogenerate -m "add column"
+   ```
+
+You can also set `DB_ENV=dev` (or `staging` / `prod`) and run `alembic` or `uvicorn` as usual; the app and Alembic will load `.env.dev` (or `.env.staging` / `.env.prod`) when `DB_ENV` is set.
+
 ### Player aliases (merge duplicate names)
 
 If the same player appears under different names (e.g. "Tomas Pesci" and "Pablo Tomas Pesci"), an admin can merge them in **Settings → Player aliases**: add mappings (alias → canonical). On the Player detail page, similar names are suggested with a "Merge into X" button (merge requires admin login). Aliases are stored in `player_aliases.json` (in `DATA_DIR`). Merged players share stats and deck lists.

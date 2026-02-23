@@ -392,3 +392,7 @@ export async function runScrape(params: {
     body: JSON.stringify(params),
   })
 }
+
+export async function stopScrape(): Promise<{ message: string }> {
+  return fetchApi('/scrape/stop', { method: 'POST' })
+}

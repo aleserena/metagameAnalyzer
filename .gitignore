@@ -27,6 +27,9 @@ node_modules/
 .env
 .env.local
 .env.*.local
+.env.dev
+.env.staging
+.env.prod
 
 # IDE / OS
 .idea/

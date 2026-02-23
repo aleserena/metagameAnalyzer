@@ -331,6 +331,7 @@ def scrape(
     event_ids: list[int] | None = None,
     on_progress: Callable[[str], None] | None = None,
     skip_event_ids: set[int] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> list[Deck]:
     """
     Scrape decks from MTGTop8.
@@ -343,6 +344,7 @@ def scrape(
         event_ids: If set, scrape only these event IDs (skip format page)
         on_progress: Optional callback for progress messages
         skip_event_ids: If set, events whose event_id is in this set are not scraped at all.
+        should_stop: Optional callable; if it returns True, scraping stops and current decks are returned.
     """
     session = requests.Session()
     session.trust_env = False
@@ -351,6 +353,11 @@ def scrape(
     meta_val = meta
     if meta_val is None and period:
         meta_val = get_meta_value(format_id, period)
+        if meta_val is None:
+            raise ValueError(
+                f"Unknown period {period!r} for format {format_id}. "
+                "Check that the period is supported for this format."
+            )
     if meta_val is None:
         meta_val = DEFAULT_META.get("Last 2 Weeks", 115)
 
@@ -372,6 +379,14 @@ def scrape(
         )
         if on_progress:
             on_progress(f"Found {len(events)} events")
+        if len(events) == 0:
+            raise ValueError(
+                "No events found for this format and period. "
+                "The site may return no results for this combination, or the period meta value may have changed on MTGTop8."
+            )
+
+    if should_stop and should_stop():
+        return []
 
     def _normalize_deck(deck: Deck, ev: Event) -> Deck:
         display_name = event_display_name(ev.name, ev.store, ev.location)
@@ -400,6 +415,8 @@ def scrape(
 
     decks: list[Deck] = []
     for i, ev in enumerate(events, 1):
+        if should_stop and should_stop():
+            break
         label = ev.name or f"event {ev.event_id}"
         if on_progress:
             on_progress(f"[{i}/{len(events)}] Fetching decks from {label}...")
@@ -408,6 +425,8 @@ def scrape(
             on_progress(f"  Found {len(deck_ids)} decks")
         if SCRAPER_MAX_WORKERS <= 1:
             for j, did in enumerate(deck_ids, 1):
+                if should_stop and should_stop():
+                    break
                 if on_progress:
                     on_progress(f"  Parsing deck {j}/{len(deck_ids)} (id={did})...")
                 deck = scrape_deck_robust(ev.event_id, did, format_id, session)
@@ -422,6 +441,8 @@ def scrape(
                     for did in deck_ids
                 ]
                 for j, (future, did) in enumerate(zip(futures, deck_ids), 1):
+                    if should_stop and should_stop():
+                        break
                     if on_progress:
                         on_progress(f"  Parsing deck {j}/{len(deck_ids)} (id={did})...")
                     try:
