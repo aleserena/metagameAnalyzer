@@ -192,6 +192,79 @@ export async function addDeckToEvent(
   return fetchApi(`/events/${encodeURIComponent(String(eventId))}/decks/add`, { method: 'POST' })
 }
 
+export async function createEventUploadLinks(
+  eventId: number | string,
+  options?: { count?: number; expires_in_days?: number; deck_id?: number }
+): Promise<{
+  links: Array<{ token: string; url: string; expires_at: string | null; deck_id?: number }>
+}> {
+  return fetchApi(`/events/${encodeURIComponent(String(eventId))}/upload-links`, {
+    method: 'POST',
+    body: JSON.stringify({
+      count: options?.deck_id != null ? undefined : (options?.count ?? 1),
+      expires_in_days: options?.expires_in_days ?? undefined,
+      deck_id: options?.deck_id ?? undefined,
+    }),
+  })
+}
+
+/** Public API (no auth) for upload link pages. */
+async function fetchApiPublic<T>(path: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options?.headers,
+    },
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    const detail = err.detail ?? res.statusText
+    const message = typeof detail === 'string' ? detail : JSON.stringify(detail)
+    throw new Error(message)
+  }
+  return res.json()
+}
+
+export type UploadLinkDeck = {
+  deck_id: number
+  name: string
+  player: string
+  rank: string
+  mainboard: { qty: number; card: string }[]
+  sideboard: { qty: number; card: string }[]
+  commanders: string[]
+}
+
+export async function getUploadLinkInfo(token: string): Promise<{
+  event_id: string
+  event_name: string
+  format_id: string
+  date: string
+  mode: 'create' | 'update'
+  deck_id?: number
+  deck?: UploadLinkDeck | null
+}> {
+  return fetchApiPublic(`/upload/${encodeURIComponent(token)}`)
+}
+
+export async function submitDeckWithUploadLink(
+  token: string,
+  body: {
+    player: string
+    name: string
+    rank?: string
+    mainboard: { qty: number; card: string }[]
+    sideboard: { qty: number; card: string }[]
+    commanders?: string[]
+  }
+): Promise<{ deck_id: number; message: string }> {
+  return fetchApiPublic(`/upload/${encodeURIComponent(token)}`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
 export async function updateDeck(
   deckId: number,
   body: {
@@ -334,6 +407,25 @@ export async function clearDecks(): Promise<{ message: string }> {
   return fetchApi('/settings/clear-decks', { method: 'POST' })
 }
 
+export type UploadLinkRow = {
+  token: string
+  event_id: string
+  deck_id: number | null
+  created_at: string | null
+  used_at: string | null
+  expires_at: string | null
+  label: string | null
+}
+
+export async function getUploadLinks(): Promise<{ links: UploadLinkRow[] }> {
+  return fetchApi('/settings/upload-links')
+}
+
+export async function clearUploadLinks(usedOnly: boolean): Promise<{ deleted: number; message: string }> {
+  const params = usedOnly ? '?used_only=true' : ''
+  return fetchApi(`/settings/upload-links${params}`, { method: 'DELETE' })
+}
+
 export async function getSimilarPlayers(name: string, limit = 10): Promise<{ similar: string[] }> {
   return fetchApi(`/players/similar?name=${encodeURIComponent(name)}&limit=${limit}`)
 }
@@ -391,4 +483,8 @@ export async function runScrape(params: {
     method: 'POST',
     body: JSON.stringify(params),
   })
+}
+
+export async function stopScrape(): Promise<{ message: string }> {
+  return fetchApi('/scrape/stop', { method: 'POST' })
 }

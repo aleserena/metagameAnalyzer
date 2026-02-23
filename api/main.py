@@ -4,10 +4,16 @@ import hashlib
 import json
 import logging
 import os
+import secrets
+from datetime import datetime, timedelta
 from pathlib import Path
 
-# Load .env from project root so DATABASE_URL (and others) are set before any config
-_env_path = Path(__file__).resolve().parent.parent / ".env"
+# Load .env from project root so DATABASE_URL (and others) are set before any config.
+# For dev: set DB_ENV=dev|staging|prod to load .env.dev, .env.staging, or .env.prod instead.
+_project_root_for_env = Path(__file__).resolve().parent.parent
+_db_env = os.getenv("DB_ENV", "").strip().lower()
+_env_name = f".env.{_db_env}" if _db_env in ("dev", "staging", "prod") else ".env"
+_env_path = _project_root_for_env / _env_name
 if _env_path.exists():
     try:
         from dotenv import load_dotenv
@@ -33,7 +39,7 @@ def _normalize_search(s: str) -> str:
     nfd = unicodedata.normalize("NFD", s.lower())
     return "".join(c for c in nfd if unicodedata.category(c) != "Mn")
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -125,6 +131,7 @@ def require_admin(authorization: str | None = Header(None, alias="Authorization"
 _decks: list[dict] = []
 _metagame_cache: dict | None = None
 _player_aliases: dict[str, str] = {}  # alias -> canonical
+_scrape_cancel_event: threading.Event | None = None
 
 
 def _aliases_path() -> Path:
@@ -222,6 +229,18 @@ def _get_decks() -> list[Deck]:
 def _invalidate_metagame() -> None:
     global _metagame_cache
     _metagame_cache = None
+
+
+def _normalize_card_name(card: str) -> str:
+    """Strip set codes and foiling markers; keep only card name. e.g. 'Ashling (ECC) 1 *F*' -> 'Ashling'."""
+    if not card or not isinstance(card, str):
+        return (card or "").strip()
+    s = card.strip()
+    # Trailing *F* *C* etc (foil/etched indicators)
+    s = re.sub(r"\s*\*\w*\*(\s*\*\w*\*)*\s*$", "", s).strip()
+    # Trailing (SET) or (SET) 123
+    s = re.sub(r"\s*\([A-Za-z0-9]{2,5}\)\s*\d*\s*$", "", s, flags=re.IGNORECASE).strip()
+    return s
 
 
 def _normalize_split_cards(decks: list[dict]) -> list[dict]:
@@ -880,6 +899,231 @@ def add_blank_deck_to_event(event_id: str):
     return {"event_id": event_id, "deck_id": deck_id, "message": "Deck added"}
 
 
+# --- One-time upload links (admin create; public submit) ---
+
+class CreateUploadLinksBody(BaseModel):
+    count: int = 1
+    expires_in_days: int | None = None
+    deck_id: int | None = None  # when set, create one link for updating this deck (one-time)
+
+
+class SubmitDeckBody(BaseModel):
+    player: str = ""
+    name: str = ""
+    rank: str = ""
+    mainboard: list[dict] = []  # [{"qty": int, "card": str}, ...]
+    sideboard: list[dict] = []
+    commanders: list[str] | None = None
+
+
+def _upload_link_base_url(request: Request) -> str:
+    """Base URL for upload links (e.g. https://app.example.com)."""
+    base = os.getenv("PUBLIC_APP_URL", "").strip()
+    if base:
+        return base.rstrip("/")
+    return str(request.base_url).rstrip("/")
+
+
+@app.post("/api/events/{event_id}/upload-links", dependencies=[Depends(require_admin)])
+def create_upload_links(event_id: str, request: Request, body: CreateUploadLinksBody | None = None):
+    """Create one or more one-time upload links for an event (admin-only). Pass deck_id to create a link that updates that deck."""
+    if not _database_available():
+        raise HTTPException(status_code=503, detail="Database not configured")
+    body = body or CreateUploadLinksBody()
+    expires_at = None
+    if body.expires_in_days is not None and body.expires_in_days > 0:
+        expires_at = datetime.utcnow() + timedelta(days=body.expires_in_days)
+    with _db.session_scope() as session:
+        ev = _db.get_event(session, event_id)
+        if not ev:
+            raise HTTPException(status_code=404, detail="Event not found")
+        base_url = _upload_link_base_url(request)
+        links = []
+        if body.deck_id is not None:
+            # One-time link to update an existing deck
+            deck_row = session.query(_db.DeckRow).filter(
+                _db.DeckRow.deck_id == body.deck_id,
+                _db.DeckRow.event_id == _db._event_id_str(event_id),
+            ).first()
+            if not deck_row:
+                raise HTTPException(status_code=404, detail="Deck not found in this event")
+            token = secrets.token_urlsafe(32)
+            _db.create_upload_link(session, token, event_id, expires_at=expires_at, deck_id=body.deck_id)
+            links.append({
+                "token": token,
+                "url": f"{base_url}/upload/{token}",
+                "expires_at": expires_at.isoformat() if expires_at else None,
+                "deck_id": body.deck_id,
+            })
+        else:
+            count = max(1, min(body.count, 50))
+            for _ in range(count):
+                token = secrets.token_urlsafe(32)
+                _db.create_upload_link(session, token, event_id, expires_at=expires_at)
+                links.append({
+                    "token": token,
+                    "url": f"{base_url}/upload/{token}",
+                    "expires_at": expires_at.isoformat() if expires_at else None,
+                })
+        return {"links": links}
+
+
+@app.get("/api/upload/{token}")
+def get_upload_link_info(token: str):
+    """Return event info for a valid one-time upload link (public). For update links, also return current deck."""
+    if not _database_available():
+        raise HTTPException(status_code=503, detail="Database not configured")
+    with _db.session_scope() as session:
+        row = _db.get_upload_link(session, token)
+        if not row:
+            raise HTTPException(status_code=404, detail="Link not found or invalid")
+        if row.used_at is not None:
+            raise HTTPException(status_code=404, detail="Link already used")
+        if row.expires_at is not None and row.expires_at < datetime.utcnow():
+            raise HTTPException(status_code=404, detail="Link expired")
+        ev = _db.get_event(session, row.event_id)
+        if not ev:
+            raise HTTPException(status_code=404, detail="Event not found")
+        event_name = event_display_name(ev.name, ev.store or "", ev.location or "")
+        out = {
+            "event_id": row.event_id,
+            "event_name": event_name,
+            "format_id": ev.format_id or "",
+            "date": ev.date or "",
+            "mode": "update" if getattr(row, "deck_id", None) else "create",
+        }
+        if getattr(row, "deck_id", None) is not None:
+            deck = next((d for d in _decks if d.get("deck_id") == row.deck_id), None)
+            if deck:
+                out["deck_id"] = deck["deck_id"]
+                out["deck"] = {
+                    "deck_id": deck["deck_id"],
+                    "name": deck.get("name", ""),
+                    "player": deck.get("player", ""),
+                    "rank": deck.get("rank", ""),
+                    "mainboard": deck.get("mainboard", []),
+                    "sideboard": deck.get("sideboard", []),
+                    "commanders": deck.get("commanders", []),
+                }
+            else:
+                out["deck_id"] = row.deck_id
+                out["deck"] = None
+        return out
+
+
+def _validate_deck_payload(body: SubmitDeckBody) -> None:
+    """Raise HTTPException if payload is invalid."""
+    if not (body.player or "").strip():
+        raise HTTPException(status_code=400, detail="player is required")
+    if not (body.name or "").strip():
+        raise HTTPException(status_code=400, detail="name is required")
+    main = body.mainboard or []
+    side = body.sideboard or []
+    if len(main) > 500:
+        raise HTTPException(status_code=400, detail="mainboard has too many entries (max 500)")
+    if len(side) > 100:
+        raise HTTPException(status_code=400, detail="sideboard has too many entries (max 100)")
+    if not main:
+        raise HTTPException(status_code=400, detail="mainboard is required and must not be empty")
+    for card in main:
+        if not isinstance(card, dict) or "card" not in card:
+            raise HTTPException(status_code=400, detail="mainboard entries must be { qty, card }")
+    if not any(str(c.get("card", "")).strip() for c in main):
+        raise HTTPException(status_code=400, detail="mainboard must have at least one non-empty card")
+    for card in side:
+        if not isinstance(card, dict) or "card" not in card:
+            raise HTTPException(status_code=400, detail="sideboard entries must be { qty, card }")
+
+
+def _submit_create_with_upload_link(session, row, ev, event_name: str, body: SubmitDeckBody):
+    """Create a new deck via upload link. Returns (deck_id, status_code)."""
+    deck_id = _db.next_manual_deck_id(session)
+    commanders = body.commanders if body.commanders is not None else []
+    if not isinstance(commanders, list):
+        commanders = []
+    mainboard = [{"qty": int(c.get("qty", 1)), "card": _normalize_card_name(str(c.get("card", "")))} for c in (body.mainboard or []) if _normalize_card_name(str(c.get("card", "")))]
+    sideboard = [{"qty": int(c.get("qty", 1)), "card": _normalize_card_name(str(c.get("card", "")))} for c in (body.sideboard or []) if _normalize_card_name(str(c.get("card", "")))]
+    commanders = [_normalize_card_name(c) for c in commanders if _normalize_card_name(c)]
+    format_id = (ev.format_id or "").upper()
+    if format_id == "EDH" and not commanders and mainboard:
+        commanders = [mainboard[0]["card"]]
+    deck = {
+        "deck_id": deck_id,
+        "event_id": row.event_id,
+        "event_name": event_name,
+        "date": ev.date or "",
+        "format_id": ev.format_id or "",
+        "name": (body.name or "").strip(),
+        "player": (body.player or "").strip(),
+        "rank": (body.rank or "").strip(),
+        "player_count": 0,
+        "commanders": commanders,
+        "mainboard": mainboard,
+        "sideboard": sideboard,
+    }
+    deck_list = _normalize_split_cards([deck])
+    _db.upsert_deck(session, deck_list[0], origin=_db.ORIGIN_MANUAL)
+    return deck_id
+
+
+@app.post("/api/upload/{token}")
+def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
+    """Submit or update a deck using a one-time upload link (public). Update links modify the linked deck."""
+    if not _database_available():
+        raise HTTPException(status_code=503, detail="Database not configured")
+    _validate_deck_payload(body)
+    with _db.session_scope() as session:
+        row = _db.get_upload_link(session, token)
+        if not row:
+            raise HTTPException(status_code=400, detail="Link not found or invalid")
+        if row.used_at is not None:
+            raise HTTPException(status_code=400, detail="Link already used")
+        if row.expires_at is not None and row.expires_at < datetime.utcnow():
+            raise HTTPException(status_code=400, detail="Link expired")
+        ev = _db.get_event(session, row.event_id)
+        if not ev:
+            raise HTTPException(status_code=400, detail="Event not found")
+        event_name = event_display_name(ev.name, ev.store or "", ev.location or "")
+
+        deck_id = getattr(row, "deck_id", None)
+        if deck_id is not None:
+            # Update existing deck
+            current = next((d for d in _decks if d.get("deck_id") == deck_id), None)
+            if not current:
+                raise HTTPException(status_code=400, detail="Deck not found")
+            current = dict(current)
+            commanders = body.commanders if body.commanders is not None else []
+            if not isinstance(commanders, list):
+                commanders = []
+            mainboard = [{"qty": int(c.get("qty", 1)), "card": _normalize_card_name(str(c.get("card", "")))} for c in (body.mainboard or []) if _normalize_card_name(str(c.get("card", "")))]
+            sideboard = [{"qty": int(c.get("qty", 1)), "card": _normalize_card_name(str(c.get("card", "")))} for c in (body.sideboard or []) if _normalize_card_name(str(c.get("card", "")))]
+            commanders = [_normalize_card_name(c) for c in commanders if _normalize_card_name(c)]
+            format_id = (current.get("format_id") or "").upper()
+            if format_id == "EDH" and not commanders and mainboard:
+                commanders = [mainboard[0]["card"]]
+            current["name"] = (body.name or "").strip()
+            current["player"] = (body.player or "").strip()
+            current["rank"] = (body.rank or "").strip()
+            current["mainboard"] = mainboard
+            current["sideboard"] = sideboard
+            current["commanders"] = commanders
+            deck_list = _normalize_split_cards([current])
+            _db.upsert_deck(session, deck_list[0], origin=current.get("origin", _db.ORIGIN_MANUAL))
+            _db.mark_upload_link_used(session, token)
+            _load_decks_from_db()
+            return {"deck_id": deck_id, "message": "Deck updated successfully"}
+        else:
+            # Create new deck
+            deck_id = _submit_create_with_upload_link(session, row, ev, event_name, body)
+            _db.mark_upload_link_used(session, token)
+            _load_decks_from_db()
+            return Response(
+                content=json.dumps({"deck_id": deck_id, "message": "Deck submitted successfully"}),
+                status_code=201,
+                media_type="application/json",
+            )
+
+
 class DeckCardUpdate(BaseModel):
     qty: int = 1
     card: str = ""
@@ -929,11 +1173,14 @@ def update_deck_endpoint(deck_id: int, body: UpdateDeckBody):
             current["date"] = ev.date
             current["format_id"] = ev.format_id
     if body.commanders is not None:
-        current["commanders"] = [c.strip() for c in body.commanders if c and str(c).strip()]
+        current["commanders"] = [_normalize_card_name(c) for c in body.commanders if c and str(c).strip()]
     if body.mainboard is not None:
-        current["mainboard"] = [{"qty": c.qty, "card": (c.card or "").strip()} for c in body.mainboard if (c.card or "").strip()]
+        current["mainboard"] = [{"qty": c.qty, "card": _normalize_card_name(c.card or "")} for c in body.mainboard if _normalize_card_name(c.card or "")]
     if body.sideboard is not None:
-        current["sideboard"] = [{"qty": c.qty, "card": (c.card or "").strip()} for c in body.sideboard if (c.card or "").strip()]
+        current["sideboard"] = [{"qty": c.qty, "card": _normalize_card_name(c.card or "")} for c in body.sideboard if _normalize_card_name(c.card or "")]
+    # EDH: if no commander present, use first mainboard card as commander
+    if (current.get("format_id") or "").upper() == "EDH" and not current.get("commanders") and current.get("mainboard"):
+        current["commanders"] = [current["mainboard"][0]["card"]]
     try:
         with _db.session_scope() as session:
             _db.upsert_deck(session, current, origin=current.get("origin", _db.ORIGIN_MTGTOP8))
@@ -1227,6 +1474,29 @@ def post_clear_decks(_: str = Depends(require_admin)):
     return {"message": "Decks cleared"}
 
 
+@app.get("/api/settings/upload-links")
+def get_settings_upload_links(_: str = Depends(require_admin)):
+    """List all one-time upload links (admin-only). Requires database."""
+    if not _database_available():
+        raise HTTPException(status_code=503, detail="Database not configured")
+    with _db.session_scope() as session:
+        links = _db.get_all_upload_links(session)
+    return {"links": links}
+
+
+@app.delete("/api/settings/upload-links")
+def delete_settings_upload_links(
+    used_only: bool = Query(False, description="If true, only delete links that have been used"),
+    _: str = Depends(require_admin),
+):
+    """Clear one-time upload links (admin-only). used_only=true clears only used links. Requires database."""
+    if not _database_available():
+        raise HTTPException(status_code=503, detail="Database not configured")
+    with _db.session_scope() as session:
+        deleted = _db.delete_all_upload_links(session, used_only=used_only)
+    return {"deleted": deleted, "message": f"Cleared {deleted} link(s)"}
+
+
 @app.get("/api/player-aliases")
 def get_player_aliases():
     """List player alias mappings (alias -> canonical)."""
@@ -1486,6 +1756,8 @@ async def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
                 if eid is not None and str(eid).isdigit()
             }
 
+    global _scrape_cancel_event
+    _scrape_cancel_event = threading.Event()
     start_time = time.time()
     logger.info(
         "Scrape started: format=%s period=%s store=%s event_ids=%s ignore_existing=%s force_replace=%s db_available=%s skip_count=%s",
@@ -1509,6 +1781,7 @@ async def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
                 event_ids=scrape_event_ids,
                 on_progress=on_progress,
                 skip_event_ids=None if body.force_replace else skip_event_ids,
+                should_stop=lambda: _scrape_cancel_event.is_set() if _scrape_cancel_event else False,
             )
             result_holder.append(decks)
         except Exception as e:
@@ -1661,14 +1934,26 @@ async def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
                 )
             loaded = len(_decks)
             num_events = len(events_in_run)
+            cancelled = _scrape_cancel_event is not None and _scrape_cancel_event.is_set()
             message = f"Scraped {len(decks)} decks from {num_events} event{'s' if num_events != 1 else ''}"
-            yield f"data: {json.dumps({'type': 'done', 'message': message, 'loaded': loaded, 'pct': 100})}\n\n"
+            if cancelled:
+                message = f"Stopped. {message}"
+            yield f"data: {json.dumps({'type': 'cancelled' if cancelled else 'done', 'message': message, 'loaded': loaded, 'pct': 100})}\n\n"
         else:
             duration = time.time() - start_time
             logger.warning("Scrape ended with unknown error after %.1fs", duration)
             yield f"data: {json.dumps({'type': 'error', 'message': 'Unknown error'})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.post("/api/scrape/stop")
+def stop_scrape(_: str = Depends(require_admin)):
+    """Request the current scrape to stop. Takes effect after the next progress check."""
+    global _scrape_cancel_event
+    if _scrape_cancel_event is not None:
+        _scrape_cancel_event.set()
+    return {"message": "Stop requested"}
 
 
 # Serve built frontend (production); static dir is populated by Dockerfile

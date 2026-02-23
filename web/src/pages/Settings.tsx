@@ -11,7 +11,10 @@ import {
   putRankWeights,
   clearScryfallCache,
   clearDecks,
+  getUploadLinks,
+  clearUploadLinks,
 } from '../api'
+import type { UploadLinkRow } from '../api'
 import { reportError } from '../utils'
 
 const RANK_KEYS = ['1', '2', '3-4', '5-8', '9-16', '17-32'] as const
@@ -37,6 +40,9 @@ export default function Settings() {
   const [savingRankWeights, setSavingRankWeights] = useState(false)
   const [clearingCache, setClearingCache] = useState(false)
   const [clearingDecks, setClearingDecks] = useState(false)
+  const [uploadLinks, setUploadLinks] = useState<UploadLinkRow[]>([])
+  const [loadingUploadLinks, setLoadingUploadLinks] = useState(true)
+  const [clearingLinks, setClearingLinks] = useState<'used' | 'all' | null>(null)
 
   useEffect(() => {
     getPlayerAliases()
@@ -57,6 +63,18 @@ export default function Settings() {
       .then((r) => setRankWeights({ ...DEFAULT_RANK_WEIGHTS, ...r.weights }))
       .catch((e) => toast.error(reportError(e)))
       .finally(() => setLoadingRankWeights(false))
+  }, [])
+
+  const loadUploadLinks = () => {
+    setLoadingUploadLinks(true)
+    getUploadLinks()
+      .then((r) => setUploadLinks(r.links))
+      .catch((e) => toast.error(reportError(e)))
+      .finally(() => setLoadingUploadLinks(false))
+  }
+
+  useEffect(() => {
+    loadUploadLinks()
   }, [])
 
   const handleAddAlias = () => {
@@ -139,6 +157,21 @@ export default function Settings() {
       .then(() => toast.success('Decks cleared'))
       .catch((e) => toast.error(reportError(e)))
       .finally(() => setClearingDecks(false))
+  }
+
+  const handleClearUploadLinks = (usedOnly: boolean) => {
+    const msg = usedOnly
+      ? 'Clear all used one-time links? Unused links will remain.'
+      : 'Clear all one-time upload links? This cannot be undone.'
+    if (!window.confirm(msg)) return
+    setClearingLinks(usedOnly ? 'used' : 'all')
+    clearUploadLinks(usedOnly)
+      .then((r) => {
+        toast.success(r.message)
+        loadUploadLinks()
+      })
+      .catch((e) => toast.error(reportError(e)))
+      .finally(() => setClearingLinks(null))
   }
 
   return (
@@ -281,6 +314,88 @@ export default function Settings() {
             {clearingDecks ? 'Clearing...' : 'Clear decks.json'}
           </button>
         </div>
+      </div>
+
+      <div className="chart-container" style={{ maxWidth: 800, marginBottom: '2rem' }}>
+        <h2 style={{ margin: '0 0 1rem', fontSize: '1.25rem' }}>One-time upload links</h2>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1rem' }}>
+          View and clear one-time links for deck upload or update. Used links cannot be used again; clearing them only removes them from this list.
+        </p>
+        {loadingUploadLinks ? (
+          <p style={{ color: 'var(--text-muted)' }}>Loading...</p>
+        ) : (
+          <>
+            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+              <button
+                type="button"
+                className="btn"
+                style={{ padding: '0.35rem 0.75rem' }}
+                onClick={() => handleClearUploadLinks(true)}
+                disabled={clearingLinks !== null || uploadLinks.filter((l) => l.used_at).length === 0}
+              >
+                {clearingLinks === 'used' ? 'Clearing...' : 'Clear used only'}
+              </button>
+              <button
+                type="button"
+                className="btn"
+                style={{ padding: '0.35rem 0.75rem' }}
+                onClick={() => handleClearUploadLinks(false)}
+                disabled={clearingLinks !== null || uploadLinks.length === 0}
+              >
+                {clearingLinks === 'all' ? 'Clearing...' : 'Clear all'}
+              </button>
+              <button
+                type="button"
+                className="btn"
+                style={{ padding: '0.35rem 0.75rem' }}
+                onClick={loadUploadLinks}
+                disabled={loadingUploadLinks}
+              >
+                Refresh
+              </button>
+            </div>
+            {uploadLinks.length === 0 ? (
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>No one-time links.</p>
+            ) : (
+              <div className="table-wrap" style={{ maxHeight: 360, overflow: 'auto' }}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th scope="col">Event</th>
+                      <th scope="col">Type</th>
+                      <th scope="col">Created</th>
+                      <th scope="col">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {uploadLinks.map((l) => (
+                      <tr key={l.token}>
+                        <td>
+                          <Link to={`/events/${l.event_id}`} style={{ color: 'var(--accent)' }}>
+                            {l.event_id}
+                          </Link>
+                        </td>
+                        <td>{l.deck_id != null ? `Update deck ${l.deck_id}` : 'Create'}</td>
+                        <td style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+                          {l.created_at ? new Date(l.created_at).toLocaleString() : '—'}
+                        </td>
+                        <td>
+                          {l.used_at ? (
+                            <span style={{ color: 'var(--text-muted)' }}>Used</span>
+                          ) : l.expires_at && new Date(l.expires_at) < new Date() ? (
+                            <span style={{ color: 'var(--text-muted)' }}>Expired</span>
+                          ) : (
+                            <span style={{ color: 'var(--success, green)' }}>Active</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       <div className="chart-container" style={{ maxWidth: 600 }}>
