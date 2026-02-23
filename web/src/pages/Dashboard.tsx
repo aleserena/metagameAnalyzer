@@ -140,21 +140,26 @@ export default function Dashboard() {
       </div>
 
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'stretch', gap: '1rem', marginBottom: '2rem' }}>
-        <div className="card-grid" style={{ flex: '1 1 auto', minWidth: 0, marginBottom: 0 }}>
-          <div className="stat-card">
+        <div className="card-grid dashboard-stat-grid" style={{ flex: '1 1 auto', minWidth: 0, marginBottom: 0 }}>
+          <Link to="/decks" className="stat-card" style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}>
             <div className="value">{summary.total_decks}</div>
             <div className="label">Total Decks</div>
-          </div>
+          </Link>
+          <Link to="/events" className="stat-card" style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}>
+            <div className="value">{events.length}</div>
+            <div className="label">Events</div>
+          </Link>
           <div className="stat-card">
             <div className="value">{summary.unique_commanders}</div>
             <div className="label">Unique Commanders</div>
           </div>
-          <div className="stat-card">
+          <Link to="/archetypes" className="stat-card" style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}>
             <div className="value">{summary.unique_archetypes}</div>
             <div className="label">Archetypes</div>
-          </div>
+          </Link>
         </div>
         <div
+          className="dashboard-events-filter"
           style={{
             display: 'flex',
             flexWrap: 'wrap',

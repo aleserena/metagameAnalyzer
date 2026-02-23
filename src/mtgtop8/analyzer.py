@@ -15,10 +15,41 @@ RANK_WEIGHTS: dict[str, float] = {
     "17-32": 0.5,
 }
 
+# Canonical rank bands; "top 8" = 1, 2, 3-4, 5-8
+TOP8_RANKS = ("1", "2", "3-4", "5-8")
+
+
+def normalize_rank(rank: str) -> str:
+    """Map rank to canonical band. E.g. '3', '4', '3-4' -> '3-4'; '5'..'8' -> '5-8'."""
+    r = (rank or "").strip()
+    if r in ("1", "2", "3-4", "5-8", "9-16", "17-32"):
+        return r
+    if not r.isdigit():
+        return ""
+    n = int(r)
+    if n == 1:
+        return "1"
+    if n == 2:
+        return "2"
+    if 3 <= n <= 4:
+        return "3-4"
+    if 5 <= n <= 8:
+        return "5-8"
+    if 9 <= n <= 16:
+        return "9-16"
+    if 17 <= n <= 32:
+        return "17-32"
+    return ""
+
+
+def is_top8(rank: str) -> bool:
+    """True if rank (after normalization) is top 8: 1, 2, 3-4, or 5-8."""
+    return normalize_rank(rank) in TOP8_RANKS
+
 
 def _get_weight(rank: str, rank_weights: dict[str, float] | None = None) -> float:
     weights = rank_weights if rank_weights is not None else RANK_WEIGHTS
-    return weights.get(rank, 1.0)
+    return weights.get(normalize_rank(rank), 1.0)
 
 
 def commander_distribution(
@@ -112,6 +143,7 @@ def top_cards_main(
     ignore_lands: bool = False,
     ignore_lands_cards: set[str] | None = None,
     rank_weights: dict[str, float] | None = None,
+    include_basic_lands: bool = False,
 ) -> list[dict[str, Any]]:
     """Top cards in mainboard: play rate %, total copies."""
     deck_count = len(decks)
@@ -121,7 +153,7 @@ def top_cards_main(
     for d in decks:
         w = _get_weight(d.rank, rank_weights) if placement_weighted else 1.0
         for qty, card in d.mainboard:
-            if card in BASIC_LANDS:
+            if not include_basic_lands and card in BASIC_LANDS:
                 continue
             if _should_ignore_land(card, ignore_lands, ignore_lands_cards):
                 continue
@@ -188,14 +220,15 @@ def player_leaderboard(
             stats[player] = {"player": player, "wins": 0, "top2": 0, "top4": 0, "top8": 0, "points": 0.0, "deck_count": 0}
         s = stats[player]
         s["deck_count"] += 1
+        nr = normalize_rank(d.rank)
         s["points"] += _get_weight(d.rank, rank_weights)
-        if d.rank == "1":
+        if nr == "1":
             s["wins"] += 1
-        if d.rank in ("1", "2"):
+        if nr in ("1", "2"):
             s["top2"] += 1
-        if d.rank in ("1", "2", "3-4"):
+        if nr in ("1", "2", "3-4"):
             s["top4"] += 1
-        if d.rank in ("1", "2", "3-4", "5-8"):
+        if is_top8(d.rank):
             s["top8"] += 1
 
     return sorted(

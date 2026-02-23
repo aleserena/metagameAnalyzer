@@ -4,6 +4,7 @@ import toast from 'react-hot-toast'
 import { getDecks, getEvents, getDateRange, getDuplicateDecks } from '../api'
 import type { Deck, Event } from '../types'
 import EventSelector from '../components/EventSelector'
+import CardSearchInput from '../components/CardSearchInput'
 import { Skeleton, SkeletonTable } from '../components/Skeleton'
 import { reportError } from '../utils'
 
@@ -253,12 +254,11 @@ export default function Decks() {
           </div>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label htmlFor="decks-card">Card</label>
-            <input
+            <CardSearchInput
               id="decks-card"
-              type="text"
-              placeholder="Search by card..."
               value={localCard}
-              onChange={(e) => setLocalCard(e.target.value)}
+              onChange={setLocalCard}
+              placeholder="Search by card..."
               aria-label="Search by card"
             />
           </div>

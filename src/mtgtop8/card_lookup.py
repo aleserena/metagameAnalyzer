@@ -8,8 +8,10 @@ import requests
 
 SCRYFALL_COLLECTION = "https://api.scryfall.com/cards/collection"
 SCRYFALL_SEARCH = "https://api.scryfall.com/cards/search"
+SCRYFALL_AUTOCOMPLETE = "https://api.scryfall.com/cards/autocomplete"
 CACHE_FILE = Path(__file__).resolve().parent.parent.parent / ".scryfall_cache.json"
 REQUEST_DELAY = 0.1  # ~10 req/s rate limit
+AUTOCOMPLETE_MIN_LEN = 2
 
 # Alternate names that Scryfall may not match (e.g. Universes Within vs in-universe name).
 # Map: name-as-typed -> canonical name to look up.
@@ -219,3 +221,22 @@ def lookup_cards(card_names: list[str]) -> dict[str, dict]:
 
     _save_cache()
     return result
+
+
+def autocomplete_cards(prefix: str) -> list[str]:
+    """Return card names matching the given prefix (for typeahead). Uses Scryfall autocomplete API."""
+    q = (prefix or "").strip()
+    if len(q) < AUTOCOMPLETE_MIN_LEN:
+        return []
+    time.sleep(REQUEST_DELAY)
+    try:
+        r = requests.get(
+            SCRYFALL_AUTOCOMPLETE,
+            params={"q": q},
+            timeout=10,
+        )
+        r.raise_for_status()
+        data = r.json()
+        return data.get("data") or []
+    except Exception:
+        return []

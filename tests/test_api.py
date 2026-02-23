@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -175,3 +176,23 @@ def test_post_cards_lookup(client):
     # May return {} if no network, or Scryfall data if available
     data = r.json()
     assert isinstance(data, dict)
+
+
+def test_get_cards_search(client):
+    """GET /api/cards/search returns autocomplete results."""
+    with patch.object(api_main, "autocomplete_cards", return_value=["Atraxa, Praetors' Voice", "Atraxa, Grand Unifier"]):
+        r = client.get("/api/cards/search?q=Atra")
+    assert r.status_code == 200
+    data = r.json()
+    assert "data" in data
+    assert data["data"] == ["Atraxa, Praetors' Voice", "Atraxa, Grand Unifier"]
+
+
+def test_get_cards_search_short_query(client):
+    """GET /api/cards/search returns empty list for query shorter than min length."""
+    with patch.object(api_main, "autocomplete_cards", return_value=[]) as mock_autocomplete:
+        r = client.get("/api/cards/search?q=A")
+    assert r.status_code == 200
+    data = r.json()
+    assert data.get("data") == []
+    mock_autocomplete.assert_called_once_with("A")

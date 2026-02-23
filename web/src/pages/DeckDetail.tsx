@@ -6,15 +6,37 @@ import { getDeck, getMetagame, getDeckAnalysis, getDateRange, getSimilarDecks, u
 import { parseMoxfieldDeckList, formatMoxfieldDeckList } from '../lib/deckListParser'
 import { useAuth } from '../contexts/AuthContext'
 import type { Deck, MetagameReport, SimilarDeck } from '../types'
-import type { DeckAnalysis, CardMeta } from '../api'
+import type { DeckAnalysis, CardMeta, CardLookupResult } from '../api'
 import CardGrid from '../components/CardGrid'
 import CardHover from '../components/CardHover'
+import CardSearchInput from '../components/CardSearchInput'
 import ManaSymbols from '../components/ManaSymbols'
 import { dateMinusDays, firstDayOfYear, pluralizeType, reportError } from '../utils'
 
 type ViewMode = 'list' | 'scryfall'
 type GroupMode = 'type' | 'cmc' | 'color' | 'none'
 type SortMode = 'name' | 'cmc'
+
+const WUBRG_ORDER = ['W', 'U', 'B', 'R', 'G'] as const
+
+/** EDH archetype: single commander = name; 2+ commanders = "Partner {Colors}" (WUBRG). */
+function getEDHArchetype(
+  commanders: string[],
+  lookup: Record<string, CardLookupResult> | null
+): string | undefined {
+  if (commanders.length === 0) return undefined
+  if (commanders.length === 1) return commanders[0]
+  if (!lookup) return undefined
+  const colorSet = new Set<string>()
+  for (const name of commanders) {
+    const entry = lookup[name]
+    if (entry?.error) continue
+    const ids = entry?.color_identity ?? entry?.colors ?? []
+    ids.forEach((c: string) => colorSet.add(c.toUpperCase()))
+  }
+  const sorted = WUBRG_ORDER.filter((c) => colorSet.has(c)).join('')
+  return sorted ? `Partner ${sorted}` : 'Partner'
+}
 
 const COLOR_LABELS: Record<string, string> = {
   W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green',
@@ -111,6 +133,10 @@ function DeckEditSection({
   const [invalidCards, setInvalidCards] = useState<string[] | null>(null)
   const [importingMoxfield, setImportingMoxfield] = useState(false)
   const [moxfieldUrl, setMoxfieldUrl] = useState('')
+  const [commander1, setCommander1] = useState('')
+  const [commander2, setCommander2] = useState('')
+
+  const isEDH = (deck?.format_id || '').toUpperCase() === 'EDH' || (deck?.format_id || '').toLowerCase() === 'cedh'
 
   useEffect(() => {
     if (deck) {
@@ -119,6 +145,9 @@ function DeckEditSection({
       setRank(deck.rank || '')
       setArchetype(deck.archetype || '')
       setDeckListText(formatMoxfieldDeckList(deck.commanders || [], deck.mainboard || [], deck.sideboard || []))
+      const cmd = deck.commanders || []
+      setCommander1(cmd[0] ?? '')
+      setCommander2(cmd[1] ?? '')
     }
   }, [deck])
 
@@ -126,9 +155,17 @@ function DeckEditSection({
 
   const startEdit = () => {
     setDeckListText(formatMoxfieldDeckList(deck.commanders || [], deck.mainboard || [], deck.sideboard || []))
+    setCommander1(deck?.commanders?.[0] ?? '')
+    setCommander2(deck?.commanders?.[1] ?? '')
     setInvalidCards(null)
     setMoxfieldUrl('')
     setEditing(true)
+  }
+
+  const applyCommandersToDeckList = (c1: string, c2: string) => {
+    const parsed = parseMoxfieldDeckList(deckListText)
+    const commanders = [c1, c2].filter(Boolean)
+    setDeckListText(formatMoxfieldDeckList(commanders, parsed.mainboard, parsed.sideboard))
   }
 
   const handleImportMoxfield = () => {
@@ -140,11 +177,16 @@ function DeckEditSection({
         setDeckListText(
           formatMoxfieldDeckList(res.commanders || [], res.mainboard || [], res.sideboard || [])
         )
-        const isEDH =
+        const importedEDH =
           (deck?.format_id || '').toLowerCase() === 'edh' ||
+          (deck?.format_id || '').toLowerCase() === 'cedh' ||
           (res.format || '').toLowerCase() === 'commander' ||
           (res.format || '').toLowerCase() === 'edh'
-        if (isEDH && res.commanders?.length && !archetype.trim()) {
+        if (importedEDH && res.commanders?.length) {
+          setCommander1(res.commanders[0] ?? '')
+          setCommander2(res.commanders[1] ?? '')
+        }
+        if (!importedEDH && res.commanders?.length && !archetype.trim()) {
           setArchetype(res.commanders.join(', '))
         }
         if (res.name?.trim()) setName(res.name.trim())
@@ -160,9 +202,6 @@ function DeckEditSection({
     const commanders = commanderCards.flatMap((c) =>
       Array.from({ length: Math.max(1, c.qty) }, () => (c.card || '').trim())
     ).filter(Boolean)
-    const isEDH = (deck?.format_id || '').toLowerCase() === 'edh'
-    const effectiveArchetype =
-      archetype?.trim() || (isEDH && commanders.length ? commanders.join(', ') : '') || undefined
     const uniqueNames = [
       ...new Set([
         ...commanders,
@@ -172,11 +211,21 @@ function DeckEditSection({
     ].filter((n) => (n || '').trim())
     if (uniqueNames.length === 0) {
       setSaving(true)
+      let effectiveArchetype: string | undefined = isEDH ? getEDHArchetype(commanders, null) : (archetype?.trim() || undefined)
+      if (isEDH && commanders.length >= 2) {
+        try {
+          const lookup = await getCardLookup(commanders)
+          effectiveArchetype = getEDHArchetype(commanders, lookup) ?? commanders.join(', ')
+        } catch {
+          effectiveArchetype = commanders.join(', ')
+        }
+      }
+      const archetypeToSave = effectiveArchetype
       updateDeck(deck.deck_id, {
         name: name || undefined,
         player: player || undefined,
         rank: rank || undefined,
-        archetype: effectiveArchetype,
+        archetype: archetypeToSave,
         commanders,
         mainboard,
         sideboard,
@@ -187,7 +236,7 @@ function DeckEditSection({
             name: name || deck.name,
             player: player || deck.player,
             rank: rank || deck.rank,
-            archetype: effectiveArchetype ?? deck.archetype ?? null,
+            archetype: archetypeToSave ?? deck.archetype ?? null,
             commanders,
             mainboard,
             sideboard,
@@ -212,6 +261,9 @@ function DeckEditSection({
         setSaving(false)
         return
       }
+      const effectiveArchetype = isEDH
+        ? getEDHArchetype(commanders, lookup)
+        : (archetype?.trim() || undefined)
       await updateDeck(deck.deck_id, {
         name: name || undefined,
         player: player || undefined,
@@ -264,16 +316,47 @@ function DeckEditSection({
               <label htmlFor="deck-edit-rank">Rank</label>
               <input id="deck-edit-rank" type="text" value={rank} onChange={(e) => setRank(e.target.value)} placeholder="1, 2, 3-4, …" />
             </div>
-            <div className="form-group" style={{ marginBottom: 0, minWidth: 140 }}>
-              <label htmlFor="deck-edit-archetype">Archetype</label>
-              <input
-                id="deck-edit-archetype"
-                type="text"
-                value={archetype}
-                onChange={(e) => setArchetype(e.target.value)}
-                placeholder={deck.format_id === 'EDH' && deck.commanders?.length ? 'Defaults to commander(s)' : undefined}
-              />
-            </div>
+            {isEDH && (
+              <>
+                <div className="form-group" style={{ marginBottom: 0, minWidth: 200 }}>
+                  <label htmlFor="deck-edit-commander1">Commander 1</label>
+                  <CardSearchInput
+                    id="deck-edit-commander1"
+                    value={commander1}
+                    onChange={(name) => {
+                      setCommander1(name)
+                      applyCommandersToDeckList(name, commander2)
+                    }}
+                    placeholder="Search commander..."
+                    aria-label="Commander 1"
+                  />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0, minWidth: 200 }}>
+                  <label htmlFor="deck-edit-commander2">Commander 2</label>
+                  <CardSearchInput
+                    id="deck-edit-commander2"
+                    value={commander2}
+                    onChange={(name) => {
+                      setCommander2(name)
+                      applyCommandersToDeckList(commander1, name)
+                    }}
+                    placeholder="Partner / Background (optional)"
+                    aria-label="Commander 2"
+                  />
+                </div>
+              </>
+            )}
+            {!isEDH && (
+              <div className="form-group" style={{ marginBottom: 0, minWidth: 140 }}>
+                <label htmlFor="deck-edit-archetype">Archetype</label>
+                <input
+                  id="deck-edit-archetype"
+                  type="text"
+                  value={archetype}
+                  onChange={(e) => setArchetype(e.target.value)}
+                />
+              </div>
+            )}
           </div>
           <div className="form-group" style={{ marginBottom: '1rem' }}>
             <label htmlFor="deck-edit-moxfield">Import from Moxfield</label>
@@ -299,6 +382,14 @@ function DeckEditSection({
               onChange={(e) => {
                 setDeckListText(e.target.value)
                 if (invalidCards?.length) setInvalidCards(null)
+              }}
+              onBlur={() => {
+                if (isEDH) {
+                  const { commanders: cmdCards } = parseMoxfieldDeckList(deckListText)
+                  const names = cmdCards.map((c) => c.card).filter(Boolean)
+                  setCommander1(names[0] ?? '')
+                  setCommander2(names[1] ?? '')
+                }
               }}
               placeholder={'Commander\n1 Atraxa\n\nMainboard\n1 Sol Ring\nLightning Bolt\n4 Counterspell\n\nSideboard\n2 Negate'}
               rows={14}

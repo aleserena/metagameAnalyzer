@@ -59,6 +59,9 @@ export interface MetagameReport {
   card_synergy?: CardSynergy[]
   placement_weighted: boolean
   ignore_lands: boolean
+  /** When requested with include_top8_breakdown. */
+  summary_top8?: MetagameSummary
+  archetype_distribution_top8?: ArchetypeDistribution[]
 }
 
 export interface SimilarDeck {

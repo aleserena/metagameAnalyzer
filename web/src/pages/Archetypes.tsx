@@ -21,6 +21,9 @@ export default function Archetypes() {
   const [lastEventDate, setLastEventDate] = useState<string | null>(null)
   const [events, setEvents] = useState<Event[]>([])
   const [formatName, setFormatName] = useState<string | null>(null)
+  type SortKey = 'archetype' | 'count' | 'pct' | 'countTop8' | 'pctTop8'
+  const [sortBy, setSortBy] = useState<SortKey>('pct')
+  const [sortDesc, setSortDesc] = useState(true)
 
   useEffect(() => {
     const param = searchParams.get('event_ids') ?? searchParams.get('event_id')
@@ -40,7 +43,7 @@ export default function Archetypes() {
   useEffect(() => {
     setLoading(true)
     const eventIdsParam = eventIds.length ? eventIds.map(String).join(',') : undefined
-    getMetagame(false, false, undefined, undefined, undefined, eventIdsParam)
+    getMetagame(false, false, undefined, undefined, undefined, eventIdsParam, false, true)
       .then(setMetagame)
       .catch((e) => {
         setError(e.message)
@@ -59,7 +62,48 @@ export default function Archetypes() {
   }
 
   const archetypes = metagame?.archetype_distribution ?? []
-  const sortedByPct = [...archetypes].sort((a, b) => b.pct - a.pct)
+  const archetypesTop8 = metagame?.archetype_distribution_top8 ?? []
+  const byName: Record<string, { archetype: string; count: number; pct: number; countTop8: number; pctTop8: number }> = {}
+  for (const r of archetypes) {
+    byName[r.archetype] = { ...r, countTop8: 0, pctTop8: 0 }
+  }
+  for (const r of archetypesTop8) {
+    if (!byName[r.archetype]) {
+      byName[r.archetype] = { archetype: r.archetype, count: 0, pct: 0, countTop8: r.count, pctTop8: r.pct }
+    } else {
+      byName[r.archetype].countTop8 = r.count
+      byName[r.archetype].pctTop8 = r.pct
+    }
+  }
+  const handleSort = (key: SortKey) => {
+    if (sortBy === key) {
+      setSortDesc((d) => !d)
+    } else {
+      setSortBy(key)
+      setSortDesc(key === 'archetype' ? false : true)
+    }
+  }
+  const sortedRows = Object.values(byName).sort((a, b) => {
+    let cmp = 0
+    switch (sortBy) {
+      case 'archetype':
+        cmp = (a.archetype || '').localeCompare(b.archetype || '')
+        break
+      case 'count':
+        cmp = a.count - b.count
+        break
+      case 'pct':
+        cmp = a.pct - b.pct
+        break
+      case 'countTop8':
+        cmp = a.countTop8 - b.countTop8
+        break
+      case 'pctTop8':
+        cmp = a.pctTop8 - b.pctTop8
+        break
+    }
+    return sortDesc ? -cmp : cmp
+  })
 
   if (loading && !metagame) {
     return (
@@ -88,7 +132,7 @@ export default function Archetypes() {
               setError(null)
               setLoading(true)
               const eventIdsParam = eventIds.length ? eventIds.map(String).join(',') : undefined
-              getMetagame(false, false, undefined, undefined, undefined, eventIdsParam)
+              getMetagame(false, false, undefined, undefined, undefined, eventIdsParam, false, true)
                 .then(setMetagame)
                 .catch((e) => {
                   setError(e.message)
@@ -134,26 +178,63 @@ export default function Archetypes() {
         </div>
       </div>
 
-      {sortedByPct.length === 0 ? (
+      {sortedRows.length === 0 ? (
         <div className="chart-container" style={{ textAlign: 'center', padding: '2rem' }}>
           <p style={{ color: 'var(--text-muted)' }}>No archetype data. Load or scrape data to see archetypes.</p>
         </div>
       ) : (
         <div className="chart-container">
           <p style={{ margin: '0 0 1rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
-            Sorted by share of metagame. Click an archetype for average deck stats and most played cards.
+            Click column headers to sort. Click an archetype for average deck stats and most played cards.
           </p>
           <div style={{ overflowX: 'auto' }}>
             <table className="table">
               <thead>
                 <tr>
-                  <th>Archetype</th>
-                  <th style={{ textAlign: 'right' }}>Decks</th>
-                  <th style={{ textAlign: 'right' }}>% of metagame</th>
+                  <th
+                    style={{ cursor: 'pointer', userSelect: 'none' }}
+                    onClick={() => handleSort('archetype')}
+                    title="Sort by archetype"
+                    aria-sort={sortBy === 'archetype' ? (sortDesc ? 'descending' : 'ascending') : undefined}
+                  >
+                    Archetype {sortBy === 'archetype' && (sortDesc ? '↓' : '↑')}
+                  </th>
+                  <th
+                    style={{ textAlign: 'right', cursor: 'pointer', userSelect: 'none' }}
+                    onClick={() => handleSort('count')}
+                    title="Sort by decks"
+                    aria-sort={sortBy === 'count' ? (sortDesc ? 'descending' : 'ascending') : undefined}
+                  >
+                    Decks {sortBy === 'count' && (sortDesc ? '↓' : '↑')}
+                  </th>
+                  <th
+                    style={{ textAlign: 'right', cursor: 'pointer', userSelect: 'none' }}
+                    onClick={() => handleSort('pct')}
+                    title="Sort by % of metagame"
+                    aria-sort={sortBy === 'pct' ? (sortDesc ? 'descending' : 'ascending') : undefined}
+                  >
+                    % of metagame {sortBy === 'pct' && (sortDesc ? '↓' : '↑')}
+                  </th>
+                  <th
+                    style={{ textAlign: 'right', cursor: 'pointer', userSelect: 'none' }}
+                    onClick={() => handleSort('countTop8')}
+                    title="Sort by decks (top 8)"
+                    aria-sort={sortBy === 'countTop8' ? (sortDesc ? 'descending' : 'ascending') : undefined}
+                  >
+                    Decks (Top 8) {sortBy === 'countTop8' && (sortDesc ? '↓' : '↑')}
+                  </th>
+                  <th
+                    style={{ textAlign: 'right', cursor: 'pointer', userSelect: 'none' }}
+                    onClick={() => handleSort('pctTop8')}
+                    title="Sort by % of top 8"
+                    aria-sort={sortBy === 'pctTop8' ? (sortDesc ? 'descending' : 'ascending') : undefined}
+                  >
+                    % of top 8 {sortBy === 'pctTop8' && (sortDesc ? '↓' : '↑')}
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                {sortedByPct.map((row) => (
+                {sortedRows.map((row) => (
                   <tr key={row.archetype}>
                     <td>
                       <Link
@@ -165,6 +246,8 @@ export default function Archetypes() {
                     </td>
                     <td style={{ textAlign: 'right' }}>{row.count}</td>
                     <td style={{ textAlign: 'right' }}>{row.pct}%</td>
+                    <td style={{ textAlign: 'right' }}>{row.countTop8}</td>
+                    <td style={{ textAlign: 'right' }}>{row.pctTop8 > 0 ? `${row.pctTop8}%` : '—'}</td>
                   </tr>
                 ))}
               </tbody>
