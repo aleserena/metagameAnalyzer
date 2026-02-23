@@ -120,6 +120,11 @@ export async function getCardLookup(names: string[]): Promise<Record<string, Car
   })
 }
 
+export async function getCardSearch(query: string): Promise<{ data: string[] }> {
+  const q = encodeURIComponent(query.trim())
+  return fetchApi(`/cards/search?q=${q}`)
+}
+
 export interface CardMeta {
   mana_cost: string
   cmc: number
@@ -309,7 +314,9 @@ export async function getMetagame(
   dateFrom?: string | null,
   dateTo?: string | null,
   eventId?: number | string | null,
-  eventIds?: string | null
+  eventIds?: string | null,
+  top8Only?: boolean,
+  includeTop8Breakdown?: boolean
 ): Promise<MetagameReport> {
   const params = new URLSearchParams()
   params.set('placement_weighted', String(placementWeighted))
@@ -318,6 +325,8 @@ export async function getMetagame(
   if (dateTo) params.set('date_to', dateTo)
   if (eventIds) params.set('event_ids', eventIds)
   else if (eventId != null) params.set('event_id', String(eventId))
+  if (top8Only) params.set('top8_only', 'true')
+  if (includeTop8Breakdown) params.set('include_top8_breakdown', 'true')
   return fetchApi(`/metagame?${params.toString()}`)
 }
 
@@ -334,7 +343,7 @@ export async function getArchetypeDetail(
   if (params?.dateFrom) search.set('date_from', params.dateFrom)
   if (params?.dateTo) search.set('date_to', params.dateTo)
   if (params?.eventIds) search.set('event_ids', params.eventIds)
-  if (params?.ignoreLands) search.set('ignore_lands', String(params.ignoreLands))
+  if (params?.ignoreLands !== undefined) search.set('ignore_lands', String(params.ignoreLands))
   const q = search.toString()
   return fetchApi(`/archetypes/${encodeURIComponent(archetypeName)}${q ? `?${q}` : ''}`)
 }

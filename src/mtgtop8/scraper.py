@@ -257,6 +257,12 @@ def scrape_deck_robust(
             if text in ("1", "2", "3-4", "5-8", "9-16", "17-32"):
                 rank = text
                 break
+            # Some events show single numbers (3, 4, 5, ... 32); accept them
+            if text.isdigit():
+                n = int(text)
+                if 1 <= n <= 32:
+                    rank = text
+                    break
 
     archetype_link = soup.find("a", href=re.compile(r"archetype\?a="))
     if archetype_link:

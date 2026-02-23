@@ -63,11 +63,13 @@ from src.mtgtop8.analyzer import (
     archetype_aggregate_analysis,
     deck_analysis,
     find_duplicate_decks,
+    is_top8,
+    normalize_rank,
     player_leaderboard,
     similar_decks,
     top_cards_main,
 )
-from src.mtgtop8.card_lookup import clear_cache as clear_scryfall_cache, lookup_cards
+from src.mtgtop8.card_lookup import autocomplete_cards, clear_cache as clear_scryfall_cache, lookup_cards
 from src.mtgtop8.models import Deck
 from src.mtgtop8.scraper import event_display_name, parse_event_display, scrape
 
@@ -334,7 +336,7 @@ def _parse_date_sortkey(date_str: str) -> str:
 def _deck_sort_key(d: dict) -> tuple:
     """Sort by date descending, then rank ascending."""
     date_key = _parse_date_sortkey(d.get("date", ""))
-    rank_key = _RANK_ORDER.get(d.get("rank", ""), 99)
+    rank_key = _RANK_ORDER.get(normalize_rank(d.get("rank", "")), 99)
     return (-int(date_key) if date_key.isdigit() else 0, rank_key)
 
 
@@ -405,6 +407,13 @@ def cards_lookup(body: CardLookupBody):
     return lookup_cards(body.names)
 
 
+@app.get("/api/cards/search")
+def cards_search(q: str = Query("", description="Card name prefix for autocomplete")):
+    """Return card names matching the query prefix (Scryfall autocomplete)."""
+    data = autocomplete_cards(q)
+    return {"data": data}
+
+
 def _deck_sort_key_by(sort: str, order: str):
     """Return (key_fn, reverse) for sorting decks."""
     reverse = order == "desc"
@@ -413,9 +422,9 @@ def _deck_sort_key_by(sort: str, order: str):
         if sort == "date":
             date_key = _parse_date_sortkey(d.get("date", ""))
             val = int(date_key) if date_key.isdigit() else 0
-            return (-val if reverse else val, _RANK_ORDER.get(d.get("rank", ""), 99))
+            return (-val if reverse else val, _RANK_ORDER.get(normalize_rank(d.get("rank", "")), 99))
         if sort == "rank":
-            rk = _RANK_ORDER.get(d.get("rank", ""), 99)
+            rk = _RANK_ORDER.get(normalize_rank(d.get("rank", "")), 99)
             date_key = _parse_date_sortkey(d.get("date", ""))
             return (-rk if reverse else rk, -(int(date_key) if date_key.isdigit() else 0))
         if sort == "player":
@@ -1314,10 +1323,12 @@ def get_metagame(
     date_to: str | None = Query(None, description="Filter to date (DD/MM/YY)"),
     event_id: str | None = Query(None, description="Filter by event ID (single, backward compat)"),
     event_ids: str | None = Query(None, description="Filter by event IDs (comma-separated)"),
+    top8_only: bool = Query(False, description="Only include decks that made top 8"),
+    include_top8_breakdown: bool = Query(False, description="Also return summary_top8 and archetype_distribution_top8"),
 ):
     """Full metagame report."""
     if not _decks:
-        return {
+        out = {
             "summary": {"total_decks": 0, "unique_commanders": 0, "unique_archetypes": 0},
             "commander_distribution": [],
             "archetype_distribution": [],
@@ -1325,6 +1336,10 @@ def get_metagame(
             "placement_weighted": placement_weighted,
             "ignore_lands": ignore_lands,
         }
+        if include_top8_breakdown:
+            out["summary_top8"] = {"total_decks": 0, "unique_commanders": 0, "unique_archetypes": 0}
+            out["archetype_distribution_top8"] = []
+        return out
     filtered = _decks
     if event_ids:
         ids = [x.strip() for x in event_ids.split(",") if x.strip()]
@@ -1334,16 +1349,32 @@ def get_metagame(
         filtered = [d for d in filtered if str(d.get("event_id")) == str(event_id)]
     else:
         filtered = _filter_decks_by_date(filtered, date_from, date_to)
-    decks = [Deck.from_dict(d) for d in filtered]
+    decks_all = [Deck.from_dict(d) for d in filtered]
+    if top8_only:
+        decks = [d for d in decks_all if is_top8(d.rank)]
+    else:
+        decks = decks_all
     ignore_lands_cards = set(_get_ignore_lands_cards()) if ignore_lands else None
     rank_weights = _get_rank_weights()
-    return analyze(
+    result = analyze(
         decks,
         placement_weighted=placement_weighted,
         ignore_lands=ignore_lands,
         ignore_lands_cards=ignore_lands_cards,
         rank_weights=rank_weights,
     )
+    if include_top8_breakdown:
+        decks_top8 = [d for d in decks_all if is_top8(d.rank)]
+        report_top8 = analyze(
+            decks_top8,
+            placement_weighted=placement_weighted,
+            ignore_lands=ignore_lands,
+            ignore_lands_cards=ignore_lands_cards,
+            rank_weights=rank_weights,
+        )
+        result["summary_top8"] = report_top8["summary"]
+        result["archetype_distribution_top8"] = report_top8["archetype_distribution"]
+    return result
 
 
 @app.get("/api/archetypes/{archetype_name:path}")
@@ -1400,6 +1431,7 @@ def get_archetype_detail(
         ignore_lands=ignore_lands,
         ignore_lands_cards=ignore_lands_cards,
         rank_weights=rank_weights,
+        include_basic_lands=True,
     )
     return {
         "archetype": decoded,

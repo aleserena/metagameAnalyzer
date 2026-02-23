@@ -64,6 +64,7 @@ export default function ArchetypeDetail() {
   const [filterType, setFilterType] = useState<string[]>([])
   const [topCardsPage, setTopCardsPage] = useState(0)
   const [topDecks, setTopDecks] = useState<Deck[]>([])
+  const [ignoreLands, setIgnoreLands] = useState(false)
 
   const navigate = useNavigate()
   const eventIdsParam = searchParams.get('event_ids') ?? undefined
@@ -74,6 +75,7 @@ export default function ArchetypeDetail() {
     setNotFound(false)
     getArchetypeDetail(decodeURIComponent(archetypeName), {
       eventIds: eventIdsParam ?? undefined,
+      ignoreLands,
     })
       .then(setDetail)
       .catch((e) => {
@@ -85,7 +87,7 @@ export default function ArchetypeDetail() {
         }
       })
       .finally(() => setLoading(false))
-  }, [archetypeName, eventIdsParam])
+  }, [archetypeName, eventIdsParam, ignoreLands])
 
   useEffect(() => {
     const topMain = detail?.top_cards_main ?? []
@@ -385,7 +387,21 @@ export default function ArchetypeDetail() {
 
       <div className="chart-container" style={{ marginTop: '1.5rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-          <h3 style={{ margin: 0 }}>Most played cards</h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+            <h3 style={{ margin: 0 }}>Most played cards</h3>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.875rem' }}>
+              <input
+                type="checkbox"
+                checked={ignoreLands}
+                onChange={(e) => {
+                  setIgnoreLands(e.target.checked)
+                  setTopCardsPage(0)
+                }}
+                aria-label="Ignore lands"
+              />
+              Ignore lands
+            </label>
+          </div>
           {topMain.length > 0 && (
             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
               <span style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
@@ -537,7 +553,9 @@ export default function ArchetypeDetail() {
                       </CardHover>
                     </td>
                     <td style={{ textAlign: 'right' }}>
-                      {c.decks} in {c.play_rate_pct}% of decks
+                      {c.decks > 0
+                        ? `${Number.isInteger(c.total_copies / c.decks) ? c.total_copies / c.decks : (c.total_copies / c.decks).toFixed(1)} in ${c.play_rate_pct}% of decks`
+                        : `— in ${c.play_rate_pct}% of decks`}
                     </td>
                     <td style={{ textAlign: 'right' }}>{c.total_copies}</td>
                   </tr>

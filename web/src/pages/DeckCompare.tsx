@@ -44,13 +44,14 @@ export default function DeckCompare() {
       setSearchResults([])
       return
     }
+    const selectedIds = new Set(selectedDecks.map((d) => d.deck_id))
     const t = setTimeout(() => {
       getDecks({ deck_name: search, limit: 20 })
-        .then((r) => setSearchResults(r.decks))
+        .then((r) => setSearchResults(r.decks.filter((d) => !selectedIds.has(d.deck_id))))
         .catch(() => setSearchResults([]))
     }, 300)
     return () => clearTimeout(t)
-  }, [search])
+  }, [search, selectedDecks])
 
   const addDeck = (d: Deck) => {
     if (selectedDecks.some((x) => x.deck_id === d.deck_id)) return

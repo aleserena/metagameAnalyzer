@@ -66,6 +66,7 @@ export default function Metagame() {
   const [error, setError] = useState<string | null>(null)
   const [placementWeighted, setPlacementWeighted] = useState(false)
   const [ignoreLands, setIgnoreLands] = useState(false)
+  const [top8Only, setTop8Only] = useState(false)
   const [eventIds, setEventIds] = useState<(number | string)[]>(() => {
     const param = searchParams.get('event_ids') ?? searchParams.get('event_id')
     if (!param) return []
@@ -100,14 +101,14 @@ export default function Metagame() {
   useEffect(() => {
     setLoading(true)
     const eventIdsParam = eventIds.length ? eventIds.map(String).join(',') : undefined
-    getMetagame(placementWeighted, ignoreLands, undefined, undefined, undefined, eventIdsParam)
+    getMetagame(placementWeighted, ignoreLands, undefined, undefined, undefined, eventIdsParam, top8Only)
       .then(setMetagame)
       .catch((e) => {
         setError(e.message)
         toast.error(reportError(e))
       })
       .finally(() => setLoading(false))
-  }, [placementWeighted, ignoreLands, eventIds])
+  }, [placementWeighted, ignoreLands, top8Only, eventIds])
 
   useEffect(() => {
     const topMain = metagame?.top_cards_main ?? []
@@ -166,7 +167,7 @@ export default function Metagame() {
               setError(null)
               setLoading(true)
               const eventIdsParam = eventIds.length ? eventIds.map(String).join(',') : undefined
-              getMetagame(placementWeighted, ignoreLands, undefined, undefined, undefined, eventIdsParam)
+              getMetagame(placementWeighted, ignoreLands, undefined, undefined, undefined, eventIdsParam, top8Only)
                 .then(setMetagame)
                 .catch((e) => {
                   setError(e.message)
@@ -275,6 +276,39 @@ export default function Metagame() {
       <div className="chart-container">
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
           <h3 style={{ margin: 0 }}>Commander Distribution</h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.875rem' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Data:</span>
+            <button
+              type="button"
+              className="btn"
+              style={{
+                padding: '0.25rem 0.5rem',
+                fontSize: '0.8125rem',
+                background: !top8Only ? 'var(--accent)' : 'transparent',
+                color: !top8Only ? 'var(--bg)' : 'var(--text)',
+                border: '1px solid var(--border)',
+              }}
+              onClick={() => setTop8Only(false)}
+              aria-pressed={!top8Only}
+            >
+              All decks
+            </button>
+            <button
+              type="button"
+              className="btn"
+              style={{
+                padding: '0.25rem 0.5rem',
+                fontSize: '0.8125rem',
+                background: top8Only ? 'var(--accent)' : 'transparent',
+                color: top8Only ? 'var(--bg)' : 'var(--text)',
+                border: '1px solid var(--border)',
+              }}
+              onClick={() => setTop8Only(true)}
+              aria-pressed={top8Only}
+            >
+              Top 8 only
+            </button>
+          </div>
           <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.875rem' }}>
             <input
               type="checkbox"
@@ -311,7 +345,7 @@ export default function Metagame() {
 
       <div className="chart-container">
         <h3 style={{ margin: '0 0 1rem' }}>
-          Archetype Distribution (Top 8)
+          Archetype Distribution (8 more played decks)
           {placementWeighted && <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginLeft: '0.5rem' }}>weighted by placement</span>}
         </h3>
         <ResponsiveContainer width="100%" height={300}>
