@@ -16,9 +16,11 @@ import PlayerDetail from './pages/PlayerDetail'
 import Scrape from './pages/Scrape'
 import Settings from './pages/Settings'
 import Login from './pages/Login'
+import UploadDeck from './pages/UploadDeck'
 
 const router = createBrowserRouter([
   { path: '/login', element: <Login /> },
+  { path: '/upload/:token', element: <UploadDeck /> },
   {
     path: '/',
     element: (

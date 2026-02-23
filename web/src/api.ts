@@ -192,6 +192,63 @@ export async function addDeckToEvent(
   return fetchApi(`/events/${encodeURIComponent(String(eventId))}/decks/add`, { method: 'POST' })
 }
 
+export async function createEventUploadLinks(
+  eventId: number | string,
+  options?: { count?: number; expires_in_days?: number }
+): Promise<{ links: Array<{ token: string; url: string; expires_at: string | null }> }> {
+  return fetchApi(`/events/${encodeURIComponent(String(eventId))}/upload-links`, {
+    method: 'POST',
+    body: JSON.stringify({
+      count: options?.count ?? 1,
+      expires_in_days: options?.expires_in_days ?? undefined,
+    }),
+  })
+}
+
+/** Public API (no auth) for upload link pages. */
+async function fetchApiPublic<T>(path: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options?.headers,
+    },
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    const detail = err.detail ?? res.statusText
+    const message = typeof detail === 'string' ? detail : JSON.stringify(detail)
+    throw new Error(message)
+  }
+  return res.json()
+}
+
+export async function getUploadLinkInfo(token: string): Promise<{
+  event_id: string
+  event_name: string
+  format_id: string
+  date: string
+}> {
+  return fetchApiPublic(`/upload/${encodeURIComponent(token)}`)
+}
+
+export async function submitDeckWithUploadLink(
+  token: string,
+  body: {
+    player: string
+    name: string
+    rank?: string
+    mainboard: { qty: number; card: string }[]
+    sideboard: { qty: number; card: string }[]
+    commanders?: string[]
+  }
+): Promise<{ deck_id: number; message: string }> {
+  return fetchApiPublic(`/upload/${encodeURIComponent(token)}`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
 export async function updateDeck(
   deckId: number,
   body: {

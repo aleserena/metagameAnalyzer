@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { getEvent, getDecks, updateEvent, addDeckToEvent, deleteEvent } from '../api'
+import { getEvent, getDecks, updateEvent, addDeckToEvent, deleteEvent, createEventUploadLinks } from '../api'
 import type { EventWithOrigin } from '../api'
 import type { Deck } from '../types'
 import { useAuth } from '../contexts/AuthContext'
@@ -32,6 +32,8 @@ export default function EventDetail() {
   const [saving, setSaving] = useState(false)
   const [addingDeck, setAddingDeck] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [generatingLinks, setGeneratingLinks] = useState(false)
+  const [generatedLinks, setGeneratedLinks] = useState<Array<{ token: string; url: string; expires_at: string | null }>>([])
 
   useEffect(() => {
     if (!eventId) return
@@ -116,6 +118,33 @@ export default function EventDetail() {
       })
       .catch((e) => toast.error(reportError(e)))
       .finally(() => setDeleting(false))
+  }
+
+  const handleGenerateUploadLink = () => {
+    if (!eventId) return
+    setGeneratingLinks(true)
+    createEventUploadLinks(eventId, { count: 1 })
+      .then((res) => {
+        const base = typeof window !== 'undefined' ? window.location.origin : ''
+        const linksWithUrls = res.links.map((l) => ({ ...l, url: `${base}/upload/${l.token}` }))
+        setGeneratedLinks((prev) => [...linksWithUrls, ...prev])
+        if (linksWithUrls.length > 0) {
+          const url = linksWithUrls[0].url
+          window.navigator.clipboard.writeText(url).then(
+            () => toast.success('Link copied to clipboard'),
+            () => toast.success('Upload link generated')
+          )
+        }
+      })
+      .catch((e) => toast.error(reportError(e)))
+      .finally(() => setGeneratingLinks(false))
+  }
+
+  const copyLink = (url: string) => {
+    window.navigator.clipboard.writeText(url).then(
+      () => toast.success('Copied to clipboard'),
+      () => { /* ignore */ }
+    )
   }
 
   if (loading) return <div className="page"><p>Loading…</p></div>
@@ -214,6 +243,35 @@ export default function EventDetail() {
           </>
         )}
       </section>
+
+      {user === 'admin' && (
+        <section className="card" style={{ marginBottom: '1.5rem' }}>
+          <h2 style={{ marginTop: 0 }}>Upload links</h2>
+          <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>
+            Generate a one-time link so a player can upload their deck to this event. Each link can be used only once.
+          </p>
+          <button
+            type="button"
+            className="btn"
+            onClick={handleGenerateUploadLink}
+            disabled={generatingLinks}
+          >
+            {generatingLinks ? 'Generating…' : 'Generate upload link'}
+          </button>
+          {generatedLinks.length > 0 && (
+            <ul style={{ marginTop: '1rem', paddingLeft: '1.25rem' }}>
+              {generatedLinks.map((link) => (
+                <li key={link.token} style={{ marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <code style={{ fontSize: '0.875rem', wordBreak: 'break-all' }}>{link.url}</code>
+                  <button type="button" className="btn" style={{ flexShrink: 0 }} onClick={() => copyLink(link.url)}>
+                    Copy
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
 
       <h2>Decks ({decks.length})</h2>
       {decks.length === 0 ? (

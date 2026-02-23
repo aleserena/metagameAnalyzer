@@ -4,6 +4,8 @@ import hashlib
 import json
 import logging
 import os
+import secrets
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # Load .env from project root so DATABASE_URL (and others) are set before any config.
@@ -37,7 +39,7 @@ def _normalize_search(s: str) -> str:
     nfd = unicodedata.normalize("NFD", s.lower())
     return "".join(c for c in nfd if unicodedata.category(c) != "Mn")
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -227,6 +229,18 @@ def _get_decks() -> list[Deck]:
 def _invalidate_metagame() -> None:
     global _metagame_cache
     _metagame_cache = None
+
+
+def _normalize_card_name(card: str) -> str:
+    """Strip set codes and foiling markers; keep only card name. e.g. 'Ashling (ECC) 1 *F*' -> 'Ashling'."""
+    if not card or not isinstance(card, str):
+        return (card or "").strip()
+    s = card.strip()
+    # Trailing *F* *C* etc (foil/etched indicators)
+    s = re.sub(r"\s*\*\w*\*(\s*\*\w*\*)*\s*$", "", s).strip()
+    # Trailing (SET) or (SET) 123
+    s = re.sub(r"\s*\([A-Za-z0-9]{2,5}\)\s*\d*\s*$", "", s, flags=re.IGNORECASE).strip()
+    return s
 
 
 def _normalize_split_cards(decks: list[dict]) -> list[dict]:
@@ -885,6 +899,157 @@ def add_blank_deck_to_event(event_id: str):
     return {"event_id": event_id, "deck_id": deck_id, "message": "Deck added"}
 
 
+# --- One-time upload links (admin create; public submit) ---
+
+class CreateUploadLinksBody(BaseModel):
+    count: int = 1
+    expires_in_days: int | None = None
+
+
+class SubmitDeckBody(BaseModel):
+    player: str = ""
+    name: str = ""
+    rank: str = ""
+    mainboard: list[dict] = []  # [{"qty": int, "card": str}, ...]
+    sideboard: list[dict] = []
+    commanders: list[str] | None = None
+
+
+def _upload_link_base_url(request: Request) -> str:
+    """Base URL for upload links (e.g. https://app.example.com)."""
+    base = os.getenv("PUBLIC_APP_URL", "").strip()
+    if base:
+        return base.rstrip("/")
+    return str(request.base_url).rstrip("/")
+
+
+@app.post("/api/events/{event_id}/upload-links", dependencies=[Depends(require_admin)])
+def create_upload_links(event_id: str, request: Request, body: CreateUploadLinksBody | None = None):
+    """Create one or more one-time upload links for an event (admin-only)."""
+    if not _database_available():
+        raise HTTPException(status_code=503, detail="Database not configured")
+    body = body or CreateUploadLinksBody()
+    count = max(1, min(body.count, 50))
+    expires_at = None
+    if body.expires_in_days is not None and body.expires_in_days > 0:
+        expires_at = datetime.utcnow() + timedelta(days=body.expires_in_days)
+    with _db.session_scope() as session:
+        ev = _db.get_event(session, event_id)
+        if not ev:
+            raise HTTPException(status_code=404, detail="Event not found")
+        base_url = _upload_link_base_url(request)
+        links = []
+        for _ in range(count):
+            token = secrets.token_urlsafe(32)
+            _db.create_upload_link(session, token, event_id, expires_at=expires_at)
+            links.append({
+                "token": token,
+                "url": f"{base_url}/upload/{token}",
+                "expires_at": expires_at.isoformat() if expires_at else None,
+            })
+        return {"links": links}
+
+
+@app.get("/api/upload/{token}")
+def get_upload_link_info(token: str):
+    """Return event info for a valid one-time upload link (public)."""
+    if not _database_available():
+        raise HTTPException(status_code=503, detail="Database not configured")
+    with _db.session_scope() as session:
+        row = _db.get_upload_link(session, token)
+        if not row:
+            raise HTTPException(status_code=404, detail="Link not found or invalid")
+        if row.used_at is not None:
+            raise HTTPException(status_code=404, detail="Link already used")
+        if row.expires_at is not None and row.expires_at < datetime.utcnow():
+            raise HTTPException(status_code=404, detail="Link expired")
+        ev = _db.get_event(session, row.event_id)
+        if not ev:
+            raise HTTPException(status_code=404, detail="Event not found")
+        event_name = event_display_name(ev.name, ev.store or "", ev.location or "")
+        return {
+            "event_id": row.event_id,
+            "event_name": event_name,
+            "format_id": ev.format_id or "",
+            "date": ev.date or "",
+        }
+
+
+def _validate_deck_payload(body: SubmitDeckBody) -> None:
+    """Raise HTTPException if payload is invalid."""
+    if not (body.player or "").strip():
+        raise HTTPException(status_code=400, detail="player is required")
+    if not (body.name or "").strip():
+        raise HTTPException(status_code=400, detail="name is required")
+    main = body.mainboard or []
+    side = body.sideboard or []
+    if len(main) > 500:
+        raise HTTPException(status_code=400, detail="mainboard has too many entries (max 500)")
+    if len(side) > 100:
+        raise HTTPException(status_code=400, detail="sideboard has too many entries (max 100)")
+    if not main:
+        raise HTTPException(status_code=400, detail="mainboard is required and must not be empty")
+    for card in main:
+        if not isinstance(card, dict) or "card" not in card:
+            raise HTTPException(status_code=400, detail="mainboard entries must be { qty, card }")
+    if not any(str(c.get("card", "")).strip() for c in main):
+        raise HTTPException(status_code=400, detail="mainboard must have at least one non-empty card")
+    for card in side:
+        if not isinstance(card, dict) or "card" not in card:
+            raise HTTPException(status_code=400, detail="sideboard entries must be { qty, card }")
+
+
+@app.post("/api/upload/{token}", status_code=201)
+def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
+    """Submit one deck using a one-time upload link (public)."""
+    if not _database_available():
+        raise HTTPException(status_code=503, detail="Database not configured")
+    _validate_deck_payload(body)
+    with _db.session_scope() as session:
+        row = _db.get_upload_link(session, token)
+        if not row:
+            raise HTTPException(status_code=400, detail="Link not found or invalid")
+        if row.used_at is not None:
+            raise HTTPException(status_code=400, detail="Link already used")
+        if row.expires_at is not None and row.expires_at < datetime.utcnow():
+            raise HTTPException(status_code=400, detail="Link expired")
+        ev = _db.get_event(session, row.event_id)
+        if not ev:
+            raise HTTPException(status_code=400, detail="Event not found")
+        event_name = event_display_name(ev.name, ev.store or "", ev.location or "")
+        deck_id = _db.next_manual_deck_id(session)
+        commanders = body.commanders if body.commanders is not None else []
+        if not isinstance(commanders, list):
+            commanders = []
+        mainboard = [{"qty": int(c.get("qty", 1)), "card": _normalize_card_name(str(c.get("card", "")))} for c in (body.mainboard or []) if _normalize_card_name(str(c.get("card", "")))]
+        sideboard = [{"qty": int(c.get("qty", 1)), "card": _normalize_card_name(str(c.get("card", "")))} for c in (body.sideboard or []) if _normalize_card_name(str(c.get("card", "")))]
+        commanders = [_normalize_card_name(c) for c in commanders if _normalize_card_name(c)]
+        # EDH: if no commander present, use first mainboard card as commander
+        format_id = (ev.format_id or "").upper()
+        if format_id == "EDH" and not commanders and mainboard:
+            commanders = [mainboard[0]["card"]]
+        deck = {
+            "deck_id": deck_id,
+            "event_id": row.event_id,
+            "event_name": event_name,
+            "date": ev.date or "",
+            "format_id": ev.format_id or "",
+            "name": (body.name or "").strip(),
+            "player": (body.player or "").strip(),
+            "rank": (body.rank or "").strip(),
+            "player_count": 0,
+            "commanders": commanders,
+            "mainboard": mainboard,
+            "sideboard": sideboard,
+        }
+        deck_list = _normalize_split_cards([deck])
+        deck = deck_list[0]
+        _db.upsert_deck(session, deck, origin=_db.ORIGIN_MANUAL)
+        _db.mark_upload_link_used(session, token)
+    _load_decks_from_db()
+    return {"deck_id": deck_id, "message": "Deck submitted successfully"}
+
+
 class DeckCardUpdate(BaseModel):
     qty: int = 1
     card: str = ""
@@ -934,11 +1099,14 @@ def update_deck_endpoint(deck_id: int, body: UpdateDeckBody):
             current["date"] = ev.date
             current["format_id"] = ev.format_id
     if body.commanders is not None:
-        current["commanders"] = [c.strip() for c in body.commanders if c and str(c).strip()]
+        current["commanders"] = [_normalize_card_name(c) for c in body.commanders if c and str(c).strip()]
     if body.mainboard is not None:
-        current["mainboard"] = [{"qty": c.qty, "card": (c.card or "").strip()} for c in body.mainboard if (c.card or "").strip()]
+        current["mainboard"] = [{"qty": c.qty, "card": _normalize_card_name(c.card or "")} for c in body.mainboard if _normalize_card_name(c.card or "")]
     if body.sideboard is not None:
-        current["sideboard"] = [{"qty": c.qty, "card": (c.card or "").strip()} for c in body.sideboard if (c.card or "").strip()]
+        current["sideboard"] = [{"qty": c.qty, "card": _normalize_card_name(c.card or "")} for c in body.sideboard if _normalize_card_name(c.card or "")]
+    # EDH: if no commander present, use first mainboard card as commander
+    if (current.get("format_id") or "").upper() == "EDH" and not current.get("commanders") and current.get("mainboard"):
+        current["commanders"] = [current["mainboard"][0]["card"]]
     try:
         with _db.session_scope() as session:
             _db.upsert_deck(session, current, origin=current.get("origin", _db.ORIGIN_MTGTOP8))

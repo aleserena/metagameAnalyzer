@@ -4,18 +4,23 @@ When DATABASE_URL is set, all persistence uses PostgreSQL. When unset, the API
 falls back to in-memory + file storage (see api/main.py).
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import (
     Column,
+    DateTime,
     Integer,
     String,
     Text,
     create_engine,
+    func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
@@ -74,6 +79,16 @@ class SettingsRow(Base):
     __tablename__ = "settings"
     key = Column(String(128), primary_key=True)
     value = Column(JSONB, nullable=False)
+
+
+class EventUploadLinkRow(Base):
+    __tablename__ = "event_upload_links"
+    token = Column(String(64), primary_key=True)
+    event_id = Column(String(32), nullable=False)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    used_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+    label = Column(String(256), nullable=True)
 
 
 def _get_engine():
@@ -400,6 +415,40 @@ def delete_event(session: Session, event_id: int | str, delete_decks: bool = Fal
     if delete_decks:
         session.query(DeckRow).filter(DeckRow.event_id == eid).delete()
     session.delete(row)
+    return True
+
+
+# --- Repository helpers: event_upload_links ---
+
+
+def create_upload_link(
+    session: Session,
+    token: str,
+    event_id: str,
+    label: str | None = None,
+    expires_at: datetime | None = None,
+) -> EventUploadLinkRow:
+    """Insert a one-time upload link. Token should be from secrets.token_urlsafe(32)."""
+    eid = _event_id_str(event_id)
+    row = EventUploadLinkRow(
+        token=token,
+        event_id=eid,
+        label=label,
+        expires_at=expires_at,
+    )
+    session.add(row)
+    return row
+
+
+def get_upload_link(session: Session, token: str) -> EventUploadLinkRow | None:
+    return session.query(EventUploadLinkRow).filter(EventUploadLinkRow.token == token).first()
+
+
+def mark_upload_link_used(session: Session, token: str) -> bool:
+    row = session.query(EventUploadLinkRow).filter(EventUploadLinkRow.token == token).first()
+    if not row:
+        return False
+    row.used_at = datetime.utcnow()
     return True
 
 

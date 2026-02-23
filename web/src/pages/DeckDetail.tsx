@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts'
-import { getDeck, getMetagame, getDeckAnalysis, getDateRange, getSimilarDecks, updateDeck, getCardLookup, importDeckFromMoxfield } from '../api'
+import { getDeck, getMetagame, getDeckAnalysis, getDateRange, getSimilarDecks, updateDeck, deleteDeck, getCardLookup, importDeckFromMoxfield } from '../api'
 import { parseMoxfieldDeckList, formatMoxfieldDeckList } from '../lib/deckListParser'
 import { useAuth } from '../contexts/AuthContext'
 import type { Deck, MetagameReport, SimilarDeck } from '../types'
@@ -425,6 +425,7 @@ function CardListSection({
 export default function DeckDetail() {
   const { deckId } = useParams<{ deckId: string }>()
   const navigate = useNavigate()
+  const { user } = useAuth()
   const [deck, setDeck] = useState<Deck | null>(null)
   const [metagame, setMetagame] = useState<MetagameReport | null>(null)
   const [loading, setLoading] = useState(true)
@@ -441,6 +442,7 @@ export default function DeckDetail() {
   const [similarDecks, setSimilarDecks] = useState<SimilarDeck[]>([])
   const [similarDecksSameEventOnly, setSimilarDecksSameEventOnly] = useState(true)
   const [compareSelectedIds, setCompareSelectedIds] = useState<Set<number>>(new Set())
+  const [deleting, setDeleting] = useState(false)
   const MAX_COMPARE = 4
 
   // Exclude 100% overlap (duplicate) decks from the similar list
@@ -666,6 +668,31 @@ export default function DeckDetail() {
         onUpdate={setDeck}
         onCardsSaved={() => getDeckAnalysis(deck.deck_id).then(setAnalysis).catch(() => setAnalysis(null))}
       />
+
+      {user === 'admin' && deck && (
+        <div className="card" style={{ marginBottom: '1.5rem' }}>
+          <h3 style={{ margin: '0 0 0.75rem' }}>Danger zone</h3>
+          <button
+            type="button"
+            className="btn"
+            style={{ color: 'var(--danger, #c00)' }}
+            disabled={deleting}
+            onClick={() => {
+              if (!window.confirm(`Delete deck "${deck.name}"? This cannot be undone.`)) return
+              setDeleting(true)
+              deleteDeck(deck.deck_id)
+                .then(() => {
+                  toast.success('Deck deleted')
+                  navigate(deck.event_id ? `/events/${deck.event_id}` : '/decks')
+                })
+                .catch((e) => toast.error(reportError(e)))
+                .finally(() => setDeleting(false))
+            }}
+          >
+            {deleting ? 'Deleting…' : 'Delete deck'}
+          </button>
+        </div>
+      )}
 
       {analysis && (
         <div style={{ marginBottom: '1rem' }}>
