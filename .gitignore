@@ -17,6 +17,7 @@ htmlcov/
 .eggs/
 dist/
 build/
+.cursor/plans
 
 # Node
 node_modules/
