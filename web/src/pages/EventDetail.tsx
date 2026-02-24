@@ -1,10 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { getEvent, getDecks, updateEvent, addDeckToEvent, deleteEvent, createEventUploadLinks } from '../api'
 import type { EventWithOrigin } from '../api'
 import type { Deck } from '../types'
 import { useAuth } from '../contexts/AuthContext'
+import { useFetch } from '../hooks/useFetch'
+import PageError from '../components/PageError'
+import PageSkeleton from '../components/PageSkeleton'
 import { reportError, ddMmYyToIso, isoToDdMmYy } from '../utils'
 
 /** Coerce value for display; avoid [object Object]. */
@@ -14,14 +17,24 @@ function cellStr(v: unknown): string {
   return String(v)
 }
 
+type EventDetailData = { event: EventWithOrigin & { player_count?: number }; decks: Deck[] }
+
 export default function EventDetail() {
   const { eventId } = useParams<{ eventId: string }>()
   const navigate = useNavigate()
   const { user } = useAuth()
-  const [event, setEvent] = useState<(EventWithOrigin & { player_count?: number }) | null>(null)
-  const [decks, setDecks] = useState<Deck[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const { data, loading, error, refetch } = useFetch<EventDetailData>(
+    () =>
+      eventId
+        ? Promise.all([getEvent(eventId), getDecks({ event_id: eventId, limit: 500 })]).then(([ev, decksRes]) => ({
+            event: ev,
+            decks: decksRes.decks,
+          }))
+        : Promise.reject(new Error('Missing event ID')),
+    [eventId ?? '']
+  )
+  const event = data?.event ?? null
+  const decks = data?.decks ?? []
   const [editing, setEditing] = useState(false)
   const [editName, setEditName] = useState('')
   const [editStore, setEditStore] = useState('')
@@ -35,28 +48,6 @@ export default function EventDetail() {
   const [generatingLinks, setGeneratingLinks] = useState(false)
   const [generatedLinks, setGeneratedLinks] = useState<Array<{ token: string; url: string; expires_at: string | null; deck_id?: number }>>([])
   const [generatingUpdateLinkFor, setGeneratingUpdateLinkFor] = useState<number | null>(null)
-
-  useEffect(() => {
-    if (!eventId) return
-    setLoading(true)
-    setError(null)
-    Promise.all([getEvent(eventId), getDecks({ event_id: eventId, limit: 500 })])
-      .then(([ev, decksRes]) => {
-        setEvent(ev)
-        setEditName(ev.event_name || '')
-        setEditStore(ev.store ?? '')
-        setEditLocation(ev.location ?? '')
-        setEditDate(ev.date || '')
-        setEditFormatId(ev.format_id || '')
-        setEditPlayerCount(ev.player_count ?? 0)
-        setDecks(decksRes.decks)
-      })
-      .catch((e) => {
-        setError(e.message)
-        toast.error(reportError(e))
-      })
-      .finally(() => setLoading(false))
-  }, [eventId])
 
   const startEdit = () => {
     if (event) {
@@ -84,11 +75,7 @@ export default function EventDetail() {
       location: editLocation,
     })
       .then(() => {
-        setEvent((prev) =>
-          prev
-            ? { ...prev, event_name: editName, store: editStore, location: editLocation, date: editDate, format_id: editFormatId, player_count: editPlayerCount }
-            : null
-        )
+        refetch()
         setEditing(false)
         toast.success('Event updated')
       })
@@ -102,9 +89,8 @@ export default function EventDetail() {
     addDeckToEvent(eventId)
       .then((r) => {
         toast.success(r.message)
-        return getDecks({ event_id: eventId, limit: 500 })
+        refetch()
       })
-      .then((res) => setDecks(res.decks))
       .catch((err) => toast.error(reportError(err)))
       .finally(() => setAddingDeck(false))
   }
@@ -166,14 +152,16 @@ export default function EventDetail() {
       .finally(() => setGeneratingUpdateLinkFor(null))
   }
 
-  if (loading) return <div className="page"><p>Loading…</p></div>
+  if (loading) return <PageSkeleton titleWidth={280} blocks={2} />
   if (error || !event) {
     return (
-      <div className="page">
-        <h1 className="page-title">Event</h1>
-        <p style={{ color: 'var(--text-muted)' }}>{error || 'Event not found.'}</p>
-        <Link to="/events" className="btn">Back to events</Link>
-      </div>
+      <PageError
+        title="Event"
+        message={error || 'Event not found.'}
+        onRetry={error ? () => refetch() : undefined}
+        retryLabel="Try again"
+        extraActions={<Link to="/events" className="btn">Back to events</Link>}
+      />
     )
   }
 

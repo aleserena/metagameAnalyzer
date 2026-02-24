@@ -8,6 +8,34 @@ function getAuthHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
+/** Shared 401 + error handling for fetch. Use for JSON or blob responses with auth. */
+async function fetchWithAuth(
+  path: string,
+  options: RequestInit = {},
+  responseType: 'json' | 'blob' = 'json'
+): Promise<unknown> {
+  const headers: Record<string, string> = { ...getAuthHeaders() }
+  if (!(options.body instanceof FormData)) {
+    headers['Content-Type'] = 'application/json'
+  }
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: { ...headers, ...(options.headers as Record<string, string>) },
+  })
+  if (res.status === 401) {
+    localStorage.removeItem('admin_token')
+    window.dispatchEvent(new Event('auth-logout'))
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    const detail = err.detail ?? res.statusText
+    const message = typeof detail === 'string' ? detail : JSON.stringify(detail)
+    console.error('[API]', res.status, path, detail, err)
+    throw new Error(message)
+  }
+  return responseType === 'blob' ? res.blob() : res.json()
+}
+
 async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
@@ -174,7 +202,7 @@ export async function getDeckAnalysis(deckId: number): Promise<DeckAnalysis> {
   return fetchApi(`/decks/${deckId}/analysis`)
 }
 
-export interface EventWithOrigin extends Event {}
+export type EventWithOrigin = Event
 
 export async function getEvents(): Promise<{ events: EventWithOrigin[] }> {
   return fetchApi('/events')
@@ -466,37 +494,14 @@ export async function getSimilarPlayers(name: string, limit = 10): Promise<{ sim
 export async function loadDecks(file: File): Promise<{ loaded: number; message: string }> {
   const form = new FormData()
   form.append('file', file)
-  const res = await fetch(`${API_BASE}/load`, {
-    method: 'POST',
-    headers: getAuthHeaders(),
-    body: form,
-  })
-  if (res.status === 401) {
-    localStorage.removeItem('admin_token')
-    window.dispatchEvent(new Event('auth-logout'))
-  }
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }))
-    const detail = err.detail || res.statusText
-    console.error('[API]', res.status, '/load', detail, err)
-    throw new Error(detail)
-  }
-  return res.json()
+  return fetchWithAuth('/load', { method: 'POST', body: form }, 'json') as Promise<{
+    loaded: number
+    message: string
+  }>
 }
 
 export async function exportDecks(): Promise<Blob> {
-  const res = await fetch(`${API_BASE}/export`, { headers: getAuthHeaders() })
-  if (res.status === 401) {
-    localStorage.removeItem('admin_token')
-    window.dispatchEvent(new Event('auth-logout'))
-  }
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }))
-    const detail = err.detail || res.statusText
-    console.error('[API]', res.status, '/export', detail, err)
-    throw new Error(detail)
-  }
-  return res.blob()
+  return fetchWithAuth('/export', {}, 'blob') as Promise<Blob>
 }
 
 export async function loadDecksFromPath(path: string): Promise<{ loaded: number; message: string }> {

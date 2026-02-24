@@ -1,0 +1,19 @@
+[project]
+name = "mtgtop8scrapper"
+version = "0.1.0"
+description = "MTG Top 8 scraper and metagame analyzer"
+readme = "README.md"
+requires-python = ">=3.10"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+src = ["api", "src", "main.py", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

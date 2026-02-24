@@ -27,7 +27,6 @@ import re
 import threading
 import time
 import unicodedata
-from pathlib import Path
 from urllib.parse import unquote
 
 import jwt
@@ -44,7 +43,7 @@ def _normalize_search(s: str) -> str:
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -95,6 +94,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Return generic 500 and log the real error (avoid leaking internals)."""
+    if isinstance(exc, HTTPException):
+        raise exc
+    logger.exception("Unhandled exception: %s", exc)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+
 # Admin auth: single user, password from env, JWT for session
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 JWT_SECRET = os.getenv("JWT_SECRET", ADMIN_PASSWORD or "dev-secret-change-in-production")
@@ -130,6 +139,12 @@ def require_admin(authorization: str | None = Header(None, alias="Authorization"
     if not _verify_admin_token(token):
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     return "admin"
+
+
+def require_database():
+    """Dependency: require database available or raise 503."""
+    if not _database_available():
+        raise HTTPException(status_code=503, detail="Database not configured")
 
 
 # In-memory storage
@@ -231,6 +246,30 @@ def _get_decks() -> list[Deck]:
     return [Deck.from_dict(d) for d in _decks]
 
 
+def _get_deck_by_id(deck_id: int) -> dict | None:
+    """Return deck dict by deck_id or None if not found."""
+    for d in _decks:
+        if d.get("deck_id") == deck_id:
+            return d
+    return None
+
+
+def _get_event_by_id_from_decks(event_id: str) -> dict | None:
+    """Return event info derived from first deck with this event_id, or None (file-based fallback)."""
+    for d in _decks:
+        if str(d.get("event_id")) == str(event_id):
+            return {
+                "event_id": d.get("event_id"),
+                "event_name": d.get("event_name", ""),
+                "store": "",
+                "location": "",
+                "date": d.get("date", ""),
+                "format_id": d.get("format_id", ""),
+                "player_count": d.get("player_count", 0),
+            }
+    return None
+
+
 def _invalidate_metagame() -> None:
     global _metagame_cache
     _metagame_cache = None
@@ -250,7 +289,6 @@ def _normalize_card_name(card: str) -> str:
 
 def _normalize_split_cards(decks: list[dict]) -> list[dict]:
     """Fix split card names: 'Fire / Ice' -> 'Fire // Ice'."""
-    import re
     for d in decks:
         for section in ("mainboard", "sideboard"):
             cards = d.get(section, [])
@@ -674,15 +712,15 @@ def list_duplicate_decks(
 @app.get("/api/decks/{deck_id}")
 def get_deck(deck_id: int):
     """Get single deck by ID."""
-    for d in _decks:
-        if d.get("deck_id") == deck_id:
-            out = dict(d)
-            out["player"] = _normalize_player(out.get("player") or "")
-            dup = _deck_duplicate_info(deck_id)
-            if dup:
-                out["duplicate_info"] = dup
-            return out
-    raise HTTPException(status_code=404, detail="Deck not found")
+    d = _get_deck_by_id(deck_id)
+    if not d:
+        raise HTTPException(status_code=404, detail="Deck not found")
+    out = dict(d)
+    out["player"] = _normalize_player(out.get("player") or "")
+    dup = _deck_duplicate_info(deck_id)
+    if dup:
+        out["duplicate_info"] = dup
+    return out
 
 
 @app.get("/api/decks/{deck_id}/similar")
@@ -692,11 +730,7 @@ def get_similar_decks(
     event_ids: str | None = Query(None, description="Limit to events (comma-separated)"),
 ):
     """Decks with high card overlap (same metagame)."""
-    deck_dict = None
-    for d in _decks:
-        if d.get("deck_id") == deck_id:
-            deck_dict = d
-            break
+    deck_dict = _get_deck_by_id(deck_id)
     if not deck_dict:
         raise HTTPException(status_code=404, detail="Deck not found")
     deck = Deck.from_dict(deck_dict)
@@ -712,11 +746,7 @@ def get_similar_decks(
 @app.get("/api/decks/{deck_id}/analysis")
 def get_deck_analysis(deck_id: int):
     """Deck analysis: mana curve, color distribution, lands distribution."""
-    deck_dict = None
-    for d in _decks:
-        if d.get("deck_id") == deck_id:
-            deck_dict = d
-            break
+    deck_dict = _get_deck_by_id(deck_id)
     if not deck_dict:
         raise HTTPException(status_code=404, detail="Deck not found")
     deck = Deck.from_dict(deck_dict)
@@ -806,11 +836,9 @@ class CreateEventBody(BaseModel):
     location: str = ""
 
 
-@app.post("/api/events", dependencies=[Depends(require_admin)])
+@app.post("/api/events", dependencies=[Depends(require_admin), Depends(require_database)])
 def create_event(body: CreateEventBody):
     """Create a new event (admin-only). Manual events get IDs in a separate namespace from MTGTop8."""
-    if not _database_available():
-        raise HTTPException(status_code=503, detail="Database not configured")
     try:
         with _db.session_scope() as session:
             row = _db.create_event(
@@ -844,13 +872,13 @@ def get_event_by_id(event_id: str):
         except Exception as e:
             logger.exception("Failed to get event: %s", e)
     # Fallback: find from _decks
-    for d in _decks:
-        if str(d.get("event_id")) == str(event_id):
-            return {"event_id": d.get("event_id"), "event_name": d.get("event_name", ""), "store": "", "location": "", "date": d.get("date", ""), "format_id": d.get("format_id", ""), "player_count": d.get("player_count", 0)}
+    ev = _get_event_by_id_from_decks(event_id)
+    if ev:
+        return ev
     raise HTTPException(status_code=404, detail="Event not found")
 
 
-@app.put("/api/events/{event_id}", dependencies=[Depends(require_admin)])
+@app.put("/api/events/{event_id}", dependencies=[Depends(require_admin), Depends(require_database)])
 def update_event_endpoint(
     event_id: str,
     event_name: str | None = Query(None),
@@ -861,8 +889,6 @@ def update_event_endpoint(
     location: str | None = Query(None),
 ):
     """Update event metadata (admin-only)."""
-    if not _database_available():
-        raise HTTPException(status_code=503, detail="Database not configured")
     try:
         with _db.session_scope() as session:
             ok = _db.update_event(session, event_id, event_name=event_name, date=date, format_id=format_id, player_count=player_count, store=store, location=location)
@@ -877,11 +903,9 @@ def update_event_endpoint(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/events/{event_id}", dependencies=[Depends(require_admin)])
+@app.delete("/api/events/{event_id}", dependencies=[Depends(require_admin), Depends(require_database)])
 def delete_event_endpoint(event_id: str):
     """Delete an event and all its decks (admin-only)."""
-    if not _database_available():
-        raise HTTPException(status_code=503, detail="Database not configured")
     try:
         with _db.session_scope() as session:
             ok = _db.delete_event(session, event_id, delete_decks=True)
@@ -900,15 +924,13 @@ class UploadDecksBody(BaseModel):
     decks: list[dict] | None = None
 
 
-@app.post("/api/events/{event_id}/decks", dependencies=[Depends(require_admin)])
+@app.post("/api/events/{event_id}/decks", dependencies=[Depends(require_admin), Depends(require_database)])
 async def upload_decks_to_event(
     event_id: str,
     body: UploadDecksBody | None = None,
     file: UploadFile | None = File(None),
 ):
     """Upload decks to an existing event (admin-only). Decks are assigned this event_id and event_name/date from the event."""
-    if not _database_available():
-        raise HTTPException(status_code=503, detail="Database not configured")
     with _db.session_scope() as session:
         ev = _db.get_event(session, event_id)
         if not ev:
@@ -950,11 +972,9 @@ async def upload_decks_to_event(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/events/{event_id}/decks/add", dependencies=[Depends(require_admin)])
+@app.post("/api/events/{event_id}/decks/add", dependencies=[Depends(require_admin), Depends(require_database)])
 def add_blank_deck_to_event(event_id: str):
     """Add one blank deck to an event (admin-only)."""
-    if not _database_available():
-        raise HTTPException(status_code=503, detail="Database not configured")
     with _db.session_scope() as session:
         ev = _db.get_event(session, event_id)
         if not ev:
@@ -1005,11 +1025,9 @@ def _upload_link_base_url(request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
 
-@app.post("/api/events/{event_id}/upload-links", dependencies=[Depends(require_admin)])
+@app.post("/api/events/{event_id}/upload-links", dependencies=[Depends(require_admin), Depends(require_database)])
 def create_upload_links(event_id: str, request: Request, body: CreateUploadLinksBody | None = None):
     """Create one or more one-time upload links for an event (admin-only). Pass deck_id to create a link that updates that deck."""
-    if not _database_available():
-        raise HTTPException(status_code=503, detail="Database not configured")
     body = body or CreateUploadLinksBody()
     expires_at = None
     if body.expires_in_days is not None and body.expires_in_days > 0:
@@ -1049,11 +1067,9 @@ def create_upload_links(event_id: str, request: Request, body: CreateUploadLinks
         return {"links": links}
 
 
-@app.get("/api/upload/{token}")
+@app.get("/api/upload/{token}", dependencies=[Depends(require_database)])
 def get_upload_link_info(token: str):
     """Return event info for a valid one-time upload link (public). For update links, also return current deck."""
-    if not _database_available():
-        raise HTTPException(status_code=503, detail="Database not configured")
     with _db.session_scope() as session:
         row = _db.get_upload_link(session, token)
         if not row:
@@ -1074,7 +1090,7 @@ def get_upload_link_info(token: str):
             "mode": "update" if getattr(row, "deck_id", None) else "create",
         }
         if getattr(row, "deck_id", None) is not None:
-            deck = next((d for d in _decks if d.get("deck_id") == row.deck_id), None)
+            deck = _get_deck_by_id(row.deck_id)
             if deck:
                 out["deck_id"] = deck["deck_id"]
                 out["deck"] = {
@@ -1147,11 +1163,9 @@ def _submit_create_with_upload_link(session, row, ev, event_name: str, body: Sub
     return deck_id
 
 
-@app.post("/api/upload/{token}")
+@app.post("/api/upload/{token}", dependencies=[Depends(require_database)])
 def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
     """Submit or update a deck using a one-time upload link (public). Update links modify the linked deck."""
-    if not _database_available():
-        raise HTTPException(status_code=503, detail="Database not configured")
     _validate_deck_payload(body)
     with _db.session_scope() as session:
         row = _db.get_upload_link(session, token)
@@ -1169,7 +1183,7 @@ def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
         deck_id = getattr(row, "deck_id", None)
         if deck_id is not None:
             # Update existing deck
-            current = next((d for d in _decks if d.get("deck_id") == deck_id), None)
+            current = _get_deck_by_id(deck_id)
             if not current:
                 raise HTTPException(status_code=400, detail="Deck not found")
             current = dict(current)
@@ -1222,19 +1236,13 @@ class UpdateDeckBody(BaseModel):
     sideboard: list[DeckCardUpdate] | None = None
 
 
-@app.put("/api/decks/{deck_id}", dependencies=[Depends(require_admin)])
+@app.put("/api/decks/{deck_id}", dependencies=[Depends(require_admin), Depends(require_database)])
 def update_deck_endpoint(deck_id: int, body: UpdateDeckBody):
     """Update deck metadata (admin-only)."""
-    if not _database_available():
-        raise HTTPException(status_code=503, detail="Database not configured")
-    # Find current deck
-    current = None
-    for d in _decks:
-        if d.get("deck_id") == deck_id:
-            current = dict(d)
-            break
-    if not current:
+    deck_dict = _get_deck_by_id(deck_id)
+    if not deck_dict:
         raise HTTPException(status_code=404, detail="Deck not found")
+    current = dict(deck_dict)
     # Merge body into current
     if body.name is not None:
         current["name"] = body.name
@@ -1272,11 +1280,9 @@ def update_deck_endpoint(deck_id: int, body: UpdateDeckBody):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/decks/{deck_id}", dependencies=[Depends(require_admin)])
+@app.delete("/api/decks/{deck_id}", dependencies=[Depends(require_admin), Depends(require_database)])
 def delete_deck_endpoint(deck_id: int):
     """Delete a single deck (admin-only)."""
-    if not _database_available():
-        raise HTTPException(status_code=503, detail="Database not configured")
     try:
         with _db.session_scope() as session:
             ok = _db.delete_deck(session, deck_id)
@@ -1581,10 +1587,8 @@ def post_clear_decks(_: str = Depends(require_admin)):
 
 
 @app.get("/api/settings/upload-links")
-def get_settings_upload_links(_: str = Depends(require_admin)):
+def get_settings_upload_links(_: str = Depends(require_admin), __: None = Depends(require_database)):
     """List all one-time upload links (admin-only). Requires database."""
-    if not _database_available():
-        raise HTTPException(status_code=503, detail="Database not configured")
     with _db.session_scope() as session:
         links = _db.get_all_upload_links(session)
     return {"links": links}
@@ -1594,10 +1598,9 @@ def get_settings_upload_links(_: str = Depends(require_admin)):
 def delete_settings_upload_links(
     used_only: bool = Query(False, description="If true, only delete links that have been used"),
     _: str = Depends(require_admin),
+    __: None = Depends(require_database),
 ):
     """Clear one-time upload links (admin-only). used_only=true clears only used links. Requires database."""
-    if not _database_available():
-        raise HTTPException(status_code=503, detail="Database not configured")
     with _db.session_scope() as session:
         deleted = _db.delete_all_upload_links(session, used_only=used_only)
     return {"deleted": deleted, "message": f"Cleared {deleted} link(s)"}

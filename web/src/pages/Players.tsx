@@ -4,20 +4,24 @@ import toast from 'react-hot-toast'
 import { getPlayers, getDateRange } from '../api'
 import type { PlayerStats } from '../types'
 import Skeleton from '../components/Skeleton'
+import { useFetch } from '../hooks/useFetch'
 import { dateMinusDays, firstDayOfYear, reportError } from '../utils'
 
 type SortKey = 'player' | 'wins' | 'top2' | 'top4' | 'top8' | 'points' | 'deck_count'
 
 export default function Players() {
-  const [players, setPlayers] = useState<PlayerStats[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
   const [sortBy, setSortBy] = useState<SortKey>('wins')
   const [sortDesc, setSortDesc] = useState(true)
   const [dateFrom, setDateFrom] = useState<string | null>(null)
   const [dateTo, setDateTo] = useState<string | null>(null)
   const [maxDate, setMaxDate] = useState<string | null>(null)
   const [lastEventDate, setLastEventDate] = useState<string | null>(null)
+
+  const { data, loading, error, refetch } = useFetch<{ players: PlayerStats[] }>(
+    () => getPlayers(dateFrom, dateTo).then((r) => ({ players: r.players })),
+    [dateFrom, dateTo]
+  )
+  const players = data?.players ?? []
 
   useEffect(() => {
     getDateRange().then((r) => {
@@ -27,15 +31,8 @@ export default function Players() {
   }, [])
 
   useEffect(() => {
-    setLoading(true)
-    getPlayers(dateFrom, dateTo)
-      .then((r) => setPlayers(r.players))
-      .catch((e) => {
-        setError(e.message)
-        toast.error(reportError(e))
-      })
-      .finally(() => setLoading(false))
-  }, [dateFrom, dateTo])
+    if (error) toast.error(reportError(new Error(error)))
+  }, [error])
 
   const setPreset = (preset: 'all' | '2weeks' | 'month' | '2months' | '6months' | 'thisYear' | 'lastEvent') => {
     if (preset === 'all' || !maxDate) {
@@ -123,21 +120,7 @@ export default function Players() {
         <h1 className="page-title" style={{ margin: 0 }}>Player Leaderboard</h1>
         <div className="chart-container" style={{ textAlign: 'center', padding: '2rem', marginTop: '1.5rem' }}>
           <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{error}</p>
-          <button
-            type="button"
-            className="btn"
-            onClick={() => {
-              setError(null)
-              setLoading(true)
-              getPlayers(dateFrom, dateTo)
-                .then((r) => setPlayers(r.players))
-                .catch((e) => {
-                  setError(e.message)
-                  toast.error(reportError(e))
-                })
-                .finally(() => setLoading(false))
-            }}
-          >
+          <button type="button" className="btn" onClick={() => refetch()}>
             Try again
           </button>
         </div>
