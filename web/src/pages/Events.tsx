@@ -144,7 +144,7 @@ export default function Events() {
       {user === 'admin' && (
         <section className="card" style={{ marginBottom: '1.5rem' }}>
           <h2 style={{ marginTop: 0 }}>Create event</h2>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'flex-end' }}>
+          <div className="toolbar toolbar--stack-on-mobile" style={{ gap: '0.75rem', alignItems: 'flex-end' }}>
             <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
               <span className="label">Name</span>
               <input
@@ -230,8 +230,8 @@ export default function Events() {
         </div>
       ) : (
         <>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'flex-end', marginBottom: '1rem' }}>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+          <div className="events-filters toolbar toolbar--wrap-on-mobile" style={{ marginBottom: '1rem', gap: '1rem', alignItems: 'flex-end' }}>
+            <label className="events-filters-item" style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
               <span className="label">Filter by name</span>
               <input
                 type="text"
@@ -241,7 +241,7 @@ export default function Events() {
                 style={{ minWidth: 180 }}
               />
             </label>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+            <label className="events-filters-item" style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
               <span className="label">Filter by date</span>
               <input
                 type="date"
@@ -250,7 +250,7 @@ export default function Events() {
                 style={{ width: 140 }}
               />
             </label>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+            <label className="events-filters-item" style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
               <span className="label">Filter by format</span>
               <select
                 value={filterFormat}
@@ -264,7 +264,7 @@ export default function Events() {
               </select>
             </label>
             {hasFilters && (
-              <button type="button" className="btn" onClick={clearFilters} style={{ marginLeft: '0.5rem' }}>
+              <button type="button" className="btn" onClick={clearFilters}>
                 Clear filters
               </button>
             )}
@@ -274,7 +274,8 @@ export default function Events() {
               Showing {filteredAndSorted.length} of {events.length} events
             </p>
           )}
-          <div className="table-wrap">
+          <div className="table-wrap-outer">
+            <div className="table-wrap">
             <table>
               <thead>
                 <tr>
@@ -357,6 +358,7 @@ export default function Events() {
               ))}
               </tbody>
             </table>
+            </div>
           </div>
         </>
       )}

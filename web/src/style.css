@@ -39,6 +39,37 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
+.navbar-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex: 1;
+}
+
+.navbar-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 1.25rem;
+  cursor: pointer;
+}
+
+.navbar-toggle:hover {
+  background: var(--bg-hover);
+}
+
+.navbar-menu {
+  display: flex;
+  align-items: center;
+}
+
 .navbar-brand {
   font-weight: 700;
   font-size: 1.25rem;
@@ -122,6 +153,31 @@ body {
   font-size: 1.5rem;
 }
 
+/* Mobile-friendly utility classes */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.toolbar--stack-on-mobile {
+  /* Overridden in @media below */
+}
+
+/* On mobile: full width and wrap, but keep row direction (multiple pills per row) */
+.toolbar--wrap-on-mobile {
+  /* Overridden in @media below */
+}
+
+.pill-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
 .card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
@@ -152,6 +208,12 @@ body {
 .dashboard-events-filter .event-selector-wrap .events-dropdown {
   width: 100% !important;
   max-width: none !important;
+}
+
+.dashboard-charts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1.5rem;
 }
 
 .stat-card {
@@ -265,6 +327,11 @@ tr.clickable {
 .chart-container .recharts-legend-wrapper {
   padding-bottom: 4px;
   bottom: 15% !important;
+}
+
+/* Pie chart: keep title and legend from obscuring the pie */
+.chart-container .recharts-pie-chart {
+  margin-bottom: 4px;
 }
 
 .chart-container--compact {
@@ -479,21 +546,193 @@ textarea:focus {
   gap: 1.5rem;
 }
 
+.deck-list-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+}
+
 @media (max-width: 768px) {
   .navbar {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-  .navbar-nav {
     flex-wrap: wrap;
+    gap: 0;
+    padding: 0.75rem 1rem;
+  }
+  .navbar-header {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .navbar-toggle {
+    display: flex;
+    margin-left: auto;
+  }
+  .navbar-menu {
+    display: none;
+    flex-basis: 100%;
+    order: 1;
+    padding: 0.5rem 0 0;
+    border-top: 1px solid var(--border);
+    margin-top: 0.25rem;
+  }
+  .navbar-menu--open {
+    display: block;
+  }
+  .navbar-menu .navbar-nav {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+  }
+  .navbar-menu .navbar-nav li {
+    border-bottom: 1px solid var(--border);
+  }
+  .navbar-menu .navbar-nav li:last-child {
+    border-bottom: none;
+  }
+  .navbar-menu .nav-link,
+  .navbar-menu .nav-link-button {
+    display: block;
+    width: 100%;
+    padding: 0.75rem 1rem;
+    text-align: left;
+    border-radius: 0;
   }
   .main {
     padding: 1rem;
+  }
+  .page-title {
+    font-size: 1.35rem;
+    margin-bottom: 1.25rem;
+  }
+  .stat-card {
+    padding: 0.875rem;
+  }
+  .chart-container {
+    padding: 1rem;
+    margin-bottom: 1.25rem;
+    border-radius: 8px;
+  }
+  /* Pie charts: legend at bottom, don't obscure chart; title spacing */
+  .chart-container .recharts-legend-wrapper {
+    bottom: 0 !important;
+    padding-top: 8px;
+    padding-bottom: 4px;
+    font-size: 0.7rem;
+  }
+  .chart-container .recharts-legend-item {
+    margin-right: 6px;
+    margin-bottom: 2px;
+  }
+  .chart-container h3,
+  .chart-container h4 {
+    margin-bottom: 0.75rem !important;
+  }
+  /* Reserve space so pie doesn't overlap legend: reduce pie area from bottom */
+  .chart-container .recharts-responsive-container {
+    display: block;
+  }
+  .chart-container:has(.recharts-pie-chart) .recharts-responsive-container {
+    padding-bottom: 4px;
+  }
+  .chart-container:has(.recharts-pie-chart) .recharts-surface {
+    overflow: visible;
+  }
+  .card-grid {
+    gap: 0.875rem;
+  }
+  .toolbar--stack-on-mobile {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+    width: 100%;
+    min-width: 0;
+  }
+  .toolbar--wrap-on-mobile {
+    width: 100%;
+    min-width: 0;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .events-filters {
+    width: 100%;
+    min-width: 0;
+    padding: 1rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-sizing: border-box;
+  }
+  .events-filters-item {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+  .events-filters-item input,
+  .events-filters-item select {
+    width: 100%;
+    max-width: none;
+  }
+  /* EventSelector: full width on mobile everywhere */
+  .event-selector-wrap {
+    max-width: none !important;
+    width: 100% !important;
+  }
+  .event-selector-wrap .events-dropdown {
+    width: 100% !important;
+    max-width: none !important;
+    box-sizing: border-box;
+  }
+  .event-selector-date-presets {
+    width: 100%;
+    min-width: 0;
+  }
+  .event-selector-date-presets .btn {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  /* Archetypes / Dashboard event filter containers: full width */
+  .archetypes-events-filter,
+  .metagame-event-selector-wrap {
+    width: 100%;
+    min-width: 0;
+  }
+  .table-wrap-outer {
+    position: relative;
+    margin: 0 -1rem;
+    padding: 0 1rem;
+    border-radius: 0;
+  }
+  .table-wrap-outer--scrollable::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 24px;
+    background: linear-gradient(to right, transparent, var(--bg) 60%);
+    pointer-events: none;
+  }
+  .table-wrap-outer .table-wrap {
+    -webkit-overflow-scrolling: touch;
+    border-radius: 0;
+  }
+  .table-wrap {
+    overflow-x: auto;
+  }
+  table {
+    font-size: 0.875rem;
+  }
+  th,
+  td {
+    padding: 0.5rem 0.65rem;
+    min-width: 0;
   }
   .card-grid:not(.dashboard-stat-grid) {
     grid-template-columns: 1fr;
   }
   .deck-columns {
+    grid-template-columns: 1fr;
+  }
+  .deck-list-grid {
     grid-template-columns: 1fr;
   }
   .scrape-sections-grid {
@@ -508,5 +747,48 @@ textarea:focus {
   .dashboard-events-filter {
     width: 100%;
     min-width: 100%;
+  }
+  .dashboard-charts-grid {
+    grid-template-columns: 1fr;
+    gap: 1.25rem;
+  }
+  .dashboard-recent-events {
+    margin-top: 1.25rem;
+  }
+  .login-page {
+    padding-left: 1rem;
+    padding-right: 1rem;
+    margin-left: auto;
+    margin-right: auto;
+    box-sizing: border-box;
+  }
+}
+
+@media (max-width: 480px) {
+  .main {
+    padding: 0.75rem 1rem;
+  }
+  .page-title {
+    font-size: 1.2rem;
+    margin-bottom: 1rem;
+  }
+  .stat-card {
+    padding: 0.75rem;
+  }
+  .stat-card .value {
+    font-size: 1.5rem;
+  }
+  .chart-container {
+    padding: 0.875rem 1rem;
+    margin-bottom: 1rem;
+  }
+  th,
+  td {
+    padding: 0.4rem 0.5rem;
+    font-size: 0.8125rem;
+  }
+  .login-page {
+    padding-left: 1.25rem;
+    padding-right: 1.25rem;
   }
 }

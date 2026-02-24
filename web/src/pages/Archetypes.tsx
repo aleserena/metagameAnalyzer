@@ -156,11 +156,12 @@ export default function Archetypes() {
 
   return (
     <div style={{ opacity: loading ? 0.6 : 1, transition: 'opacity 0.2s' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+      <div className="toolbar toolbar--stack-on-mobile" style={{ justifyContent: 'space-between', marginBottom: '1.5rem', gap: '0.75rem' }}>
         <h1 className="page-title" style={{ margin: 0 }}>
           Archetypes{formatName && <span style={{ fontSize: '0.7em', color: 'var(--text-muted)', marginLeft: '0.5rem' }}>— {formatName}</span>}
         </h1>
         <div
+          className="archetypes-events-filter toolbar"
           style={{
             display: 'flex',
             flexWrap: 'wrap',

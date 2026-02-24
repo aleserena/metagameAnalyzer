@@ -317,7 +317,8 @@ export default function Decks() {
           <div style={{ marginBottom: '0.5rem', color: 'var(--text-muted)', fontSize: '0.875rem' }}>
             {total} {total === 1 ? 'deck' : 'decks'} found
           </div>
-          <div className="table-wrap">
+          <div className="table-wrap-outer">
+            <div className="table-wrap">
             <table>
               <thead>
                 <tr>
@@ -419,6 +420,7 @@ export default function Decks() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
 
           {totalPages > 1 && (

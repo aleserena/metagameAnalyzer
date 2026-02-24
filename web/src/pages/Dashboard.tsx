@@ -135,11 +135,11 @@ export default function Dashboard() {
 
   return (
     <div style={{ opacity: loading ? 0.6 : 1, transition: 'opacity 0.2s' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+      <div className="toolbar toolbar--stack-on-mobile dashboard-header" style={{ marginBottom: '1rem' }}>
         <h1 className="page-title" style={{ margin: 0 }}>Dashboard</h1>
       </div>
 
-      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'stretch', gap: '1rem', marginBottom: '2rem' }}>
+      <div className="toolbar toolbar--stack-on-mobile" style={{ alignItems: 'stretch', marginBottom: '2rem', gap: '1rem' }}>
         <div className="card-grid dashboard-stat-grid" style={{ flex: '1 1 auto', minWidth: 0, marginBottom: 0 }}>
           <Link to="/decks" className="stat-card" style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}>
             <div className="value">{summary.total_decks}</div>
@@ -183,7 +183,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1.5rem' }}>
+      <div className="dashboard-charts-grid">
         <div className="chart-container">
           <h3 style={{ margin: '0 0 1rem' }}>Top Commanders</h3>
           {topCommanders.length ? (
@@ -257,7 +257,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="chart-container" style={{ marginTop: '1rem' }}>
+      <div className="chart-container dashboard-recent-events" style={{ marginTop: '1rem' }}>
         <h3 style={{ margin: '0 0 1rem' }}>Recent Events</h3>
         {recentEvents.length ? (
           <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>

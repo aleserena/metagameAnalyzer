@@ -21,7 +21,6 @@ import Feedback from './pages/Feedback'
 
 const router = createBrowserRouter(
   [
-    { path: '/login', element: <Login /> },
     { path: '/upload/:token', element: <UploadDeck /> },
     {
       path: '/',
@@ -32,6 +31,7 @@ const router = createBrowserRouter(
       ),
       children: [
         { index: true, element: <Dashboard /> },
+        { path: 'login', element: <Login /> },
         { path: 'events', element: <Events /> },
         { path: 'events/:eventId', element: <EventDetail /> },
         { path: 'metagame', element: <Metagame /> },

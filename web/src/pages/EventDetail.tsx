@@ -284,7 +284,8 @@ export default function EventDetail() {
       {decks.length === 0 ? (
         <p style={{ color: 'var(--text-muted)' }}>No decks in this event yet. {user === 'admin' && 'Click "Add deck" above to add one.'}</p>
       ) : (
-        <div className="table-wrap">
+        <div className="table-wrap-outer">
+          <div className="table-wrap">
           <table>
             <thead>
               <tr>
@@ -321,6 +322,7 @@ export default function EventDetail() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </div>
