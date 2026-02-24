@@ -1433,9 +1433,11 @@ def get_archetype_detail(
         rank_weights=rank_weights,
         include_basic_lands=True,
     )
+    deck_count_top8 = sum(1 for d in decks if is_top8(d.rank))
     return {
         "archetype": decoded,
         "deck_count": len(decks),
+        "deck_count_top8": deck_count_top8,
         "average_analysis": average_analysis,
         "top_cards_main": top_main,
     }

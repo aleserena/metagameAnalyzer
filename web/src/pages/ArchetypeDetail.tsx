@@ -216,6 +216,14 @@ export default function ArchetypeDetail() {
         <p style={{ margin: '0.25rem 0 0', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
           Average of {detail.deck_count} deck{detail.deck_count !== 1 ? 's' : ''}
           {eventIdsParam && ' in selected events'}
+          {detail.deck_count > 0 && detail.deck_count_top8 != null && (
+            <>
+              {' · '}
+              <span title={`${detail.deck_count_top8} of ${detail.deck_count} decks made top 8`}>
+                Conversion: {Math.round((detail.deck_count_top8 / detail.deck_count) * 1000) / 10}%
+              </span>
+            </>
+          )}
         </p>
       </div>
 

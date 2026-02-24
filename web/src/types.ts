@@ -122,6 +122,7 @@ export interface ArchetypeAverageAnalysis {
 export interface ArchetypeDetail {
   archetype: string
   deck_count: number
+  deck_count_top8?: number
   average_analysis: ArchetypeAverageAnalysis
   top_cards_main: TopCard[]
 }
