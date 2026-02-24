@@ -150,6 +150,7 @@ def require_database():
 # In-memory storage
 _decks: list[dict] = []
 _metagame_cache: dict | None = None
+_events_cache: list[dict] | None = None  # cached list for GET /api/events (invalidated when events/decks change)
 _player_aliases: dict[str, str] = {}  # alias -> canonical
 _scrape_cancel_event: threading.Event | None = None
 
@@ -271,8 +272,15 @@ def _get_event_by_id_from_decks(event_id: str) -> dict | None:
 
 
 def _invalidate_metagame() -> None:
-    global _metagame_cache
+    global _metagame_cache, _events_cache
     _metagame_cache = None
+    _events_cache = None
+
+
+def _invalidate_events_cache() -> None:
+    """Clear cached events list so next GET /api/events recomputes."""
+    global _events_cache
+    _events_cache = None
 
 
 def _normalize_card_name(card: str) -> str:
@@ -798,14 +806,13 @@ def get_format_info():
     return {"format_id": None, "format_name": "Multiple Formats"}
 
 
-@app.get("/api/events")
-def list_events():
-    """List unique events from current data (from DB events table when DB used, else from decks)."""
+def _compute_events_list() -> list[dict]:
+    """Build the events list (from DB or from _decks). Used by list_events with caching."""
     if _database_available():
         try:
             with _db.session_scope() as session:
                 rows = _db.get_all_events(session)
-            return {"events": [{"event_id": e["event_id"], "event_name": e["event_name"], "store": e.get("store", ""), "location": e.get("location", ""), "date": e["date"], "format_id": e["format_id"], "player_count": e.get("player_count", 0)} for e in rows]}
+            return [{"event_id": e["event_id"], "event_name": e["event_name"], "store": e.get("store", ""), "location": e.get("location", ""), "date": e["date"], "format_id": e["format_id"], "player_count": e.get("player_count", 0)} for e in rows]
         except Exception as e:
             logger.exception("Failed to list events from DB: %s", e)
     seen: dict[tuple[int | str, str], dict] = {}
@@ -821,7 +828,17 @@ def list_events():
                 "format_id": d.get("format_id"),
                 "player_count": d.get("player_count", 0),
             }
-    return {"events": list(seen.values())}
+    return list(seen.values())
+
+
+@app.get("/api/events")
+def list_events():
+    """List unique events from current data (from DB events table when DB used, else from decks). Cached until events/decks change."""
+    global _events_cache
+    if _events_cache is not None:
+        return {"events": _events_cache}
+    _events_cache = _compute_events_list()
+    return {"events": _events_cache}
 
 
 # --- Admin-only: events and deck management (DB required for create/update/delete) ---
@@ -852,6 +869,7 @@ def create_event(body: CreateEventBody):
                 store=(body.store or "").strip(),
                 location=(body.location or "").strip(),
             )
+            _invalidate_events_cache()
             return {"event_id": row.event_id, "event_name": row.name, "store": row.store or "", "location": row.location or "", "date": row.date, "format_id": row.format_id, "player_count": row.player_count or 0}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -895,6 +913,7 @@ def update_event_endpoint(
         if not ok:
             raise HTTPException(status_code=404, detail="Event not found")
         _load_decks_from_db()
+        _invalidate_events_cache()
         return {"event_id": event_id, "message": "updated"}
     except HTTPException:
         raise
@@ -912,6 +931,7 @@ def delete_event_endpoint(event_id: str):
         if not ok:
             raise HTTPException(status_code=404, detail="Event not found")
         _load_decks_from_db()
+        _invalidate_events_cache()
         return {"event_id": event_id, "message": "deleted"}
     except HTTPException:
         raise
