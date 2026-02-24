@@ -31,6 +31,30 @@ async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json()
 }
 
+export async function submitFeedback(body: {
+  type: string
+  title: string
+  description: string
+  email?: string | null
+  website?: string | null
+  captcha_a: number
+  captcha_b: number
+  captcha_answer: number
+}): Promise<{ url: string; number?: number }> {
+  const res = await fetch(`${API_BASE}/feedback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    const detail = err.detail ?? res.statusText
+    const message = typeof detail === 'string' ? detail : JSON.stringify(detail)
+    throw new Error(message)
+  }
+  return res.json()
+}
+
 export async function getDecks(params?: {
   event_id?: number | string
   event_ids?: string

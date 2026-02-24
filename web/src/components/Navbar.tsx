@@ -9,6 +9,7 @@ const baseNavItems = [
   { path: '/decks', label: 'Decks' },
   { path: '/decks/compare', label: 'Compare' },
   { path: '/players', label: 'Players' },
+  { path: '/feedback', label: 'Feedback' },
 ]
 
 const adminNavItems = [

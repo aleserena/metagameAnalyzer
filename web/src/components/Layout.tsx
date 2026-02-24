@@ -1,4 +1,4 @@
-import { Outlet } from 'react-router-dom'
+import { Link, Outlet } from 'react-router-dom'
 import { Toaster } from 'react-hot-toast'
 import Navbar from './Navbar'
 import { GITHUB_REPO } from '../config'
@@ -14,6 +14,8 @@ export default function Layout() {
         Vibe-coded with love &lt;3 by Alejandro Serena
         {' · '}
         <a href={GITHUB_REPO} target="_blank" rel="noopener noreferrer">GitHub</a>
+        {' · '}
+        <Link to="/feedback">Feedback</Link>
       </footer>
       <Toaster
         position="top-right"
