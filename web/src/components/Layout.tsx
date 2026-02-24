@@ -55,6 +55,7 @@ export default function Layout() {
       </footer>
       <Toaster
         position="top-right"
+        containerStyle={{ top: 'var(--navbar-height)' }}
         toastOptions={{
           duration: 4000,
           style: {
