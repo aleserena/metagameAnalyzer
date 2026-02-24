@@ -64,9 +64,9 @@ export function SkeletonStatCards() {
 
 export function SkeletonList({ items = 5 }: { items?: number }) {
   return (
-    <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+    <ul className="skeleton-list">
       {Array.from({ length: items }).map((_, i) => (
-        <li key={i} style={{ padding: '0.5rem 0', borderBottom: '1px solid var(--border)', display: 'flex', gap: '0.5rem', alignItems: 'baseline' }}>
+        <li key={i}>
           <Skeleton width={18} height={14} />
           <Skeleton width={`${60 + i * 5}%`} height={16} />
           <Skeleton width={80} height={14} style={{ marginLeft: 'auto' }} />

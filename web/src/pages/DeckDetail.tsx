@@ -68,28 +68,21 @@ function CardRow({
   qty: number; card: string; meta?: CardMeta; highlight: string | null
   showVsMetagame: boolean; playRate?: number
 }) {
+  const rowClass = [
+    'deck-card-row',
+    highlight === 'above' ? 'deck-card-row--above' : '',
+    highlight === 'below' ? 'deck-card-row--below' : '',
+  ].filter(Boolean).join(' ')
   return (
-    <div
-      className="card-row"
-      style={{
-        display: 'grid',
-        gridTemplateColumns: '24px 1fr auto',
-        gap: '0.35rem',
-        alignItems: 'center',
-        padding: '1px 0',
-        color: highlight === 'above' ? 'var(--success)' : highlight === 'below' ? '#f44336' : undefined,
-      }}
-    >
+    <div className={rowClass}>
       <span className="qty">{qty}</span>
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      <span className="deck-card-name">
         <CardHover cardName={card} linkTo>{card}</CardHover>
       </span>
-      <span style={{ whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+      <span className="deck-card-meta">
         {meta ? <ManaSymbols manaCost={meta.mana_cost} size={14} /> : null}
         {showVsMetagame && playRate != null && (
-          <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginLeft: 4 }}>
-            {playRate}%
-          </span>
+          <span className="deck-card-play-rate">{playRate}%</span>
         )}
       </span>
     </div>

@@ -4,6 +4,7 @@ import toast from 'react-hot-toast'
 import { getEvents, createEvent } from '../api'
 import type { EventWithOrigin } from '../api'
 import { useAuth } from '../contexts/AuthContext'
+import { useFetch } from '../hooks/useFetch'
 import { reportError, dateSortKey, ddMmYyToIso, isoToDdMmYy } from '../utils'
 
 /** Coerce value to a string for display; avoid rendering [object Object]. */
@@ -36,8 +37,8 @@ function normalizeForSort(e: EventWithOrigin, key: SortKey): string | number {
 
 export default function Events() {
   const { user } = useAuth()
-  const [events, setEvents] = useState<EventWithOrigin[]>([])
-  const [loading, setLoading] = useState(true)
+  const { data, loading, error, refetch } = useFetch<{ events: EventWithOrigin[] }>(() => getEvents().then((r) => ({ events: r.events })), [])
+  const events = data?.events ?? []
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
   const [newStore, setNewStore] = useState('')
@@ -51,17 +52,9 @@ export default function Events() {
   const [sortBy, setSortBy] = useState<SortKey>('date')
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
 
-  const loadEvents = () => {
-    setLoading(true)
-    getEvents()
-      .then((r) => setEvents(r.events))
-      .catch((e) => toast.error(reportError(e)))
-      .finally(() => setLoading(false))
-  }
-
   useEffect(() => {
-    loadEvents()
-  }, [])
+    if (error) toast.error(reportError(new Error(error)))
+  }, [error])
 
   const handleCreate = () => {
     const name = newName.trim() || 'Unnamed'
@@ -77,13 +70,14 @@ export default function Events() {
       location: newLocation.trim(),
     })
       .then(() => {
+        refetch()
         setNewName('')
         setNewStore('')
         setNewLocation('')
         setNewDate('')
         setNewFormatId('EDH')
         setNewPlayerCount(0)
-        loadEvents()
+        refetch()
         toast.success('Event created')
       })
       .catch((e) => toast.error(reportError(e)))
@@ -220,6 +214,11 @@ export default function Events() {
 
       {loading ? (
         <p>Loading events…</p>
+      ) : error ? (
+        <div className="chart-container" style={{ textAlign: 'center', padding: '2rem' }}>
+          <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{error}</p>
+          <button type="button" className="btn" onClick={() => refetch()}>Try again</button>
+        </div>
       ) : events.length === 0 ? (
         <div className="chart-container" style={{ textAlign: 'center', padding: '3rem 2rem' }}>
           <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>No events yet.</p>

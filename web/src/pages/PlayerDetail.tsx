@@ -2,31 +2,28 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { getPlayerDetail, getSimilarPlayers, addPlayerAlias, getPlayerAliases } from '../api'
+import type { PlayerDetail as PlayerDetailData } from '../api'
 import { useAuth } from '../contexts/AuthContext'
+import { useFetch } from '../hooks/useFetch'
+import PageError from '../components/PageError'
+import PageSkeleton from '../components/PageSkeleton'
 import { reportError } from '../utils'
 
 export default function PlayerDetail() {
   const { playerName } = useParams<{ playerName: string }>()
   const navigate = useNavigate()
   const { user } = useAuth()
-  const [data, setData] = useState<Awaited<ReturnType<typeof getPlayerDetail>> | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const { data, loading, error, refetch } = useFetch<PlayerDetailData>(
+    () => (playerName ? getPlayerDetail(decodeURIComponent(playerName)) : Promise.reject(new Error('Missing player name'))),
+    [playerName ?? '']
+  )
   const [similarPlayers, setSimilarPlayers] = useState<string[]>([])
   const [aliases, setAliases] = useState<Record<string, string>>({})
   const [mergeLoading, setMergeLoading] = useState(false)
 
   useEffect(() => {
-    if (!playerName) return
-    getPlayerDetail(decodeURIComponent(playerName))
-      .then(setData)
-      .catch((e) => {
-        const msg = reportError(e)
-        setError(msg)
-        toast.error(msg)
-      })
-      .finally(() => setLoading(false))
-  }, [playerName])
+    if (error) toast.error(reportError(new Error(error)))
+  }, [error])
 
   useEffect(() => {
     if (!data?.player) return
@@ -34,33 +31,10 @@ export default function PlayerDetail() {
     getPlayerAliases().then((r) => setAliases(r.aliases))
   }, [data?.player])
 
-  if (loading) return <div className="loading">Loading...</div>
+  if (loading) return <PageSkeleton titleWidth={200} blocks={2} />
   if (error) {
     return (
-      <div>
-        <h1 className="page-title">Player</h1>
-        <div className="chart-container" style={{ textAlign: 'center', padding: '2rem' }}>
-          <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{error}</p>
-          <button
-            type="button"
-            className="btn"
-            onClick={() => {
-              setError(null)
-              setLoading(true)
-              getPlayerDetail(decodeURIComponent(playerName!))
-                .then(setData)
-                .catch((e) => {
-                  const msg = reportError(e)
-                  setError(msg)
-                  toast.error(msg)
-                })
-                .finally(() => setLoading(false))
-            }}
-          >
-            Try again
-          </button>
-        </div>
-      </div>
+      <PageError message={error} title="Player" onRetry={() => refetch()} />
     )
   }
   if (!data) {
