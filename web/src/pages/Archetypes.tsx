@@ -21,7 +21,7 @@ export default function Archetypes() {
   const [lastEventDate, setLastEventDate] = useState<string | null>(null)
   const [events, setEvents] = useState<Event[]>([])
   const [formatName, setFormatName] = useState<string | null>(null)
-  type SortKey = 'archetype' | 'count' | 'pct' | 'countTop8' | 'pctTop8'
+  type SortKey = 'archetype' | 'count' | 'pct' | 'countTop8' | 'pctTop8' | 'conversion'
   const [sortBy, setSortBy] = useState<SortKey>('pct')
   const [sortDesc, setSortDesc] = useState(true)
 
@@ -63,17 +63,20 @@ export default function Archetypes() {
 
   const archetypes = metagame?.archetype_distribution ?? []
   const archetypesTop8 = metagame?.archetype_distribution_top8 ?? []
-  const byName: Record<string, { archetype: string; count: number; pct: number; countTop8: number; pctTop8: number }> = {}
+  const byName: Record<string, { archetype: string; count: number; pct: number; countTop8: number; pctTop8: number; conversion: number }> = {}
   for (const r of archetypes) {
-    byName[r.archetype] = { ...r, countTop8: 0, pctTop8: 0 }
+    byName[r.archetype] = { ...r, countTop8: 0, pctTop8: 0, conversion: 0 }
   }
   for (const r of archetypesTop8) {
     if (!byName[r.archetype]) {
-      byName[r.archetype] = { archetype: r.archetype, count: 0, pct: 0, countTop8: r.count, pctTop8: r.pct }
+      byName[r.archetype] = { archetype: r.archetype, count: 0, pct: 0, countTop8: r.count, pctTop8: r.pct, conversion: 0 }
     } else {
       byName[r.archetype].countTop8 = r.count
       byName[r.archetype].pctTop8 = r.pct
     }
+  }
+  for (const row of Object.values(byName)) {
+    row.conversion = row.count > 0 ? Math.round((row.countTop8 / row.count) * 1000) / 10 : 0
   }
   const handleSort = (key: SortKey) => {
     if (sortBy === key) {
@@ -100,6 +103,9 @@ export default function Archetypes() {
         break
       case 'pctTop8':
         cmp = a.pctTop8 - b.pctTop8
+        break
+      case 'conversion':
+        cmp = a.conversion - b.conversion
         break
     }
     return sortDesc ? -cmp : cmp
@@ -185,7 +191,7 @@ export default function Archetypes() {
       ) : (
         <div className="chart-container">
           <p style={{ margin: '0 0 1rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
-            Click column headers to sort. Click an archetype for average deck stats and most played cards.
+            Click column headers to sort. Conversion = % of that archetype&apos;s decks that made top 8. Click an archetype for average deck stats and most played cards.
           </p>
           <div style={{ overflowX: 'auto' }}>
             <table className="table">
@@ -231,6 +237,14 @@ export default function Archetypes() {
                   >
                     % of top 8 {sortBy === 'pctTop8' && (sortDesc ? '↓' : '↑')}
                   </th>
+                  <th
+                    style={{ textAlign: 'right', cursor: 'pointer', userSelect: 'none' }}
+                    onClick={() => handleSort('conversion')}
+                    title="Sort by conversion rate (share of archetype decks that made top 8)"
+                    aria-sort={sortBy === 'conversion' ? (sortDesc ? 'descending' : 'ascending') : undefined}
+                  >
+                    Conversion {sortBy === 'conversion' && (sortDesc ? '↓' : '↑')}
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -248,6 +262,9 @@ export default function Archetypes() {
                     <td style={{ textAlign: 'right' }}>{row.pct}%</td>
                     <td style={{ textAlign: 'right' }}>{row.countTop8}</td>
                     <td style={{ textAlign: 'right' }}>{row.pctTop8 > 0 ? `${row.pctTop8}%` : '—'}</td>
+                    <td style={{ textAlign: 'right' }} title={`${row.countTop8} / ${row.count} decks`}>
+                      {row.count > 0 ? `${row.conversion}%` : '—'}
+                    </td>
                   </tr>
                 ))}
               </tbody>
