@@ -466,7 +466,7 @@ function CardListSection({
       })
 
     return (
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+      <div className="deck-list-grid">
         <div className="deck-list">{renderColumn(col1)}</div>
         <div className="deck-list">{renderColumn(col2)}</div>
       </div>
@@ -479,7 +479,7 @@ function CardListSection({
   const col1 = sorted.slice(0, half)
   const col2 = sorted.slice(half)
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+    <div className="deck-list-grid">
       <div className="deck-list">
         {col1.map(([qty, card]) => (
           <CardRow
@@ -914,7 +914,7 @@ export default function DeckDetail() {
         </div>
       )}
 
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
+      <div className="toolbar toolbar--wrap-on-mobile" style={{ marginBottom: '1rem', gap: '0.5rem', alignItems: 'center' }}>
         <span style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Export:</span>
         <button
           type="button"
@@ -934,7 +934,10 @@ export default function DeckDetail() {
               parts.push('Sideboard')
               deck.sideboard.forEach(({ qty, card }) => parts.push(`${qty} ${card}`))
             }
-            navigator.clipboard.writeText(parts.join('\n'))
+            navigator.clipboard.writeText(parts.join('\n')).then(
+              () => toast.success('Deck copied to clipboard'),
+              () => toast.error('Failed to copy')
+            )
           }}
         >
           Copy for MTGO
@@ -957,14 +960,17 @@ export default function DeckDetail() {
               parts.push('Sideboard')
               deck.sideboard.forEach(({ qty, card }) => parts.push(`${qty} ${card}`))
             }
-            navigator.clipboard.writeText(parts.join('\n'))
+            navigator.clipboard.writeText(parts.join('\n')).then(
+              () => toast.success('Deck copied to clipboard'),
+              () => toast.error('Failed to copy')
+            )
           }}
         >
           Copy for Moxfield
         </button>
       </div>
 
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
+      <div className="toolbar toolbar--wrap-on-mobile" style={{ marginBottom: '1rem', gap: '0.5rem', alignItems: 'center' }}>
         <button
           type="button"
           className="btn"
@@ -1036,7 +1042,7 @@ export default function DeckDetail() {
 
       {viewMode === 'list' && (
         <>
-          <div style={{ marginBottom: '0.5rem', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.5rem' }}>
+          <div className="toolbar toolbar--stack-on-mobile pill-group" style={{ marginBottom: '0.5rem', gap: '0.5rem', alignItems: 'center' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
               <input
                 type="checkbox"
@@ -1166,8 +1172,8 @@ export default function DeckDetail() {
 
       {deck && (
         <div className="chart-container" style={{ marginTop: '1.5rem' }}>
-          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.75rem' }}>
-            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.75rem' }}>
+          <div className="toolbar toolbar--stack-on-mobile" style={{ justifyContent: 'space-between', marginBottom: '0.75rem', gap: '0.75rem' }}>
+            <div className="toolbar pill-group" style={{ gap: '0.75rem', alignItems: 'center' }}>
               <h3 style={{ margin: 0 }}>Similar Decks</h3>
               <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.875rem' }}>
                 <input

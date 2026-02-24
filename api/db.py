@@ -6,7 +6,6 @@ falls back to in-memory + file storage (see api/main.py).
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from contextlib import contextmanager
@@ -165,8 +164,8 @@ def session_scope():
 
 def run_migrations():
     """Run Alembic migrations (upgrade to head). Call from CLI or at startup."""
-    from alembic.config import Config
     from alembic import command
+    from alembic.config import Config
     _project_root = Path(__file__).resolve().parent.parent
     alembic_cfg = Config(str(_project_root / "alembic.ini"))
     alembic_cfg.set_main_option("script_location", str(_project_root / "alembic"))

@@ -245,11 +245,12 @@ export default function Metagame() {
 
   return (
     <div style={{ opacity: loading ? 0.6 : 1, transition: 'opacity 0.2s' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+      <div className="toolbar toolbar--stack-on-mobile" style={{ marginBottom: '1.5rem', gap: '0.75rem', justifyContent: 'space-between' }}>
         <h1 className="page-title" style={{ margin: 0 }}>
           Metagame Analysis{formatName && <span style={{ fontSize: '0.7em', color: 'var(--text-muted)', marginLeft: '0.5rem' }}>— {formatName}</span>}
         </h1>
         <div
+          className="metagame-event-selector-wrap"
           style={{
             display: 'flex',
             flexWrap: 'wrap',
@@ -419,7 +420,7 @@ export default function Metagame() {
             fontSize: '0.8125rem',
           }}
         >
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
+          <div className="toolbar pill-group" style={{ gap: '0.5rem', alignItems: 'center' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
               <input
                 type="checkbox"
@@ -518,7 +519,8 @@ export default function Metagame() {
         {hasAnyFilter && filteredTotal === 0 && !loadingCardMeta && (
           <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>No cards match the current filters.</p>
         )}
-        <div className="table-wrap">
+        <div className="table-wrap-outer">
+          <div className="table-wrap">
           <table>
             <thead>
               <tr>
@@ -543,6 +545,7 @@ export default function Metagame() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       </div>
 
@@ -552,7 +555,8 @@ export default function Metagame() {
           <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1rem' }}>
             Pairs that appear in the same deck frequently (co-occurrence)
           </p>
-          <div className="table-wrap">
+          <div className="table-wrap-outer">
+            <div className="table-wrap">
             <table>
               <thead>
                 <tr>
@@ -575,6 +579,7 @@ export default function Metagame() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         </div>
       )}

@@ -140,7 +140,8 @@ export default function PlayerDetail() {
 
       <div className="chart-container">
         <h3 style={{ margin: '0 0 1rem' }}>Decks</h3>
-        <div className="table-wrap">
+        <div className="table-wrap-outer">
+          <div className="table-wrap">
           <table>
             <thead>
               <tr>
@@ -161,6 +162,7 @@ export default function PlayerDetail() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       </div>
     </div>

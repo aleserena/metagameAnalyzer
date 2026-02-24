@@ -83,7 +83,8 @@ export default function Players() {
           <Skeleton width={200} height={28} style={{ marginBottom: '1rem' }} />
           <Skeleton width={300} height={32} />
         </div>
-        <div className="table-wrap">
+        <div className="table-wrap-outer">
+          <div className="table-wrap">
           <table>
             <thead>
               <tr>
@@ -110,6 +111,7 @@ export default function Players() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       </div>
     )
@@ -185,7 +187,8 @@ export default function Players() {
         </div>
       </div>
 
-      <div className="table-wrap">
+      <div className="table-wrap-outer">
+        <div className="table-wrap">
         <table>
           <thead>
             <tr>
@@ -230,6 +233,7 @@ export default function Players() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
 
     </div>

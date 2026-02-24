@@ -205,7 +205,8 @@ export default function DeckCompare() {
             <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1rem' }}>
               Green = in all decks. Colored cells = unique to that deck. &quot;(unique)&quot; = only in one deck.
             </p>
-            <div className="table-wrap" style={{ overflowX: 'auto' }}>
+            <div className="table-wrap-outer">
+              <div className="table-wrap" style={{ overflowX: 'auto' }}>
               <table>
                 <thead>
                   <tr>
@@ -253,6 +254,7 @@ export default function DeckCompare() {
                   })}
                 </tbody>
               </table>
+              </div>
             </div>
           </div>
 

@@ -34,7 +34,7 @@ export default function Login() {
   }
 
   return (
-    <div className="chart-container" style={{ maxWidth: 400, margin: '2rem auto' }}>
+    <div className="login-page chart-container" style={{ maxWidth: 400, margin: '2rem auto' }}>
       <h1 className="page-title">Admin login</h1>
       <form onSubmit={handleSubmit}>
         {errorMessage && (

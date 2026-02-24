@@ -83,7 +83,7 @@ export default function EventSelector({
     <div className="form-group event-selector-wrap" style={{ marginBottom: 0, width: '100%', maxWidth: 280, minWidth: 0 }} ref={ref}>
       <label>Events</label>
       {showDatePresets && (
-        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+        <div className="event-selector-date-presets" style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
           <span style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Date range:</span>
           <button
             type="button"
