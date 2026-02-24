@@ -1,6 +1,5 @@
 """Tests for API helper functions."""
 
-import pytest
 import api.main as api_main
 
 
