@@ -1,17 +1,16 @@
 """Tests for metagame analyzer."""
 
-import pytest
-from src.mtgtop8.models import Deck
 from src.mtgtop8.analyzer import (
-    commander_distribution,
-    archetype_distribution,
-    archetype_aggregate_analysis,
-    top_cards_main,
-    player_leaderboard,
-    deck_diversity,
     analyze,
+    archetype_aggregate_analysis,
+    archetype_distribution,
+    commander_distribution,
     deck_analysis,
+    deck_diversity,
+    player_leaderboard,
+    top_cards_main,
 )
+from src.mtgtop8.models import Deck
 
 
 def test_commander_distribution(sample_decks):

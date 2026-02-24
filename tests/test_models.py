@@ -1,6 +1,5 @@
 """Tests for Deck model serialization."""
 
-import pytest
 from src.mtgtop8.models import Deck
 
 
