@@ -1655,6 +1655,12 @@ def remove_player_alias(alias: str, _: str = Depends(require_admin)):
     a = unquote(alias).strip()
     if a in _player_aliases:
         del _player_aliases[a]
+        if _database_available():
+            try:
+                with _db.session_scope() as session:
+                    _db.remove_player_alias(session, a)
+            except Exception as e:
+                logger.exception("Failed to remove player alias from DB: %s", e)
         _save_player_aliases()
     return {"aliases": _player_aliases}
 
