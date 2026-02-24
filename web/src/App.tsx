@@ -17,6 +17,7 @@ import Scrape from './pages/Scrape'
 import Settings from './pages/Settings'
 import Login from './pages/Login'
 import UploadDeck from './pages/UploadDeck'
+import Feedback from './pages/Feedback'
 
 const router = createBrowserRouter([
   { path: '/login', element: <Login /> },
@@ -40,6 +41,7 @@ const router = createBrowserRouter([
       { path: 'decks/:deckId', element: <DeckDetail /> },
       { path: 'players', element: <Players /> },
       { path: 'players/:playerName', element: <PlayerDetail /> },
+      { path: 'feedback', element: <Feedback /> },
       {
         path: 'scrape',
         element: (
