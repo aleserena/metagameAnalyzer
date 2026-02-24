@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 
 const baseNavItems = [
@@ -19,9 +19,15 @@ const adminNavItems = [
 
 export default function Navbar() {
   const location = useLocation()
+  const navigate = useNavigate()
   const { user, logout } = useAuth()
   const [isOpen, setIsOpen] = useState(false)
   const navItems = [...baseNavItems, ...(user === 'admin' ? adminNavItems : [])]
+
+  const handleLogout = () => {
+    logout()
+    navigate('/', { replace: true })
+  }
 
   useEffect(() => {
     setIsOpen(false)
@@ -60,7 +66,7 @@ export default function Navbar() {
               <button
                 type="button"
                 className="nav-link nav-link-button"
-                onClick={logout}
+                onClick={handleLogout}
               >
                 Logout
               </button>

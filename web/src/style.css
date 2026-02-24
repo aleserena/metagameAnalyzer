@@ -9,6 +9,7 @@
   --border: #38444d;
   --success: #00ba7c;
   --warning: #f7931a;
+  --navbar-height: 56px;
 }
 
 * {
@@ -553,6 +554,9 @@ textarea:focus {
 }
 
 @media (max-width: 768px) {
+  :root {
+    --navbar-height: 52px;
+  }
   .navbar {
     flex-wrap: wrap;
     gap: 0;
