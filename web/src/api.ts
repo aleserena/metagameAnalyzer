@@ -37,6 +37,9 @@ export async function submitFeedback(body: {
   description: string
   email?: string | null
   website?: string | null
+  captcha_a: number
+  captcha_b: number
+  captcha_answer: number
 }): Promise<{ url: string; number?: number }> {
   const res = await fetch(`${API_BASE}/feedback`, {
     method: 'POST',

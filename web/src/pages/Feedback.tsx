@@ -10,12 +10,20 @@ const ISSUE_TYPES = [
   { label: 'Other', value: 'question' },
 ] as const
 
+function randomCaptchaOperands(): [number, number] {
+  const a = Math.floor(Math.random() * 12) + 1
+  const b = Math.floor(Math.random() * 12) + 1
+  return [a, b]
+}
+
 export default function Feedback() {
   const [type, setType] = useState<string>(ISSUE_TYPES[0].value)
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [email, setEmail] = useState('')
   const [website, setWebsite] = useState('') // honeypot: leave empty; bots often fill it
+  const [[captchaA, captchaB], setCaptchaOperands] = useState(() => randomCaptchaOperands())
+  const [captchaAnswer, setCaptchaAnswer] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -26,6 +34,11 @@ export default function Feedback() {
       toast.error('Title and description are required')
       return
     }
+    const answer = parseInt(captchaAnswer.trim(), 10)
+    if (Number.isNaN(answer) || answer !== captchaA + captchaB) {
+      toast.error('Please solve the math question correctly')
+      return
+    }
     setSubmitting(true)
     try {
       const result = await submitFeedback({
@@ -34,6 +47,9 @@ export default function Feedback() {
         description: d,
         email: (email || '').trim() || undefined,
         website: (website || '').trim() || undefined,
+        captcha_a: captchaA,
+        captcha_b: captchaB,
+        captcha_answer: answer,
       })
       toast.success(
         result.url ? (
@@ -51,6 +67,8 @@ export default function Feedback() {
       setDescription('')
       setEmail('')
       setWebsite('')
+      setCaptchaOperands(randomCaptchaOperands())
+      setCaptchaAnswer('')
     } catch (e) {
       toast.error(reportError(e))
     } finally {
@@ -119,6 +137,23 @@ export default function Feedback() {
             onChange={(e) => setEmail(e.target.value)}
             placeholder="So we can follow up if needed"
             disabled={submitting}
+          />
+        </div>
+        <div className="form-group">
+          <label htmlFor="feedback-captcha">
+            What is {captchaA} + {captchaB}?
+          </label>
+          <input
+            id="feedback-captcha"
+            type="number"
+            min={1}
+            max={99}
+            value={captchaAnswer}
+            onChange={(e) => setCaptchaAnswer(e.target.value.replace(/[^0-9]/g, ''))}
+            placeholder="Answer"
+            disabled={submitting}
+            required
+            autoComplete="off"
           />
         </div>
         {/* Honeypot: hidden from users, off-screen and out of tab order; bots often fill it */}
