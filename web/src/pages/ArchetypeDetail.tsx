@@ -235,6 +235,14 @@ export default function ArchetypeDetail() {
             </>
           )}
         </p>
+        <div style={{ marginTop: '0.5rem' }}>
+          <Link
+            to={`/decks?archetype=${encodeURIComponent(detail.archetype)}${eventIdsParam ? `&event_ids=${encodeURIComponent(eventIdsParam)}` : ''}`}
+            style={{ fontSize: '0.875rem', color: 'var(--accent)' }}
+          >
+            View all decks for this archetype
+          </Link>
+        </div>
       </div>
 
       {topDecks.length > 0 && (
