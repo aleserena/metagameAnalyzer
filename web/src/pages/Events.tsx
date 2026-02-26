@@ -60,6 +60,10 @@ export default function Events() {
     const name = newName.trim() || 'Unnamed'
     const date = newDate.trim()
     const formatId = newFormatId.trim() || 'EDH'
+    if (!newPlayerCount || newPlayerCount < 1) {
+      toast.error('Number of players is required (at least 1).')
+      return
+    }
     setCreating(true)
     createEvent({
       event_name: name,
@@ -195,14 +199,15 @@ export default function Events() {
               />
             </label>
             <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-              <span className="label">Players</span>
+              <span className="label">Players (required)</span>
               <input
                 type="number"
-                min={0}
+                min={1}
                 value={newPlayerCount || ''}
                 onChange={(e) => setNewPlayerCount(parseInt(e.target.value, 10) || 0)}
-                placeholder="0"
+                placeholder="e.g. 8"
                 style={{ width: 70 }}
+                required
               />
             </label>
             <button type="button" className="btn btn-primary" onClick={handleCreate} disabled={creating}>

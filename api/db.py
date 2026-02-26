@@ -80,11 +80,17 @@ class SettingsRow(Base):
     value = Column(JSONB, nullable=False)
 
 
+LINK_TYPE_DECK_UPLOAD = "deck_upload"
+LINK_TYPE_DECK_UPDATE = "deck_update"
+LINK_TYPE_EVENT_EDIT = "event_edit"
+
+
 class EventUploadLinkRow(Base):
     __tablename__ = "event_upload_links"
     token = Column(String(64), primary_key=True)
     event_id = Column(String(32), nullable=False)
     deck_id = Column(Integer, nullable=True)  # when set, link is for updating this deck (one-time)
+    link_type = Column(String(32), nullable=False, default=LINK_TYPE_DECK_UPLOAD)  # deck_upload | deck_update | event_edit
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     used_at = Column(DateTime, nullable=True)
     expires_at = Column(DateTime, nullable=True)
@@ -428,13 +434,17 @@ def create_upload_link(
     label: str | None = None,
     expires_at: datetime | None = None,
     deck_id: int | None = None,
+    link_type: str = LINK_TYPE_DECK_UPLOAD,
 ) -> EventUploadLinkRow:
-    """Insert a one-time upload link. Token from secrets.token_urlsafe(32). If deck_id is set, link is for updating that deck."""
+    """Insert a one-time upload link. Token from secrets.token_urlsafe(32). If deck_id is set, link_type becomes deck_update. link_type: deck_upload | deck_update | event_edit."""
     eid = _event_id_str(event_id)
+    if deck_id is not None and link_type == LINK_TYPE_DECK_UPLOAD:
+        link_type = LINK_TYPE_DECK_UPDATE
     row = EventUploadLinkRow(
         token=token,
         event_id=eid,
         deck_id=deck_id,
+        link_type=link_type,
         label=label,
         expires_at=expires_at,
     )
@@ -462,6 +472,7 @@ def get_all_upload_links(session: Session) -> list[dict]:
             "token": r.token,
             "event_id": r.event_id,
             "deck_id": getattr(r, "deck_id", None),
+            "link_type": getattr(r, "link_type", "deck_upload"),
             "created_at": r.created_at.isoformat() if r.created_at else None,
             "used_at": r.used_at.isoformat() if r.used_at else None,
             "expires_at": r.expires_at.isoformat() if r.expires_at else None,

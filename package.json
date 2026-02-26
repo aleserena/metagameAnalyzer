@@ -8,7 +8,9 @@
     "prepare": "husky",
     "api": "python -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload",
     "web": "cd web && npx vite --host 0.0.0.0 --port 5173",
-    "dev": "concurrently -n api,web \"npm run api\" \"npm run web\""
+    "dev": "concurrently -n api,web \"npm run api\" \"npm run web\"",
+    "db:migrate:staging": "python scripts/run_alembic.py staging upgrade head",
+    "db:migrate:prod": "python scripts/run_alembic.py prod upgrade head"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",
