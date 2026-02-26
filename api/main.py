@@ -23,10 +23,15 @@ try:
             load_dotenv(_env_override)
 except ImportError:
     pass
+
+from api.logging_config import configure_logging
+configure_logging()
+
 import re
 import threading
 import time
 import unicodedata
+from contextlib import asynccontextmanager
 from urllib.parse import unquote
 
 import jwt
@@ -84,7 +89,16 @@ except ImportError:
 def _database_available() -> bool:
     return _db is not None and _db.is_database_available()
 
-app = FastAPI(title="MTG Metagame API", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(_app):
+    """Log startup and shutdown for monitoring (e.g. Railway)."""
+    logger.info("Application startup", extra={"event": "startup"})
+    yield
+    logger.info("Application shutdown", extra={"event": "shutdown"})
+
+
+app = FastAPI(title="MTG Metagame API", version="1.0.0", lifespan=lifespan)
 
 _allowed_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",") if o.strip()]
 app.add_middleware(
@@ -94,6 +108,28 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log each request with method, path, status, and duration for monitoring."""
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = round((time.perf_counter() - start) * 1000, 2)
+    logger.info(
+        "%s %s %s %sms",
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration_ms,
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": response.status_code,
+            "duration_ms": duration_ms,
+        },
+    )
+    return response
 
 
 @app.exception_handler(Exception)
@@ -1432,6 +1468,7 @@ def get_metagame(
             "commander_distribution": [],
             "archetype_distribution": [],
             "color_distribution": [],
+            "color_count_distribution": [],
             "top_cards_main": [],
             "top_players": [],
             "placement_weighted": placement_weighted,
@@ -1481,6 +1518,12 @@ def get_metagame(
     commander_names = list({c for d in decks for c in effective_commanders(d) if c})
     lookup = lookup_cards(commander_names) if commander_names else {}
     color_counts: dict[str, int] = {k: 0 for k in _COLOR_ORDER}
+    # Per-color commander counts (or weighted score) for tooltip "top decks in this color"
+    color_deck_scores: dict[str, dict[str, float]] = {k: {} for k in _COLOR_ORDER}
+    # Decks by number of colors (0=colorless, 1=mono, 2=2-color, ...)
+    color_count_buckets: dict[int, float] = {n: 0.0 for n in range(6)}
+    # Per color-count commander scores for tooltip "top decks in this bucket"
+    color_count_deck_scores: dict[int, dict[str, float]] = {n: {} for n in range(6)}
     for d in decks:
         ec = effective_commanders(d)
         if not ec:
@@ -1494,12 +1537,49 @@ def get_metagame(
                         ci.add(c)
         if len(ci) == 0:
             color_counts["Colorless"] += 1
+            colors_for_deck = ["Colorless"]
         else:
             for c in ci:
                 color_counts[c] += 1
+            colors_for_deck = list(ci)
+        w = rank_weights.get(normalize_rank(d.rank or ""), 1.0) if placement_weighted else 1.0
+        commander_key = " / ".join(sorted(ec))
+        for c in colors_for_deck:
+            color_deck_scores[c][commander_key] = color_deck_scores[c].get(commander_key, 0.0) + w
+        n_colors = 0 if len(ci) == 0 else len(ci)
+        color_count_buckets[n_colors] += w
+        color_count_deck_scores[n_colors][commander_key] = color_count_deck_scores[n_colors].get(commander_key, 0.0) + w
     total = sum(color_counts.values())
+    _COLOR_COUNT_LABELS = {0: "Colorless", 1: "Monocolor", 2: "2-color", 3: "3-color", 4: "4-color", 5: "5-color"}
+    color_count_total = sum(color_count_buckets.values()) or 1
+    _MAX_TOP_DECKS_PER_COLOR = 5
+    result["color_count_distribution"] = [
+        {
+            "label": _COLOR_COUNT_LABELS[n],
+            "count": round(color_count_buckets[n], 1),
+            "pct": round(100 * color_count_buckets[n] / color_count_total, 1),
+            "top_decks": [
+                {"name": name, "count": round(cnt, 1)}
+                for name, cnt in sorted(color_count_deck_scores[n].items(), key=lambda x: -x[1])[
+                    :_MAX_TOP_DECKS_PER_COLOR
+                ]
+            ],
+        }
+        for n in range(6)
+        if color_count_buckets[n] > 0
+    ]
     result["color_distribution"] = [
-        {"color": _COLOR_LABEL.get(k, k), "count": color_counts[k], "pct": round(100 * color_counts[k] / total, 1) if total else 0}
+        {
+            "color": _COLOR_LABEL.get(k, k),
+            "count": color_counts[k],
+            "pct": round(100 * color_counts[k] / total, 1) if total else 0,
+            "top_decks": [
+                {"name": name, "count": round(cnt, 1)}
+                for name, cnt in sorted(
+                    color_deck_scores[k].items(), key=lambda x: -x[1]
+                )[: _MAX_TOP_DECKS_PER_COLOR]
+            ],
+        }
         for k in _COLOR_ORDER
         if color_counts[k] > 0
     ]

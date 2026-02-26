@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts'
+import { ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts'
 import { getDeck, getMetagame, getDeckAnalysis, getDateRange, getSimilarDecks, updateDeck, deleteDeck, getCardLookup, importDeckFromMoxfield } from '../api'
 import { parseMoxfieldDeckList, formatMoxfieldDeckList } from '../lib/deckListParser'
 import { useAuth } from '../contexts/AuthContext'
@@ -12,6 +12,7 @@ import CardHover from '../components/CardHover'
 import CardSearchInput from '../components/CardSearchInput'
 import ManaSymbols from '../components/ManaSymbols'
 import { MTG_COLOR_FILL } from '../constants'
+import { PieChartTooltipContent } from '../components/PieChartTooltip'
 import { dateMinusDays, firstDayOfYear, pluralizeType, reportError } from '../utils'
 
 type ViewMode = 'list' | 'scryfall'
@@ -811,7 +812,18 @@ export default function DeckDetail() {
           </div>
           <div>
             <div className="label">Archetype</div>
-            <div>{deck.archetype ? <Link to={`/decks?archetype=${encodeURIComponent(deck.archetype)}`} style={{ color: 'var(--accent)' }}>{deck.archetype}</Link> : '-'}</div>
+            <div>
+              {deck.archetype ? (
+                <Link
+                  to={`/archetypes/${encodeURIComponent(deck.archetype)}`}
+                  style={{ color: 'var(--accent)' }}
+                >
+                  {deck.archetype}
+                </Link>
+              ) : (
+                '-'
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -854,7 +866,7 @@ export default function DeckDetail() {
             <div className="chart-container">
               <h4 style={{ margin: '0 0 0.75rem', fontSize: '0.95rem' }}>Mana Curve</h4>
               <ResponsiveContainer width="100%" height={180}>
-                <BarChart
+                <ComposedChart
                   data={Object.entries(analysis.mana_curve).map(([cmc, count]) => ({ cmc: Number(cmc), count }))}
                   margin={{ top: 10, right: 16, left: 36, bottom: 24 }}
                 >
@@ -870,7 +882,8 @@ export default function DeckDetail() {
                     labelStyle={{ color: 'var(--text)', fontWeight: 600 }}
                   />
                   <Bar dataKey="count" fill="#1d9bf0" name="Cards" />
-                </BarChart>
+                  <Line type="monotone" dataKey="count" stroke="#c2410c" strokeWidth={2} dot={{ r: 4, fill: '#c2410c' }} name="" />
+                </ComposedChart>
               </ResponsiveContainer>
             </div>
             <div className="chart-container">
@@ -905,7 +918,19 @@ export default function DeckDetail() {
                         <Cell key={d.name} fill={d.color} />
                       ))}
                   </Pie>
-                  <Tooltip />
+                  <Tooltip
+                    content={({ active, payload }) => {
+                      if (!active || !payload?.length) return null
+                      const p = payload[0]?.payload as { name?: string; value?: number }
+                      if (!p) return null
+                      return (
+                        <PieChartTooltipContent
+                          title={p.name ?? ''}
+                          subtitle={p.value != null ? `${p.value}%` : undefined}
+                        />
+                      )
+                    }}
+                  />
                   <Legend layout="horizontal" verticalAlign="bottom" wrapperStyle={{ paddingTop: 4 }} formatter={(_, entry: { payload?: { name?: string; value?: number } }) => entry?.payload ? `${entry.payload.name ?? ''} ${entry.payload.value ?? ''}%` : ''} />
                 </PieChart>
               </ResponsiveContainer>
@@ -934,7 +959,21 @@ export default function DeckDetail() {
                         <Cell key={d.name} fill={d.color} />
                       ))}
                   </Pie>
-                  <Tooltip />
+                  <Tooltip
+                    content={({ active, payload }) => {
+                      if (!active || !payload?.length) return null
+                      const p = payload[0]?.payload as { name?: string; value?: number }
+                      if (!p) return null
+                      const total = analysis.lands_distribution.lands + analysis.lands_distribution.nonlands
+                      const pct = total ? Math.round((100 * (p.value ?? 0)) / total) : 0
+                      return (
+                        <PieChartTooltipContent
+                          title={p.name ?? ''}
+                          subtitle={`${p.value ?? ''} (${pct}%)`}
+                        />
+                      )
+                    }}
+                  />
                   <Legend layout="horizontal" verticalAlign="bottom" formatter={(_, entry: { payload?: { name?: string; value?: number } }) => {
                     const p = entry?.payload
                     if (!p) return ''
@@ -973,7 +1012,19 @@ export default function DeckDetail() {
                           />
                         ))}
                     </Pie>
-                    <Tooltip />
+                    <Tooltip
+                      content={({ active, payload }) => {
+                        if (!active || !payload?.length) return null
+                        const p = payload[0]?.payload as { name?: string; value?: number }
+                        if (!p) return null
+                        return (
+                          <PieChartTooltipContent
+                            title={p.name ?? ''}
+                            subtitle={p.value != null ? `${p.value}` : undefined}
+                          />
+                        )
+                      }}
+                    />
                     <Legend layout="horizontal" verticalAlign="bottom" wrapperStyle={{ paddingTop: 4 }} formatter={(_, entry: { payload?: { name?: string; value?: number } }) => entry?.payload ? `${entry.payload.name ?? ''} ${entry.payload.value ?? ''}` : ''} />
                   </PieChart>
                 </ResponsiveContainer>
