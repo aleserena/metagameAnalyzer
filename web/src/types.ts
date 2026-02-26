@@ -51,10 +51,25 @@ export interface CardSynergy {
   decks: number
 }
 
+export interface ColorDeckCount {
+  name: string
+  count: number
+}
+
 export interface ColorDistribution {
   color: string
   count: number
   pct: number
+  /** Top commanders/decks in this color (for tooltip). */
+  top_decks?: ColorDeckCount[]
+}
+
+export interface ColorCountDistribution {
+  label: string
+  count: number
+  pct: number
+  /** Top commanders/decks in this color-count bucket (for tooltip). */
+  top_decks?: ColorDeckCount[]
 }
 
 export interface MetagameReport {
@@ -62,6 +77,8 @@ export interface MetagameReport {
   commander_distribution: CommanderDistribution[]
   archetype_distribution: ArchetypeDistribution[]
   color_distribution: ColorDistribution[]
+  /** Metagame share by number of colors (Monocolor, 2-color, etc.). */
+  color_count_distribution?: ColorCountDistribution[]
   top_cards_main: TopCard[]
   /** Top players by wins (same filter as metagame). */
   top_players?: PlayerStats[]

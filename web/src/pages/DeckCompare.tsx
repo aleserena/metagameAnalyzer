@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts'
+import { ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts'
 import { getDecks, getDeckCompare, getDeckAnalysis } from '../api'
 import { MTG_COLOR_FILL } from '../constants'
+import { PieChartTooltipContent } from '../components/PieChartTooltip'
 import type { DeckAnalysis } from '../api'
 import type { Deck } from '../types'
 import CardHover from '../components/CardHover'
@@ -297,7 +298,7 @@ export default function DeckCompare() {
                         <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{d.event_name} ({d.date})</div>
                       </div>
                       <ResponsiveContainer width="100%" height={180}>
-                        <BarChart data={data} margin={{ top: 10, right: 16, left: 36, bottom: 24 }}>
+                        <ComposedChart data={data} margin={{ top: 10, right: 16, left: 36, bottom: 24 }}>
                           <XAxis dataKey="cmc" />
                           <YAxis width={28} />
                           <Tooltip
@@ -310,7 +311,8 @@ export default function DeckCompare() {
                             labelStyle={{ color: 'var(--text)', fontWeight: 600 }}
                           />
                           <Bar dataKey="count" fill="#1d9bf0" name="Cards" />
-                        </BarChart>
+                          <Line type="monotone" dataKey="count" stroke="#c2410c" strokeWidth={2} dot={{ r: 4, fill: '#c2410c' }} name="" />
+                        </ComposedChart>
                       </ResponsiveContainer>
                     </div>
                   )
@@ -372,7 +374,19 @@ export default function DeckCompare() {
                               <Cell key={c.name} fill={c.color} />
                             ))}
                           </Pie>
-                          <Tooltip />
+                          <Tooltip
+                            content={({ active, payload }) => {
+                              if (!active || !payload?.length) return null
+                              const p = payload[0]?.payload as { name?: string; value?: number }
+                              if (!p) return null
+                              return (
+                                <PieChartTooltipContent
+                                  title={p.name ?? ''}
+                                  subtitle={p.value != null ? `${p.value}%` : undefined}
+                                />
+                              )
+                            }}
+                          />
                           <Legend
                             layout="horizontal"
                             verticalAlign="bottom"
@@ -427,7 +441,20 @@ export default function DeckCompare() {
                               <Cell key={c.name} fill={c.color} />
                             ))}
                           </Pie>
-                          <Tooltip />
+                          <Tooltip
+                            content={({ active, payload }) => {
+                              if (!active || !payload?.length) return null
+                              const p = payload[0]?.payload as { name?: string; value?: number }
+                              if (!p) return null
+                              const pct = total ? Math.round((100 * (p.value ?? 0)) / total) : 0
+                              return (
+                                <PieChartTooltipContent
+                                  title={p.name ?? ''}
+                                  subtitle={`${p.value} (${pct}%)`}
+                                />
+                              )
+                            }}
+                          />
                           <Legend
                             layout="horizontal"
                             verticalAlign="bottom"
@@ -500,7 +527,19 @@ export default function DeckCompare() {
                                   <Cell key={c.name} fill={c.color} />
                                 ))}
                               </Pie>
-                              <Tooltip />
+                              <Tooltip
+                                content={({ active, payload }) => {
+                                  if (!active || !payload?.length) return null
+                                  const p = payload[0]?.payload as { name?: string; value?: number }
+                                  if (!p) return null
+                                  return (
+                                    <PieChartTooltipContent
+                                      title={p.name ?? ''}
+                                      subtitle={p.value != null ? `${p.value}` : undefined}
+                                    />
+                                  )
+                                }}
+                              />
                               <Legend
                                 layout="horizontal"
                                 verticalAlign="bottom"

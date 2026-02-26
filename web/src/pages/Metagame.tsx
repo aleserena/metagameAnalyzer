@@ -22,6 +22,7 @@ import Skeleton from '../components/Skeleton'
 import { reportError } from '../utils'
 import type { MetagameReport, Event } from '../types'
 import { MTG_COLOR_FILL } from '../constants'
+import { PIE_TOOLTIP_STYLE, PieChartTooltipContent } from '../components/PieChartTooltip'
 
 const COLORS = ['#1d9bf0', '#00ba7c', '#f7931a', '#e91e63', '#9c27b0', '#00bcd4', '#ff9800', '#4caf50']
 
@@ -202,6 +203,7 @@ export default function Metagame() {
   const commanders = metagame?.commander_distribution ?? []
   const archetypes = metagame?.archetype_distribution ?? []
   const colorDistribution = metagame?.color_distribution ?? []
+  const colorCountDistribution = metagame?.color_count_distribution ?? []
   const topMain = metagame?.top_cards_main ?? []
 
   const hasAnyFilter = filterColor.length > 0 || filterCmc.length > 0 || filterType.length > 0
@@ -365,7 +367,36 @@ export default function Metagame() {
                   <Cell key={entry.color} fill={MTG_COLOR_FILL[entry.color] ?? COLORS[0]} />
                 ))}
               </Pie>
-              <Tooltip />
+              <Tooltip
+                content={({ active, payload }) => {
+                  if (!active || !payload?.length) return null
+                  const p = payload[0]?.payload as { color: string; count: number; pct: number; top_decks?: { name: string; count: number }[] }
+                  if (!p) return null
+                  const topDecks = p.top_decks ?? []
+                  return (
+                    <div style={{ ...PIE_TOOLTIP_STYLE, minWidth: 180 }}>
+                      <div style={{ fontWeight: 600, marginBottom: '0.35rem', color: 'var(--text)' }}>
+                        {p.color}
+                      </div>
+                      <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: topDecks.length ? '0.5rem' : 0 }}>
+                        {p.count} deck{p.count === 1 ? '' : 's'} ({p.pct}%)
+                      </div>
+                      {topDecks.length > 0 && (
+                        <div style={{ fontSize: '0.8125rem', color: 'var(--text)', borderTop: '1px solid var(--border)', paddingTop: '0.5rem', marginTop: '0.25rem' }}>
+                          <div style={{ fontWeight: 600, marginBottom: '0.25rem' }}>Top decks</div>
+                          <ul style={{ margin: 0, paddingLeft: '1.1rem', listStyle: 'disc' }}>
+                            {topDecks.slice(0, 5).map((d) => (
+                              <li key={d.name} style={{ marginBottom: '0.15rem' }}>
+                                {d.name} — {d.count}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )
+                }}
+              />
               <Legend formatter={(value, entry: unknown) => {
                 const p = entry && typeof entry === 'object' && 'payload' in entry ? (entry as { payload?: { color?: string; pct?: number } }).payload : undefined
                 return p?.pct != null ? `${p.color ?? value} (${p.pct}%)` : value
@@ -400,7 +431,19 @@ export default function Metagame() {
                 <Cell key={i} fill={COLORS[i % COLORS.length]} />
               ))}
             </Pie>
-            <Tooltip />
+            <Tooltip
+              content={({ active, payload }) => {
+                if (!active || !payload?.length) return null
+                const p = payload[0]?.payload as { archetype: string; count: number; pct?: number }
+                if (!p) return null
+                return (
+                  <PieChartTooltipContent
+                    title={p.archetype}
+                    subtitle={`${p.count} deck${p.count === 1 ? '' : 's'} (${p.pct ?? 0}%)`}
+                  />
+                )
+              }}
+            />
             <Legend layout="horizontal" verticalAlign="bottom" onClick={(e) => {
               if (e?.value) navigate(`/decks?archetype=${encodeURIComponent(String(e.value))}`)
             }} formatter={(value, entry: unknown) => {
@@ -409,6 +452,64 @@ export default function Metagame() {
             }} />
           </PieChart>
         </ResponsiveContainer>
+      </div>
+
+      <div className="chart-container">
+        <h3 style={{ margin: '0 0 1rem' }}>Metagame by Number of Colors</h3>
+        <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', margin: '0 0 1rem' }}>Share of decks that are monocolor, 2-color, 3-color, etc.</p>
+        {colorCountDistribution.length > 0 ? (
+          <ResponsiveContainer width="100%" height={300}>
+            <PieChart margin={{ top: 15, right: 15, bottom: 60, left: 15 }}>
+              <Pie
+                data={colorCountDistribution}
+                dataKey="count"
+                nameKey="label"
+                cx="50%"
+                cy="50%"
+                outerRadius={90}
+                label={({ label, pct }) => `${label} (${pct}%)`}
+              >
+                {colorCountDistribution.map((entry, i) => (
+                  <Cell key={entry.label} fill={COLORS[i % COLORS.length]} />
+                ))}
+              </Pie>
+              <Tooltip
+                content={({ active, payload }) => {
+                  if (!active || !payload?.length) return null
+                  const p = payload[0]?.payload as { label: string; count: number; pct: number; top_decks?: { name: string; count: number }[] }
+                  if (!p) return null
+                  const topDecks = p.top_decks ?? []
+                  return (
+                    <div style={{ ...PIE_TOOLTIP_STYLE, minWidth: 180 }}>
+                      <div style={{ fontWeight: 600, marginBottom: '0.35rem', color: 'var(--text)' }}>{p.label}</div>
+                      <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: topDecks.length ? '0.5rem' : 0 }}>
+                        {p.count} deck{p.count === 1 ? '' : 's'} ({p.pct}%)
+                      </div>
+                      {topDecks.length > 0 && (
+                        <div style={{ fontSize: '0.8125rem', color: 'var(--text)', borderTop: '1px solid var(--border)', paddingTop: '0.5rem', marginTop: '0.25rem' }}>
+                          <div style={{ fontWeight: 600, marginBottom: '0.25rem' }}>Top decks</div>
+                          <ul style={{ margin: 0, paddingLeft: '1.1rem', listStyle: 'disc' }}>
+                            {topDecks.slice(0, 5).map((d) => (
+                              <li key={d.name} style={{ marginBottom: '0.15rem' }}>
+                                {d.name} — {d.count}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )
+                }}
+              />
+              <Legend formatter={(value, entry: unknown) => {
+                const p = entry && typeof entry === 'object' && 'payload' in entry ? (entry as { payload?: { label?: string; pct?: number } }).payload : undefined
+                return p?.pct != null ? `${p.label ?? value} (${p.pct}%)` : value
+              }} />
+            </PieChart>
+          </ResponsiveContainer>
+        ) : (
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>No data (no commanders or lookup unavailable)</p>
+        )}
       </div>
 
       <div className="chart-container">

@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react'
 import { useParams, useSearchParams, useNavigate, Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import {
-  BarChart,
+  ComposedChart,
   Bar,
+  Line,
   XAxis,
   YAxis,
   Tooltip,
@@ -20,6 +21,7 @@ import CardHover from '../components/CardHover'
 import ManaSymbols from '../components/ManaSymbols'
 import Skeleton from '../components/Skeleton'
 import { MTG_COLOR_FILL } from '../constants'
+import { PieChartTooltipContent } from '../components/PieChartTooltip'
 import { reportError } from '../utils'
 
 const TYPE_ORDER = ['Land', 'Creature', 'Instant', 'Sorcery', 'Enchantment', 'Artifact', 'Planeswalker']
@@ -274,7 +276,7 @@ export default function ArchetypeDetail() {
           <div className="chart-container">
             <h4 style={{ margin: '0 0 0.75rem', fontSize: '0.95rem' }}>Mana Curve</h4>
             <ResponsiveContainer width="100%" height={180}>
-              <BarChart
+              <ComposedChart
                 data={Object.entries(a.mana_curve).map(([cmc, count]) => ({ cmc: Number(cmc), count }))}
                 margin={{ top: 10, right: 16, left: 36, bottom: 24 }}
               >
@@ -290,7 +292,8 @@ export default function ArchetypeDetail() {
                   labelStyle={{ color: 'var(--text)', fontWeight: 600 }}
                 />
                 <Bar dataKey="count" fill="#1d9bf0" name="Cards (avg)" />
-              </BarChart>
+                <Line type="monotone" dataKey="count" stroke="#c2410c" strokeWidth={2} dot={{ r: 4, fill: '#c2410c' }} name="" />
+              </ComposedChart>
             </ResponsiveContainer>
           </div>
         )}
@@ -327,7 +330,19 @@ export default function ArchetypeDetail() {
                       <Cell key={d.name} fill={d.color} />
                     ))}
                 </Pie>
-                <Tooltip />
+                <Tooltip
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.length) return null
+                    const p = payload[0]?.payload as { name?: string; value?: number }
+                    if (!p) return null
+                    return (
+                      <PieChartTooltipContent
+                        title={p.name ?? ''}
+                        subtitle={p.value != null ? `${p.value}%` : undefined}
+                      />
+                    )
+                  }}
+                />
                 <Legend layout="horizontal" verticalAlign="bottom" wrapperStyle={{ paddingTop: 4 }} formatter={(_, entry: { payload?: { name?: string; value?: number } }) => entry?.payload ? `${entry.payload.name ?? ''} ${entry.payload.value ?? ''}%` : ''} />
               </PieChart>
             </ResponsiveContainer>
@@ -358,7 +373,21 @@ export default function ArchetypeDetail() {
                       <Cell key={d.name} fill={d.color} />
                     ))}
                 </Pie>
-                <Tooltip />
+                <Tooltip
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.length) return null
+                    const p = payload[0]?.payload as { name?: string; value?: number }
+                    if (!p) return null
+                    const total = a.lands_distribution.lands + a.lands_distribution.nonlands
+                    const pct = total ? Math.round((100 * (p.value ?? 0)) / total) : 0
+                    return (
+                      <PieChartTooltipContent
+                        title={p.name ?? ''}
+                        subtitle={`${p.value?.toFixed(1) ?? ''} (${pct}%)`}
+                      />
+                    )
+                  }}
+                />
                 <Legend
                   layout="horizontal"
                   verticalAlign="bottom"
@@ -403,7 +432,19 @@ export default function ArchetypeDetail() {
                       />
                     ))}
                 </Pie>
-                <Tooltip />
+                <Tooltip
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.length) return null
+                    const p = payload[0]?.payload as { name?: string; value?: number }
+                    if (!p) return null
+                    return (
+                      <PieChartTooltipContent
+                        title={p.name ?? ''}
+                        subtitle={p.value != null ? `${p.value}` : undefined}
+                      />
+                    )
+                  }}
+                />
                 <Legend layout="horizontal" verticalAlign="bottom" wrapperStyle={{ paddingTop: 4 }} />
               </PieChart>
             </ResponsiveContainer>
