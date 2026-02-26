@@ -11,6 +11,7 @@ import CardGrid from '../components/CardGrid'
 import CardHover from '../components/CardHover'
 import CardSearchInput from '../components/CardSearchInput'
 import ManaSymbols from '../components/ManaSymbols'
+import { MTG_COLOR_FILL } from '../constants'
 import { dateMinusDays, firstDayOfYear, pluralizeType, reportError } from '../utils'
 
 type ViewMode = 'list' | 'scryfall'
@@ -878,12 +879,12 @@ export default function DeckDetail() {
                 <PieChart margin={{ top: 8, right: 8, bottom: 58, left: 8 }}>
                   <Pie
                     data={[
-                      { name: 'White', value: analysis.color_distribution.W || 0, color: '#fff9e6' },
-                      { name: 'Blue', value: analysis.color_distribution.U || 0, color: '#0e4d92' },
-                      { name: 'Black', value: analysis.color_distribution.B || 0, color: '#8b8b8b' },
-                      { name: 'Red', value: analysis.color_distribution.R || 0, color: '#c41e3a' },
-                      { name: 'Green', value: analysis.color_distribution.G || 0, color: '#007a33' },
-                      { name: 'Colorless', value: analysis.color_distribution.C || 0, color: '#b0b0b0' },
+                      { name: 'White', value: analysis.color_distribution.W || 0, color: MTG_COLOR_FILL.White },
+                      { name: 'Blue', value: analysis.color_distribution.U || 0, color: MTG_COLOR_FILL.Blue },
+                      { name: 'Black', value: analysis.color_distribution.B || 0, color: MTG_COLOR_FILL.Black },
+                      { name: 'Red', value: analysis.color_distribution.R || 0, color: MTG_COLOR_FILL.Red },
+                      { name: 'Green', value: analysis.color_distribution.G || 0, color: MTG_COLOR_FILL.Green },
+                      { name: 'Colorless', value: analysis.color_distribution.C || 0, color: MTG_COLOR_FILL.Colorless },
                     ].filter((d) => d.value > 0)}
                     dataKey="value"
                     nameKey="name"
@@ -892,12 +893,12 @@ export default function DeckDetail() {
                     outerRadius={58}
                   >
                     {[
-                      { name: 'White', value: analysis.color_distribution.W || 0, color: '#fff9e6' },
-                      { name: 'Blue', value: analysis.color_distribution.U || 0, color: '#0e4d92' },
-                      { name: 'Black', value: analysis.color_distribution.B || 0, color: '#8b8b8b' },
-                      { name: 'Red', value: analysis.color_distribution.R || 0, color: '#c41e3a' },
-                      { name: 'Green', value: analysis.color_distribution.G || 0, color: '#007a33' },
-                      { name: 'Colorless', value: analysis.color_distribution.C || 0, color: '#b0b0b0' },
+                      { name: 'White', value: analysis.color_distribution.W || 0, color: MTG_COLOR_FILL.White },
+                      { name: 'Blue', value: analysis.color_distribution.U || 0, color: MTG_COLOR_FILL.Blue },
+                      { name: 'Black', value: analysis.color_distribution.B || 0, color: MTG_COLOR_FILL.Black },
+                      { name: 'Red', value: analysis.color_distribution.R || 0, color: MTG_COLOR_FILL.Red },
+                      { name: 'Green', value: analysis.color_distribution.G || 0, color: MTG_COLOR_FILL.Green },
+                      { name: 'Colorless', value: analysis.color_distribution.C || 0, color: MTG_COLOR_FILL.Colorless },
                     ]
                       .filter((d) => d.value > 0)
                       .map((d) => (

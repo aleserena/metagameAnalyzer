@@ -21,6 +21,7 @@ import ManaSymbols from '../components/ManaSymbols'
 import Skeleton from '../components/Skeleton'
 import { reportError } from '../utils'
 import type { MetagameReport, Event } from '../types'
+import { MTG_COLOR_FILL } from '../constants'
 
 const COLORS = ['#1d9bf0', '#00ba7c', '#f7931a', '#e91e63', '#9c27b0', '#00bcd4', '#ff9800', '#4caf50']
 
@@ -360,8 +361,8 @@ export default function Metagame() {
                 outerRadius={90}
                 label={({ color, pct }) => `${color} (${pct}%)`}
               >
-                {colorDistribution.map((entry, i) => (
-                  <Cell key={entry.color} fill={COLORS[i % COLORS.length]} />
+                {colorDistribution.map((entry) => (
+                  <Cell key={entry.color} fill={MTG_COLOR_FILL[entry.color] ?? COLORS[0]} />
                 ))}
               </Pie>
               <Tooltip />
