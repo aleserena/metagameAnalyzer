@@ -23,10 +23,15 @@ try:
             load_dotenv(_env_override)
 except ImportError:
     pass
+
+from api.logging_config import configure_logging
+configure_logging()
+
 import re
 import threading
 import time
 import unicodedata
+from contextlib import asynccontextmanager
 from urllib.parse import unquote
 
 import jwt
@@ -84,7 +89,16 @@ except ImportError:
 def _database_available() -> bool:
     return _db is not None and _db.is_database_available()
 
-app = FastAPI(title="MTG Metagame API", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(_app):
+    """Log startup and shutdown for monitoring (e.g. Railway)."""
+    logger.info("Application startup", extra={"event": "startup"})
+    yield
+    logger.info("Application shutdown", extra={"event": "shutdown"})
+
+
+app = FastAPI(title="MTG Metagame API", version="1.0.0", lifespan=lifespan)
 
 _allowed_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",") if o.strip()]
 app.add_middleware(
@@ -94,6 +108,28 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log each request with method, path, status, and duration for monitoring."""
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = round((time.perf_counter() - start) * 1000, 2)
+    logger.info(
+        "%s %s %s %sms",
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration_ms,
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": response.status_code,
+            "duration_ms": duration_ms,
+        },
+    )
+    return response
 
 
 @app.exception_handler(Exception)
