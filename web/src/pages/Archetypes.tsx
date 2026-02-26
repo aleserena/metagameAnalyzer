@@ -258,6 +258,14 @@ export default function Archetypes() {
                       >
                         {row.archetype}
                       </Link>
+                      <div style={{ marginTop: '0.2rem', fontSize: '0.8rem' }}>
+                        <Link
+                          to={`/decks?archetype=${encodeURIComponent(row.archetype)}${eventIds.length ? `&event_ids=${encodeURIComponent(eventIds.map(String).join(','))}` : ''}`}
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          View all decks
+                        </Link>
+                      </div>
                     </td>
                     <td style={{ textAlign: 'right' }}>{row.count}</td>
                     <td style={{ textAlign: 'right' }}>{row.pct}%</td>

@@ -811,7 +811,18 @@ export default function DeckDetail() {
           </div>
           <div>
             <div className="label">Archetype</div>
-            <div>{deck.archetype ? <Link to={`/decks?archetype=${encodeURIComponent(deck.archetype)}`} style={{ color: 'var(--accent)' }}>{deck.archetype}</Link> : '-'}</div>
+            <div>
+              {deck.archetype ? (
+                <Link
+                  to={`/archetypes/${encodeURIComponent(deck.archetype)}`}
+                  style={{ color: 'var(--accent)' }}
+                >
+                  {deck.archetype}
+                </Link>
+              ) : (
+                '-'
+              )}
+            </div>
           </div>
         </div>
       </div>
