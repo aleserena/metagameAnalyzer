@@ -7,7 +7,8 @@ Usage (from project root):
   python scripts/run_alembic.py prod revision --autogenerate -m "add column"
 
 Uses .env.dev, .env.staging, or .env.prod in the project root (same format as .env:
-DATABASE_URL=postgresql://...). Create these files and add them to .gitignore.
+DATABASE_URL=postgresql://...). Values from the file override any DATABASE_URL already
+set in the environment. Create these files and add them to .gitignore.
 """
 
 import os
@@ -41,7 +42,7 @@ def main():
         print("Install python-dotenv to use this script: pip install python-dotenv", file=sys.stderr)
         sys.exit(1)
 
-    load_dotenv(env_file)
+    load_dotenv(env_file, override=True)  # always use DATABASE_URL from file, not from shell
     os.environ["DB_ENV"] = env_name  # so alembic env.py loads the same file if needed
     if not os.getenv("DATABASE_URL"):
         print(f"No DATABASE_URL in {env_file}", file=sys.stderr)

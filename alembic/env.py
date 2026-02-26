@@ -13,19 +13,20 @@ sys.path.insert(0, str(_project_root))
 
 # Load .env so DATABASE_URL is set when running: alembic upgrade head
 # If DB_ENV=dev|staging|prod, load .env.dev / .env.staging / .env.prod (for scripts/run_alembic.py or DB_ENV=dev alembic ...)
+# override=True so the file wins over any DATABASE_URL already set in the environment
 _db_env = os.getenv("DB_ENV", "").strip().lower()
 _env_name = f".env.{_db_env}" if _db_env in ("dev", "staging", "prod") else ".env"
 _env_path = _project_root / _env_name
 if _env_path.exists():
     try:
         from dotenv import load_dotenv
-        load_dotenv(_env_path)
+        load_dotenv(_env_path, override=True)
     except ImportError:
         pass
 elif _project_root.joinpath(".env").exists():
     try:
         from dotenv import load_dotenv
-        load_dotenv(_project_root / ".env")
+        load_dotenv(_project_root / ".env", override=True)
     except ImportError:
         pass
 
@@ -71,7 +72,12 @@ def run_migrations_online() -> None:
         )
     if url.startswith("postgres://"):
         url = url.replace("postgres://", "postgresql://", 1)
-    connectable = create_engine(url, pool_pre_ping=True)
+    # For remote hosts (e.g. Railway), enforce SSL and allow time for DB to wake
+    connect_args = {}
+    if "localhost" not in url and "127.0.0.1" not in url:
+        connect_args["sslmode"] = "require"
+        connect_args["connect_timeout"] = 30
+    connectable = create_engine(url, pool_pre_ping=True, connect_args=connect_args)
     with connectable.connect() as connection:
         context.configure(
             connection=connection,
