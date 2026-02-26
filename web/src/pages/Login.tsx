@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { useAuth } from '../contexts/AuthContext'
 import { reportError } from '../utils'
@@ -10,10 +10,14 @@ export default function Login() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const { login, user } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
+  const from = (location.state as { from?: { pathname: string; search?: string } } | null)?.from
 
   useEffect(() => {
-    if (user === 'admin') navigate('/', { replace: true })
-  }, [user, navigate])
+    if (user === 'admin') {
+      navigate(from ?? '/', { replace: true })
+    }
+  }, [user, navigate, from])
 
   if (user === 'admin') return null
 
@@ -24,7 +28,7 @@ export default function Login() {
     try {
       await login(password)
       toast.success('Signed in successfully')
-      navigate('/', { replace: true })
+      navigate(from ?? '/', { replace: true })
     } catch (e) {
       const msg = reportError(e)
       setErrorMessage(msg)

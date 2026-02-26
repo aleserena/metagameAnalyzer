@@ -390,7 +390,21 @@ export default function Decks() {
                       onClick={(e) => { e.stopPropagation(); navigate(`/decks/${d.deck_id}`) }}
                     >
                       {d.name}
-                      {duplicateDeckIds.has(d.deck_id) && (
+                      {(!d.mainboard || d.mainboard.length === 0) ? (
+                        <span
+                          style={{
+                            marginLeft: 6,
+                            fontSize: '0.7rem',
+                            padding: '0.1rem 0.35rem',
+                            background: 'rgba(220, 53, 69, 0.2)',
+                            borderRadius: 4,
+                            color: 'var(--danger, #dc3545)',
+                          }}
+                          title="No cards in mainboard"
+                        >
+                          empty
+                        </span>
+                      ) : duplicateDeckIds.has(d.deck_id) ? (
                         <span
                           style={{
                             marginLeft: 6,
@@ -404,7 +418,7 @@ export default function Decks() {
                         >
                           dup
                         </span>
-                      )}
+                      ) : null}
                     </td>
                     <td
                       style={{ cursor: 'pointer', color: 'var(--accent)' }}

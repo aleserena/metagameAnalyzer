@@ -7,10 +7,89 @@ from src.mtgtop8.analyzer import (
     commander_distribution,
     deck_analysis,
     deck_diversity,
+    effective_commanders,
+    effective_mainboard,
+    is_top8,
+    normalize_rank,
     player_leaderboard,
     top_cards_main,
 )
 from src.mtgtop8.models import Deck
+
+
+def test_normalize_rank_bands():
+    """normalize_rank maps bands and individual ranks 1-128 to canonical bands."""
+    assert normalize_rank("1") == "1"
+    assert normalize_rank("2") == "2"
+    assert normalize_rank("3") == "3-4"
+    assert normalize_rank("4") == "3-4"
+    assert normalize_rank("3-4") == "3-4"
+    assert normalize_rank("5") == "5-8"
+    assert normalize_rank("8") == "5-8"
+    assert normalize_rank("9") == "9-16"
+    assert normalize_rank("16") == "9-16"
+    assert normalize_rank("17") == "17-32"
+    assert normalize_rank("32") == "17-32"
+    assert normalize_rank("33") == "33-64"
+    assert normalize_rank("64") == "33-64"
+    assert normalize_rank("33-64") == "33-64"
+    assert normalize_rank("65") == "65-128"
+    assert normalize_rank("128") == "65-128"
+    assert normalize_rank("65-128") == "65-128"
+    assert normalize_rank("129") == ""
+    assert normalize_rank("") == ""
+
+
+def test_effective_mainboard_empty_edh_with_archetype():
+    """Empty EDH deck with archetype (non-partner) gets commander on effective mainboard."""
+    empty_edh = Deck.from_dict({
+        "deck_id": 1,
+        "event_id": 1,
+        "format_id": "EDH",
+        "name": "Azusa",
+        "player": "P",
+        "event_name": "E",
+        "date": "01/01/26",
+        "rank": "5-8",
+        "player_count": 32,
+        "mainboard": [],
+        "sideboard": [],
+        "commanders": [],
+        "archetype": "Azusa, Lost but Seeking",
+    })
+    assert effective_mainboard(empty_edh) == [(1, "Azusa, Lost but Seeking")]
+    assert effective_commanders(empty_edh) == ["Azusa, Lost but Seeking"]
+
+    # Partner deck (2 commanders): no auto-include on mainboard
+    partner = Deck.from_dict({
+        "deck_id": 2,
+        "event_id": 1,
+        "format_id": "EDH",
+        "name": "Partner",
+        "player": "P",
+        "event_name": "E",
+        "date": "01/01/26",
+        "rank": "5-8",
+        "player_count": 32,
+        "mainboard": [],
+        "sideboard": [],
+        "commanders": ["Thrasios", "Tymna"],
+        "archetype": "Partner",
+    })
+    assert effective_mainboard(partner) == []
+    assert effective_commanders(partner) == ["Thrasios", "Tymna"]
+
+
+def test_is_top8_excludes_33_to_128():
+    """is_top8 is False for ranks 33-128."""
+    assert is_top8("33") is False
+    assert is_top8("64") is False
+    assert is_top8("65") is False
+    assert is_top8("128") is False
+    assert is_top8("33-64") is False
+    assert is_top8("65-128") is False
+    assert is_top8("1") is True
+    assert is_top8("8") is True
 
 
 def test_commander_distribution(sample_decks):

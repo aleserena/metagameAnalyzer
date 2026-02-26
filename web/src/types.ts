@@ -63,6 +63,8 @@ export interface MetagameReport {
   archetype_distribution: ArchetypeDistribution[]
   color_distribution: ColorDistribution[]
   top_cards_main: TopCard[]
+  /** Top players by wins (same filter as metagame). */
+  top_players?: PlayerStats[]
   card_synergy?: CardSynergy[]
   placement_weighted: boolean
   ignore_lands: boolean

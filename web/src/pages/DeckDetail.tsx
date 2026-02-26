@@ -321,7 +321,7 @@ function DeckEditSection({
             </div>
             <div className="form-group" style={{ marginBottom: 0, width: 80 }}>
               <label htmlFor="deck-edit-rank">Rank</label>
-              <input id="deck-edit-rank" type="text" value={rank} onChange={(e) => setRank(e.target.value)} placeholder="1, 2, 3-4, …" />
+              <input id="deck-edit-rank" type="text" value={rank} onChange={(e) => setRank(e.target.value)} placeholder="1, 2, 3-4, 5-8, 9-16, 17-32, 33-64, 65-128, …" />
             </div>
             {isEDH && (
               <>
@@ -715,7 +715,7 @@ export default function DeckDetail() {
         {deckManaCost ? <ManaSymbols manaCost={deckManaCost} size={28} /> : null}
       </h1>
 
-      {deck.duplicate_info && (
+      {deck.duplicate_info && deck.mainboard && deck.mainboard.length > 0 && (
         <div
           style={{
             marginBottom: '1rem',
