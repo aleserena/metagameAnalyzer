@@ -186,7 +186,7 @@ export default function UploadDeck() {
               type="text"
               value={rank}
               onChange={(e) => setRank(e.target.value)}
-              placeholder="e.g. 1, 2, 3-4, 5-8"
+              placeholder="e.g. 1, 2, 3-4, 5-8, 9-16, 17-32, 33-64, 65-128"
               disabled={submitting}
             />
           </label>

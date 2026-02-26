@@ -21,6 +21,7 @@ import ManaSymbols from '../components/ManaSymbols'
 import Skeleton from '../components/Skeleton'
 import { reportError } from '../utils'
 import type { MetagameReport, Event } from '../types'
+import { MTG_COLOR_FILL } from '../constants'
 
 const COLORS = ['#1d9bf0', '#00ba7c', '#f7931a', '#e91e63', '#9c27b0', '#00bcd4', '#ff9800', '#4caf50']
 
@@ -200,6 +201,7 @@ export default function Metagame() {
 
   const commanders = metagame?.commander_distribution ?? []
   const archetypes = metagame?.archetype_distribution ?? []
+  const colorDistribution = metagame?.color_distribution ?? []
   const topMain = metagame?.top_cards_main ?? []
 
   const hasAnyFilter = filterColor.length > 0 || filterCmc.length > 0 || filterType.length > 0
@@ -342,6 +344,37 @@ export default function Metagame() {
             <Bar dataKey="count" fill="#1d9bf0" name={placementWeighted ? 'Weighted Score' : 'Decks'} />
           </BarChart>
         </ResponsiveContainer>
+      </div>
+
+      <div className="chart-container">
+        <h3 style={{ margin: '0 0 1rem' }}>Most Played Colors</h3>
+        <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', margin: '0 0 1rem' }}>Deck color identity from commanders</p>
+        {colorDistribution.length > 0 ? (
+          <ResponsiveContainer width="100%" height={300}>
+            <PieChart margin={{ top: 15, right: 15, bottom: 60, left: 15 }}>
+              <Pie
+                data={colorDistribution}
+                dataKey="count"
+                nameKey="color"
+                cx="50%"
+                cy="50%"
+                outerRadius={90}
+                label={({ color, pct }) => `${color} (${pct}%)`}
+              >
+                {colorDistribution.map((entry) => (
+                  <Cell key={entry.color} fill={MTG_COLOR_FILL[entry.color] ?? COLORS[0]} />
+                ))}
+              </Pie>
+              <Tooltip />
+              <Legend formatter={(value, entry: unknown) => {
+                const p = entry && typeof entry === 'object' && 'payload' in entry ? (entry as { payload?: { color?: string; pct?: number } }).payload : undefined
+                return p?.pct != null ? `${p.color ?? value} (${p.pct}%)` : value
+              }} />
+            </PieChart>
+          </ResponsiveContainer>
+        ) : (
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>No color data (no commanders or lookup unavailable)</p>
+        )}
       </div>
 
       <div className="chart-container">

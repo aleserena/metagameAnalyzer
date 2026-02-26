@@ -64,6 +64,7 @@ from src.mtgtop8.analyzer import (
     analyze,
     archetype_aggregate_analysis,
     deck_analysis,
+    effective_commanders,
     find_duplicate_decks,
     is_top8,
     normalize_rank,
@@ -371,7 +372,7 @@ elif _startup_path.exists():
         logger.exception("Failed to load %s: %s", _startup_path, e)
 
 
-_RANK_ORDER = {"1": 0, "2": 1, "3-4": 2, "5-8": 3, "9-16": 4, "17-32": 5}
+_RANK_ORDER = {"1": 0, "2": 1, "3-4": 2, "5-8": 3, "9-16": 4, "17-32": 5, "33-64": 6, "65-128": 7}
 
 
 def _parse_date_sortkey(date_str: str) -> str:
@@ -1427,15 +1428,17 @@ def get_metagame(
     """Full metagame report."""
     if not _decks:
         out = {
-            "summary": {"total_decks": 0, "unique_commanders": 0, "unique_archetypes": 0},
+            "summary": {"total_decks": 0, "unique_players": 0, "unique_archetypes": 0},
             "commander_distribution": [],
             "archetype_distribution": [],
+            "color_distribution": [],
             "top_cards_main": [],
+            "top_players": [],
             "placement_weighted": placement_weighted,
             "ignore_lands": ignore_lands,
         }
         if include_top8_breakdown:
-            out["summary_top8"] = {"total_decks": 0, "unique_commanders": 0, "unique_archetypes": 0}
+            out["summary_top8"] = {"total_decks": 0, "unique_players": 0, "unique_archetypes": 0}
             out["archetype_distribution_top8"] = []
         return out
     filtered = _decks
@@ -1472,6 +1475,38 @@ def get_metagame(
         )
         result["summary_top8"] = report_top8["summary"]
         result["archetype_distribution_top8"] = report_top8["archetype_distribution"]
+    # Most played colors: each deck counts for each of its colors (multicolor = counted in each)
+    _COLOR_LABEL = {"W": "White", "U": "Blue", "B": "Black", "R": "Red", "G": "Green"}
+    _COLOR_ORDER = ["W", "U", "B", "R", "G", "Colorless"]
+    commander_names = list({c for d in decks for c in effective_commanders(d) if c})
+    lookup = lookup_cards(commander_names) if commander_names else {}
+    color_counts: dict[str, int] = {k: 0 for k in _COLOR_ORDER}
+    for d in decks:
+        ec = effective_commanders(d)
+        if not ec:
+            continue
+        ci = set()
+        for name in ec:
+            entry = lookup.get(name)
+            if entry and "error" not in entry:
+                for c in entry.get("color_identity") or entry.get("colors") or []:
+                    if c in _COLOR_LABEL:
+                        ci.add(c)
+        if len(ci) == 0:
+            color_counts["Colorless"] += 1
+        else:
+            for c in ci:
+                color_counts[c] += 1
+    total = sum(color_counts.values())
+    result["color_distribution"] = [
+        {"color": _COLOR_LABEL.get(k, k), "count": color_counts[k], "pct": round(100 * color_counts[k] / total, 1) if total else 0}
+        for k in _COLOR_ORDER
+        if color_counts[k] > 0
+    ]
+    top_players = player_leaderboard(
+        decks, normalize_player=_normalize_player, rank_weights=rank_weights
+    )[:5]
+    result["top_players"] = top_players
     return result
 
 
@@ -1488,6 +1523,8 @@ def get_archetype_detail(
     if not _decks:
         raise HTTPException(status_code=404, detail="No data loaded")
     decoded = unquote(archetype_name)
+    if (decoded or "").strip().lower() == "(unknown)":
+        raise HTTPException(status_code=404, detail="Archetype not found")
     filtered = _decks
     if event_ids:
         ids = [x.strip() for x in event_ids.split(",") if x.strip()]
@@ -1510,6 +1547,9 @@ def get_archetype_detail(
             card_names.add(c)
         for _, c in d.sideboard:
             card_names.add(c)
+        # Include archetype (commander) for empty EDH decks so we fetch metadata
+        if not d.mainboard and (d.format_id or "").upper() in ("EDH", "COMMANDER", "CEDH") and (d.archetype or "").strip():
+            card_names.add((d.archetype or "").strip())
     metadata = lookup_cards(list(card_names))
     merged: dict = {}
     for name in card_names:

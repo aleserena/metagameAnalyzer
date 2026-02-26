@@ -13,16 +13,58 @@ RANK_WEIGHTS: dict[str, float] = {
     "5-8": 2.0,
     "9-16": 1.0,
     "17-32": 0.5,
+    "33-64": 0.25,
+    "65-128": 0.125,
 }
 
 # Canonical rank bands; "top 8" = 1, 2, 3-4, 5-8
 TOP8_RANKS = ("1", "2", "3-4", "5-8")
 
+# Placeholders to exclude from distributions/lists (case-insensitive where noted)
+IGNORED_ARCHETYPE = "(unknown)"  # archetypes: (Unknown) ignored
+IGNORED_PLAYER = "(unknown)"  # players: (unknown) ignored
+IGNORED_DECK_NAME = "Unnamed"  # decks: Unnamed ignored
+
+EDH_FORMAT_IDS = ("EDH", "COMMANDER", "CEDH")
+
+
+def _is_edh(deck: Deck) -> bool:
+    """True if deck format is EDH/Commander/cEDH."""
+    return (deck.format_id or "").upper() in EDH_FORMAT_IDS
+
+
+def effective_mainboard(deck: Deck) -> list[tuple[int, str]]:
+    """Mainboard for analysis. Empty EDH decks with a single-commander archetype get the commander as 1x on the list (not partner)."""
+    if deck.mainboard:
+        return deck.mainboard
+    if not _is_edh(deck):
+        return deck.mainboard
+    archetype = (deck.archetype or "").strip()
+    if not archetype:
+        return deck.mainboard
+    commanders = deck.commanders or []
+    if len(commanders) == 2:
+        return deck.mainboard  # partner deck: don't auto-include
+    return [(1, archetype)]
+
+
+def effective_commanders(deck: Deck) -> list[str]:
+    """Commanders for analysis. Empty EDH decks with archetype (non-partner) use archetype as commander."""
+    commanders = deck.commanders or []
+    if commanders:
+        return commanders
+    if not _is_edh(deck):
+        return []
+    archetype = (deck.archetype or "").strip()
+    if not archetype or deck.mainboard:
+        return []  # only for empty mainboard + archetype
+    return [archetype]
+
 
 def normalize_rank(rank: str) -> str:
-    """Map rank to canonical band. E.g. '3', '4', '3-4' -> '3-4'; '5'..'8' -> '5-8'."""
+    """Map rank to canonical band. E.g. '3', '4', '3-4' -> '3-4'; '5'..'8' -> '5-8'; 33..64 -> '33-64'; 65..128 -> '65-128'."""
     r = (rank or "").strip()
-    if r in ("1", "2", "3-4", "5-8", "9-16", "17-32"):
+    if r in ("1", "2", "3-4", "5-8", "9-16", "17-32", "33-64", "65-128"):
         return r
     if not r.isdigit():
         return ""
@@ -39,6 +81,10 @@ def normalize_rank(rank: str) -> str:
         return "9-16"
     if 17 <= n <= 32:
         return "17-32"
+    if 33 <= n <= 64:
+        return "33-64"
+    if 65 <= n <= 128:
+        return "65-128"
     return ""
 
 
@@ -60,7 +106,10 @@ def commander_distribution(
     """Count (or weighted score) and % of decks per commander."""
     scores: dict[str, float] = {}
     for d in decks:
-        key = " / ".join(sorted(d.commanders)) if d.commanders else "(no commander)"
+        if (d.name or "").strip() == IGNORED_DECK_NAME:
+            continue
+        ec = effective_commanders(d)
+        key = " / ".join(sorted(ec)) if ec else "(no commander)"
         w = _get_weight(d.rank, rank_weights) if placement_weighted else 1.0
         scores[key] = scores.get(key, 0.0) + w
     total = sum(scores.values()) or 1
@@ -75,10 +124,13 @@ def archetype_distribution(
     placement_weighted: bool = False,
     rank_weights: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
-    """Count (or weighted score) and % per archetype."""
+    """Count (or weighted score) and % per archetype. (Unknown) archetype is ignored."""
     scores: dict[str, float] = {}
     for d in decks:
-        key = d.archetype or "(unknown)"
+        raw = (d.archetype or "").strip()
+        if not raw or raw.lower() == IGNORED_ARCHETYPE.lower():
+            continue
+        key = raw
         w = _get_weight(d.rank, rank_weights) if placement_weighted else 1.0
         scores[key] = scores.get(key, 0.0) + w
     total = sum(scores.values()) or 1
@@ -152,7 +204,7 @@ def top_cards_main(
 
     for d in decks:
         w = _get_weight(d.rank, rank_weights) if placement_weighted else 1.0
-        for qty, card in d.mainboard:
+        for qty, card in effective_mainboard(d):
             if not include_basic_lands and card in BASIC_LANDS:
                 continue
             if _should_ignore_land(card, ignore_lands, ignore_lands_cards):
@@ -215,7 +267,10 @@ def player_leaderboard(
     norm = normalize_player if normalize_player is not None else (lambda x: x)
     stats: dict[str, dict[str, int | float]] = {}
     for d in decks:
-        player = norm(d.player or "(unknown)")
+        raw = (d.player or "").strip()
+        if not raw or raw.lower() == IGNORED_PLAYER.lower():
+            continue
+        player = norm(d.player.strip())
         if player not in stats:
             stats[player] = {"player": player, "wins": 0, "top2": 0, "top4": 0, "top8": 0, "points": 0.0, "deck_count": 0}
         s = stats[player]
@@ -283,7 +338,7 @@ def deck_analysis(deck: Deck, card_metadata: dict[str, dict]) -> dict[str, Any]:
     grouped_by_color: dict[str, list[tuple[int, str]]] = {}
     card_meta_out: dict[str, dict] = {}
 
-    for qty, card in deck.mainboard:
+    for qty, card in effective_mainboard(deck):
         meta = card_metadata.get(card, {})
         type_line = (meta.get("type_line") or "").upper()
         is_land = "LAND" in type_line if meta else _is_land_card(card)
@@ -440,16 +495,19 @@ def archetype_aggregate_analysis(
 
 
 def deck_diversity(decks: list[Deck]) -> dict[str, Any]:
-    """Unique commanders/archetypes, simple diversity metrics."""
-    commanders = set()
+    """Unique players/archetypes, simple diversity metrics. (unknown) and (Unknown) placeholders are ignored."""
+    players = set()
     archetypes = set()
     for d in decks:
-        if d.commanders:
-            commanders.add(" / ".join(sorted(d.commanders)))
-        archetypes.add(d.archetype or "(unknown)")
+        p = (d.player or "").strip()
+        if p and p.lower() != IGNORED_PLAYER.lower():
+            players.add(d.player.strip())
+        a = (d.archetype or "").strip()
+        if a and a.lower() != IGNORED_ARCHETYPE.lower():
+            archetypes.add(d.archetype.strip())
     return {
         "total_decks": len(decks),
-        "unique_commanders": len(commanders),
+        "unique_players": len(players),
         "unique_archetypes": len(archetypes),
     }
 
@@ -497,7 +555,7 @@ def card_synergy(
 
     for d in decks:
         cards = set()
-        for qty, card in d.mainboard:
+        for qty, card in effective_mainboard(d):
             if card in BASIC_LANDS:
                 continue
             if _should_ignore_land(card, ignore_lands, ignore_lands_cards):
@@ -526,7 +584,7 @@ def similar_decks(
     limit: int = 10,
 ) -> list[dict[str, Any]]:
     """Return decks with highest card overlap (Jaccard similarity on mainboard)."""
-    deck_cards = set(c for _, c in deck.mainboard)
+    deck_cards = set(c for _, c in effective_mainboard(deck))
     if not deck_cards:
         return []
 
@@ -534,7 +592,7 @@ def similar_decks(
     for d in all_decks:
         if d.deck_id == deck.deck_id:
             continue
-        other_cards = set(c for _, c in d.mainboard)
+        other_cards = set(c for _, c in effective_mainboard(d))
         if not other_cards:
             continue
         intersection = len(deck_cards & other_cards)
@@ -560,7 +618,7 @@ def similar_decks(
 def find_duplicate_decks(decks: list[Deck]) -> dict[int, list[int]]:
     """Deck IDs that are duplicates (identical mainboard). Returns {deck_id: [other_duplicate_ids]}."""
     def mainboard_key(d: Deck) -> tuple:
-        return tuple(sorted((qty, c) for qty, c in d.mainboard))
+        return tuple(sorted((qty, c) for qty, c in effective_mainboard(d)))
 
     by_key: dict[tuple, list[int]] = {}
     for d in decks:

@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts'
 import { getDecks, getDeckCompare, getDeckAnalysis } from '../api'
+import { MTG_COLOR_FILL } from '../constants'
 import type { DeckAnalysis } from '../api'
 import type { Deck } from '../types'
 import CardHover from '../components/CardHover'
@@ -342,12 +343,12 @@ export default function DeckCompare() {
                     {compareData.map((d) => {
                       const a = analyses[d.deck_id]!
                       const colorData = [
-                        { name: 'White', value: a.color_distribution.W || 0, color: '#fff9e6' },
-                        { name: 'Blue', value: a.color_distribution.U || 0, color: '#0e4d92' },
-                        { name: 'Black', value: a.color_distribution.B || 0, color: '#8b8b8b' },
-                        { name: 'Red', value: a.color_distribution.R || 0, color: '#c41e3a' },
-                        { name: 'Green', value: a.color_distribution.G || 0, color: '#007a33' },
-                        { name: 'Colorless', value: a.color_distribution.C || 0, color: '#b0b0b0' },
+                        { name: 'White', value: a.color_distribution.W || 0, color: MTG_COLOR_FILL.White },
+                        { name: 'Blue', value: a.color_distribution.U || 0, color: MTG_COLOR_FILL.Blue },
+                        { name: 'Black', value: a.color_distribution.B || 0, color: MTG_COLOR_FILL.Black },
+                        { name: 'Red', value: a.color_distribution.R || 0, color: MTG_COLOR_FILL.Red },
+                        { name: 'Green', value: a.color_distribution.G || 0, color: MTG_COLOR_FILL.Green },
+                        { name: 'Colorless', value: a.color_distribution.C || 0, color: MTG_COLOR_FILL.Colorless },
                       ].filter((x) => x.value > 0)
                       return (
                         <div key={d.deck_id} className="chart-container chart-container--flex">

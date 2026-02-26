@@ -34,9 +34,13 @@ describe('api', () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
-        summary: { total_decks: 0, unique_commanders: 0, unique_archetypes: 0 },
+        summary: { total_decks: 0, unique_players: 0, unique_archetypes: 0 },
         commander_distribution: [],
+        archetype_distribution: [],
+        color_distribution: [],
         top_cards_main: [],
+        placement_weighted: false,
+        ignore_lands: false,
       }),
     } as Response)
 

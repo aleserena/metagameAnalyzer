@@ -17,7 +17,7 @@ import {
 import type { UploadLinkRow } from '../api'
 import { reportError } from '../utils'
 
-const RANK_KEYS = ['1', '2', '3-4', '5-8', '9-16', '17-32'] as const
+const RANK_KEYS = ['1', '2', '3-4', '5-8', '9-16', '17-32', '33-64', '65-128'] as const
 const DEFAULT_RANK_WEIGHTS: Record<string, number> = {
   '1': 8,
   '2': 6,
@@ -25,6 +25,8 @@ const DEFAULT_RANK_WEIGHTS: Record<string, number> = {
   '5-8': 2,
   '9-16': 1,
   '17-32': 0.5,
+  '33-64': 0.25,
+  '65-128': 0.125,
 }
 
 export default function Settings() {
