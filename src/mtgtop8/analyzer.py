@@ -440,16 +440,15 @@ def archetype_aggregate_analysis(
 
 
 def deck_diversity(decks: list[Deck]) -> dict[str, Any]:
-    """Unique commanders/archetypes, simple diversity metrics."""
-    commanders = set()
+    """Unique players/archetypes, simple diversity metrics."""
+    players = set()
     archetypes = set()
     for d in decks:
-        if d.commanders:
-            commanders.add(" / ".join(sorted(d.commanders)))
+        players.add(d.player or "(unknown)")
         archetypes.add(d.archetype or "(unknown)")
     return {
         "total_decks": len(decks),
-        "unique_commanders": len(commanders),
+        "unique_players": len(players),
         "unique_archetypes": len(archetypes),
     }
 

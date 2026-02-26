@@ -50,6 +50,7 @@ const CMC_OPTIONS = [0, 1, 2, 3, 4, 5]
 const TYPE_OPTIONS = [...TYPE_ORDER, 'Other']
 const FILTER_SYMBOL_SIZE = 20
 const TOP_CARDS_PER_PAGE = 50
+const WUBRG_ORDER = ['W', 'U', 'B', 'R', 'G'] as const
 
 export default function ArchetypeDetail() {
   const { archetypeName } = useParams<{ archetypeName: string }>()
@@ -204,14 +205,22 @@ export default function ArchetypeDetail() {
     setTopCardsPage(0)
   }
 
+  const archetypeManaCost = (() => {
+    const dist = detail?.average_analysis?.color_distribution
+    if (!dist) return ''
+    const colors = WUBRG_ORDER.filter((c) => (dist[c] ?? 0) > 0)
+    return colors.length ? `{${colors.join('}{')}}` : ''
+  })()
+
   return (
     <div style={{ opacity: loading ? 0.6 : 1, transition: 'opacity 0.2s' }}>
       <button type="button" className="btn" style={{ marginBottom: '1rem' }} onClick={() => navigate(-1)}>
         Back
       </button>
       <div style={{ marginBottom: '1.5rem' }}>
-        <h1 className="page-title" style={{ margin: 0 }}>
+        <h1 className="page-title" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
           {detail.archetype}
+          {archetypeManaCost ? <ManaSymbols manaCost={archetypeManaCost} size={28} /> : null}
         </h1>
         <p style={{ margin: '0.25rem 0 0', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
           Average of {detail.deck_count} deck{detail.deck_count !== 1 ? 's' : ''}

@@ -1427,15 +1427,16 @@ def get_metagame(
     """Full metagame report."""
     if not _decks:
         out = {
-            "summary": {"total_decks": 0, "unique_commanders": 0, "unique_archetypes": 0},
+            "summary": {"total_decks": 0, "unique_players": 0, "unique_archetypes": 0},
             "commander_distribution": [],
             "archetype_distribution": [],
+            "color_distribution": [],
             "top_cards_main": [],
             "placement_weighted": placement_weighted,
             "ignore_lands": ignore_lands,
         }
         if include_top8_breakdown:
-            out["summary_top8"] = {"total_decks": 0, "unique_commanders": 0, "unique_archetypes": 0}
+            out["summary_top8"] = {"total_decks": 0, "unique_players": 0, "unique_archetypes": 0}
             out["archetype_distribution_top8"] = []
         return out
     filtered = _decks
@@ -1472,6 +1473,31 @@ def get_metagame(
         )
         result["summary_top8"] = report_top8["summary"]
         result["archetype_distribution_top8"] = report_top8["archetype_distribution"]
+    # Most played colors: each deck counts for each of its colors (multicolor = counted in each)
+    _COLOR_LABEL = {"W": "White", "U": "Blue", "B": "Black", "R": "Red", "G": "Green"}
+    _COLOR_ORDER = ["W", "U", "B", "R", "G", "Colorless"]
+    commander_names = list({c for d in decks for c in (d.commanders or []) if c})
+    lookup = lookup_cards(commander_names) if commander_names else {}
+    color_counts: dict[str, int] = {k: 0 for k in _COLOR_ORDER}
+    for d in decks:
+        ci = set()
+        for name in d.commanders or []:
+            entry = lookup.get(name)
+            if entry and "error" not in entry:
+                for c in entry.get("color_identity") or entry.get("colors") or []:
+                    if c in _COLOR_LABEL:
+                        ci.add(c)
+        if len(ci) == 0:
+            color_counts["Colorless"] += 1
+        else:
+            for c in ci:
+                color_counts[c] += 1
+    total = sum(color_counts.values())
+    result["color_distribution"] = [
+        {"color": _COLOR_LABEL.get(k, k), "count": color_counts[k], "pct": round(100 * color_counts[k] / total, 1) if total else 0}
+        for k in _COLOR_ORDER
+        if color_counts[k] > 0
+    ]
     return result
 
 

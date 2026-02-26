@@ -22,7 +22,7 @@ export interface Deck {
 
 export interface MetagameSummary {
   total_decks: number
-  unique_commanders: number
+  unique_players: number
   unique_archetypes: number
 }
 
@@ -51,10 +51,17 @@ export interface CardSynergy {
   decks: number
 }
 
+export interface ColorDistribution {
+  color: string
+  count: number
+  pct: number
+}
+
 export interface MetagameReport {
   summary: MetagameSummary
   commander_distribution: CommanderDistribution[]
   archetype_distribution: ArchetypeDistribution[]
+  color_distribution: ColorDistribution[]
   top_cards_main: TopCard[]
   card_synergy?: CardSynergy[]
   placement_weighted: boolean

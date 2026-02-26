@@ -95,7 +95,7 @@ export default function Dashboard() {
     )
   }
 
-  const summary = metagame?.summary ?? { total_decks: 0, unique_commanders: 0, unique_archetypes: 0 }
+  const summary = metagame?.summary ?? { total_decks: 0, unique_players: 0, unique_archetypes: 0 }
   const topCommanders = metagame?.commander_distribution?.slice(0, 5) ?? []
   const topArchetypes = metagame?.archetype_distribution?.slice(0, 5) ?? []
   const topCards = metagame?.top_cards_main?.slice(0, 5) ?? []
@@ -150,8 +150,8 @@ export default function Dashboard() {
             <div className="label">Events</div>
           </Link>
           <div className="stat-card">
-            <div className="value">{summary.unique_commanders}</div>
-            <div className="label">Unique Commanders</div>
+            <div className="value">{summary.unique_players}</div>
+            <div className="label">Unique Players</div>
           </div>
           <Link to="/archetypes" className="stat-card" style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}>
             <div className="value">{summary.unique_archetypes}</div>

@@ -69,11 +69,11 @@ def test_player_leaderboard(sample_decks):
 
 
 def test_deck_diversity(sample_decks):
-    """deck_diversity returns unique commanders and archetypes."""
+    """deck_diversity returns unique players and archetypes."""
     decks = [Deck.from_dict(d) for d in sample_decks]
     result = deck_diversity(decks)
     assert result["total_decks"] == 2
-    assert result["unique_commanders"] == 2
+    assert result["unique_players"] == 2
     assert result["unique_archetypes"] == 2
 
 
