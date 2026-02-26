@@ -2,10 +2,27 @@ import type { Deck, MetagameReport, Event, PlayerStats, SimilarDeck, ArchetypeDe
 import { getToken } from './contexts/AuthContext'
 
 const API_BASE = '/api'
+const EVENT_EDIT_TOKEN_KEY = 'event_edit_token'
 
 function getAuthHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {}
   const token = getToken()
-  return token ? { Authorization: `Bearer ${token}` } : {}
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  const eventEditToken = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(EVENT_EDIT_TOKEN_KEY) : null
+  if (eventEditToken) headers['X-Event-Edit-Token'] = eventEditToken
+  return headers
+}
+
+export function getEventEditToken(): string | null {
+  return typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(EVENT_EDIT_TOKEN_KEY) : null
+}
+
+export function setEventEditToken(token: string): void {
+  sessionStorage.setItem(EVENT_EDIT_TOKEN_KEY, token)
+}
+
+export function clearEventEditToken(): void {
+  sessionStorage.removeItem(EVENT_EDIT_TOKEN_KEY)
 }
 
 /** Shared 401 + error handling for fetch. Use for JSON or blob responses with auth. */
@@ -251,7 +268,7 @@ export async function addDeckToEvent(
 
 export async function createEventUploadLinks(
   eventId: number | string,
-  options?: { count?: number; expires_in_days?: number; deck_id?: number }
+  options?: { count?: number; expires_in_days?: number; deck_id?: number; type?: 'event_edit' }
 ): Promise<{
   links: Array<{ token: string; url: string; expires_at: string | null; deck_id?: number }>
 }> {
@@ -261,8 +278,24 @@ export async function createEventUploadLinks(
       count: options?.deck_id != null ? undefined : (options?.count ?? 1),
       expires_in_days: options?.expires_in_days ?? undefined,
       deck_id: options?.deck_id ?? undefined,
+      type: options?.type ?? undefined,
     }),
   })
+}
+
+/** Create a one-time event edit link (admin-only). Returns URL to event page with ?token= for editing event + decks (no delete event, no new links). */
+export async function createEventEditLink(eventId: string): Promise<{
+  links: Array<{ token: string; url: string; expires_at: string | null }>
+}> {
+  return fetchApi(`/events/${encodeURIComponent(eventId)}/upload-links`, {
+    method: 'POST',
+    body: JSON.stringify({ type: 'event_edit' }),
+  })
+}
+
+/** Validate one-time event-edit token and return event_id. Public. Marks link as used. */
+export async function getEventEditLinkInfo(token: string): Promise<{ event_id: string }> {
+  return fetchApiPublic(`/event-edit/${encodeURIComponent(token)}`)
 }
 
 /** Public API (no auth) for upload link pages. */

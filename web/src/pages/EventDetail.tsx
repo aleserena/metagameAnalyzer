@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
-import { useParams, Link, useNavigate, useBlocker } from 'react-router-dom'
+import { useState, useEffect, useRef } from 'react'
+import { useParams, Link, useNavigate, useBlocker, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { getEvent, getDecks, updateEvent, addDeckToEvent, deleteEvent, createEventUploadLinks, updateDeck, deleteDeck } from '../api'
+import { getEvent, getDecks, updateEvent, addDeckToEvent, deleteEvent, createEventUploadLinks, createEventEditLink, getEventEditLinkInfo, updateDeck, deleteDeck, setEventEditToken, clearEventEditToken } from '../api'
 import type { EventWithOrigin } from '../api'
 import type { Deck } from '../types'
 import { useAuth } from '../contexts/AuthContext'
@@ -9,6 +9,7 @@ import { useFetch } from '../hooks/useFetch'
 import PageError from '../components/PageError'
 import PageSkeleton from '../components/PageSkeleton'
 import CardSearchInput from '../components/CardSearchInput'
+import { parseMoxfieldDeckList } from '../lib/deckListParser'
 import { reportError, ddMmYyToIso, isoToDdMmYy } from '../utils'
 
 /** Coerce value for display; avoid [object Object]. */
@@ -20,10 +21,26 @@ function cellStr(v: unknown): string {
 
 type EventDetailData = { event: EventWithOrigin & { player_count?: number }; decks: Deck[] }
 
+type BulkDeckEdit = { name: string; player: string; rank: string; archetype: string }
+
+function defaultDeckEdit(d: Deck): BulkDeckEdit {
+  return {
+    name: d.name ?? '',
+    player: d.player ?? '',
+    rank: d.rank ?? '',
+    archetype: d.archetype ?? (d.commanders?.length ? d.commanders[0] ?? '' : ''),
+  }
+}
+
 export default function EventDetail() {
   const { eventId } = useParams<{ eventId: string }>()
+  const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const { user } = useAuth()
+  const urlToken = searchParams.get('token')
+  const [eventEditMode, setEventEditMode] = useState(false)
+  const [eventEditTokenError, setEventEditTokenError] = useState<string | null>(null)
+  const eventEditValidatedRef = useRef(false)
   const { data, loading, error, refetch } = useFetch<EventDetailData>(
     () =>
       eventId
@@ -44,7 +61,6 @@ export default function EventDetail() {
   const [editFormatId, setEditFormatId] = useState('')
   const [editPlayerCount, setEditPlayerCount] = useState(0)
   const [saving, setSaving] = useState(false)
-  const [addingDeck, setAddingDeck] = useState(false)
   const [addDecksCount, setAddDecksCount] = useState(1)
   const [addingDecks, setAddingDecks] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -58,27 +74,66 @@ export default function EventDetail() {
   const [editDeckArchetype, setEditDeckArchetype] = useState('')
   const [savingDeck, setSavingDeck] = useState(false)
   const [deletingDeckId, setDeletingDeckId] = useState<number | null>(null)
+  const [bulkDeckEdits, setBulkDeckEdits] = useState<Record<number, BulkDeckEdit>>({})
+  const [generatingEventEditLink, setGeneratingEventEditLink] = useState(false)
+  const [generatedEventEditLink, setGeneratedEventEditLink] = useState<{ url: string } | null>(null)
+  const [uploadDeckForDeckId, setUploadDeckForDeckId] = useState<number | null>(null)
+  const [uploadDeckListText, setUploadDeckListText] = useState('')
+  const [uploadingDeck, setUploadingDeck] = useState(false)
+  const [confirmDeleteEvent, setConfirmDeleteEvent] = useState(false)
+  const [confirmDeleteDeckId, setConfirmDeleteDeckId] = useState<number | null>(null)
 
-  const isUpdateModalOpen = editingDeckId != null
-  useBlocker(isUpdateModalOpen)
+  const canEditEvent = user === 'admin' || eventEditMode
+  const canDeleteEvent = user === 'admin'
+  const showUploadLinksSection = user === 'admin'
 
   useEffect(() => {
-    if (!isUpdateModalOpen) return
+    if (!urlToken || !eventId || eventEditValidatedRef.current) return
+    eventEditValidatedRef.current = true
+    getEventEditLinkInfo(urlToken)
+      .then((data) => {
+        if (data.event_id === eventId) {
+          setEventEditToken(urlToken)
+          setEventEditMode(true)
+          setEventEditTokenError(null)
+        } else {
+          setEventEditTokenError('This link is for a different event.')
+        }
+      })
+      .catch(() => setEventEditTokenError('Link invalid or already used.'))
+  }, [urlToken, eventId])
+
+  const isUpdateModalOpen = editingDeckId != null
+  const isUploadDeckModalOpen = uploadDeckForDeckId != null
+  const isConfirmModalOpen = confirmDeleteEvent || confirmDeleteDeckId != null
+  useBlocker(isUpdateModalOpen || isUploadDeckModalOpen || isConfirmModalOpen)
+
+  useEffect(() => {
+    if (!isUpdateModalOpen && !isUploadDeckModalOpen && !isConfirmModalOpen) return
     const handler = (e: BeforeUnloadEvent) => {
       e.preventDefault()
     }
     window.addEventListener('beforeunload', handler)
     return () => window.removeEventListener('beforeunload', handler)
-  }, [isUpdateModalOpen])
+  }, [isUpdateModalOpen, isUploadDeckModalOpen, isConfirmModalOpen])
 
   useEffect(() => {
-    if (!isUpdateModalOpen) return
+    if (!isUpdateModalOpen && !isUploadDeckModalOpen && !isConfirmModalOpen) return
     const prevOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
     return () => {
       document.body.style.overflow = prevOverflow
     }
-  }, [isUpdateModalOpen])
+  }, [isUpdateModalOpen, isUploadDeckModalOpen, isConfirmModalOpen])
+
+  const getDeckEdit = (d: Deck): BulkDeckEdit => bulkDeckEdits[d.deck_id] ?? defaultDeckEdit(d)
+
+  const setDeckEditField = (deckId: number, field: keyof BulkDeckEdit, value: string, fallback: BulkDeckEdit) => {
+    setBulkDeckEdits((prev) => ({
+      ...prev,
+      [deckId]: { ...(prev[deckId] ?? fallback), [field]: value },
+    }))
+  }
 
   const startEdit = () => {
     if (event) {
@@ -92,7 +147,10 @@ export default function EventDetail() {
     }
   }
 
-  const cancelEdit = () => setEditing(false)
+  const cancelEdit = () => {
+    setEditing(false)
+    setBulkDeckEdits({})
+  }
 
   const saveEdit = () => {
     if (!eventId) return
@@ -106,29 +164,44 @@ export default function EventDetail() {
       location: editLocation,
     })
       .then(() => {
+        if (decks.length === 0) return Promise.resolve() as Promise<void>
+        const deckPromises = decks.map((d) => {
+          const edit = getDeckEdit(d)
+          const payload: Parameters<typeof updateDeck>[1] = {
+            name: edit.name.trim() || undefined,
+            player: edit.player.trim() || undefined,
+            rank: edit.rank.trim() || undefined,
+            archetype: edit.archetype.trim() || undefined,
+          }
+          if (isEDH && edit.archetype.trim()) {
+            payload.commanders = [edit.archetype.trim()]
+          }
+          return updateDeck(d.deck_id, payload)
+        })
+        return Promise.all(deckPromises).then((): void => undefined)
+      })
+      .then(() => {
         refetch()
         setEditing(false)
-        toast.success('Event updated')
+        setBulkDeckEdits({})
+        toast.success(decks.length > 0 ? `Event and ${decks.length} deck${decks.length !== 1 ? 's' : ''} updated` : 'Event updated')
+        if (eventEditMode) {
+          clearEventEditToken()
+          setEventEditMode(false)
+          navigate(`/events/${eventId}`, { replace: true })
+        }
       })
       .catch((e) => toast.error(reportError(e)))
       .finally(() => setSaving(false))
   }
 
-  const handleAddDeck = () => {
-    if (!eventId) return
-    setAddingDeck(true)
-    addDeckToEvent(eventId)
-      .then((r) => {
-        toast.success(r.message)
-        refetch()
-      })
-      .catch((err) => toast.error(reportError(err)))
-      .finally(() => setAddingDeck(false))
-  }
+  const maxDecks = typeof event?.player_count === 'number' && event.player_count > 0 ? event.player_count : Infinity
+  const atDeckLimit = decks.length >= maxDecks
+  const slotsLeft = Math.max(0, maxDecks - decks.length)
 
   const handleAddDecks = () => {
-    if (!eventId) return
-    const count = Math.max(1, Math.min(100, addDecksCount))
+    if (!eventId || atDeckLimit) return
+    const count = Math.max(1, Math.min(slotsLeft, addDecksCount))
     setAddingDecks(true)
     const addOne = (): Promise<unknown> => addDeckToEvent(eventId)
     const chain = Array.from({ length: count }, () => addOne).reduce<Promise<void>>(
@@ -144,8 +217,12 @@ export default function EventDetail() {
       .finally(() => setAddingDecks(false))
   }
 
-  const handleDelete = () => {
-    if (!eventId || !window.confirm('Delete this event and all its decks?')) return
+  const handleDeleteClick = () => {
+    if (eventId) setConfirmDeleteEvent(true)
+  }
+  const handleDeleteConfirm = () => {
+    if (!eventId) return
+    setConfirmDeleteEvent(false)
     setDeleting(true)
     deleteEvent(eventId)
       .then(() => {
@@ -240,8 +317,47 @@ export default function EventDetail() {
       .finally(() => setSavingDeck(false))
   }
 
-  const handleDeleteDeck = (deckId: number) => {
-    if (!window.confirm('Delete this deck? This cannot be undone.')) return
+  const isEDH = (event?.format_id ?? '').toLowerCase() === 'edh' || (event?.format_id ?? '').toLowerCase() === 'commander'
+
+  const openUploadDeckModal = (deckId: number) => {
+    setUploadDeckForDeckId(deckId)
+    setUploadDeckListText('')
+  }
+  const closeUploadDeckModal = () => {
+    setUploadDeckForDeckId(null)
+    setUploadDeckListText('')
+  }
+
+  const handleUploadDeckSubmit = () => {
+    if (uploadDeckForDeckId == null) return
+    const parsed = parseMoxfieldDeckList(uploadDeckListText)
+    const mainboard = parsed.mainboard.filter((c) => c.card.trim())
+    if (mainboard.length === 0) {
+      toast.error('Deck list must contain at least one mainboard card.')
+      return
+    }
+    const commanders = parsed.commanders.map((c) => c.card.trim()).filter(Boolean)
+    const sideboard = parsed.sideboard.filter((c) => c.card.trim())
+    setUploadingDeck(true)
+    updateDeck(uploadDeckForDeckId, {
+      mainboard,
+      sideboard,
+      commanders: commanders.length > 0 ? commanders : undefined,
+    })
+      .then(() => {
+        refetch()
+        closeUploadDeckModal()
+        toast.success('Deck updated')
+      })
+      .catch((e) => toast.error(reportError(e)))
+      .finally(() => setUploadingDeck(false))
+  }
+
+  const handleDeleteDeckClick = (deckId: number) => setConfirmDeleteDeckId(deckId)
+  const handleDeleteDeckConfirm = () => {
+    if (confirmDeleteDeckId == null) return
+    const deckId = confirmDeleteDeckId
+    setConfirmDeleteDeckId(null)
     setDeletingDeckId(deckId)
     deleteDeck(deckId)
       .then(() => {
@@ -266,8 +382,19 @@ export default function EventDetail() {
   }
 
   return (
-    <div className="page">
-      <button type="button" className="btn" style={{ marginBottom: '1rem' }} onClick={() => navigate(-1)}>
+    <>
+      {eventEditMode && !eventEditTokenError && (
+        <div style={{ marginBottom: '1rem', padding: '0.75rem 1rem', background: 'var(--accent)', color: '#fff', borderRadius: 8 }}>
+          Editing via one-time link. You can edit the event and all decks.
+        </div>
+      )}
+      <div className="page">
+        {eventEditTokenError && (
+          <div style={{ marginBottom: '1rem', padding: '0.75rem 1rem', background: 'var(--danger, #c00)', color: '#fff', borderRadius: 8 }}>
+            {eventEditTokenError}
+          </div>
+        )}
+        <button type="button" className="btn" style={{ marginBottom: '1rem' }} onClick={() => navigate(-1)}>
         Back
       </button>
       <h1 className="page-title">
@@ -336,42 +463,48 @@ export default function EventDetail() {
               <dt style={{ color: 'var(--text-muted)' }}>Location</dt>
               <dd style={{ margin: 0 }}>{cellStr(event.location) || '—'}</dd>
             </dl>
-            {user === 'admin' && (
+            {(canEditEvent || canDeleteEvent) && (
               <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
-                <button type="button" className="btn" onClick={startEdit}>Edit event</button>
-                <button type="button" className="btn" onClick={handleAddDeck} disabled={addingDeck || addingDecks}>
-                  {addingDeck ? 'Adding…' : 'Add deck'}
-                </button>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                  <input
-                    type="number"
-                    min={1}
-                    max={100}
-                    value={addDecksCount}
-                    onChange={(ev) => setAddDecksCount(Math.max(1, Math.min(100, parseInt(ev.target.value, 10) || 1)))}
-                    style={{ width: 52 }}
-                    aria-label="Number of decks to add"
-                    disabled={addingDeck || addingDecks}
-                  />
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={handleAddDecks}
-                    disabled={addingDeck || addingDecks}
-                  >
-                    {addingDecks ? 'Adding…' : `Add ${addDecksCount} deck${addDecksCount !== 1 ? 's' : ''}`}
+                {canEditEvent && (
+                  <>
+                    <button type="button" className="btn" onClick={startEdit}>Edit event</button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                      <input
+                        type="number"
+                        min={1}
+                        max={Math.max(1, slotsLeft)}
+                        value={addDecksCount}
+                        onChange={(ev) => setAddDecksCount(Math.max(1, Math.min(slotsLeft, parseInt(ev.target.value, 10) || 1)))}
+                        style={{ width: 52 }}
+                        aria-label="Number of decks to add"
+                        disabled={addingDecks || atDeckLimit}
+                      />
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={handleAddDecks}
+                        disabled={addingDecks || atDeckLimit}
+                      >
+                        {addingDecks ? 'Adding…' : `Add ${addDecksCount} deck${addDecksCount !== 1 ? 's' : ''}`}
+                      </button>
+                    </div>
+                    {atDeckLimit && maxDecks !== Infinity && (
+                      <span style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Event is full ({decks.length}/{maxDecks} decks).</span>
+                    )}
+                  </>
+                )}
+                {canDeleteEvent && (
+                  <button type="button" className="btn" style={{ color: 'var(--danger, #c00)' }} onClick={handleDeleteClick} disabled={deleting}>
+                    Delete event
                   </button>
-                </div>
-                <button type="button" className="btn" style={{ color: 'var(--danger, #c00)' }} onClick={handleDelete} disabled={deleting}>
-                  Delete event
-                </button>
+                )}
               </div>
             )}
           </>
         )}
       </section>
 
-      {user === 'admin' && (
+      {showUploadLinksSection && (
         <section className="card" style={{ marginBottom: '1.5rem' }}>
           <h2 style={{ marginTop: 0 }}>Upload links</h2>
           <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>
@@ -383,7 +516,7 @@ export default function EventDetail() {
             onClick={handleGenerateUploadLink}
             disabled={generatingLinks}
           >
-            {generatingLinks ? 'Generating…' : 'Generate upload link'}
+            {generatingLinks ? 'Generating…' : 'Generate deck upload link'}
           </button>
           {generatedLinks.length > 0 && (
             <ul style={{ marginTop: '1rem', paddingLeft: '1.25rem' }}>
@@ -397,75 +530,188 @@ export default function EventDetail() {
               ))}
             </ul>
           )}
+          <h3 style={{ marginTop: '1.5rem', marginBottom: '0.5rem' }}>Event edit link</h3>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '0.75rem' }}>
+            One-time link to this event page to add, update, and delete decks and edit event details. Cannot delete the event or generate new links.
+          </p>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              if (!eventId) return
+              setGeneratingEventEditLink(true)
+              createEventEditLink(eventId)
+                .then((res) => {
+                  if (res.links.length > 0) {
+                    const token = res.links[0].token
+                    const base = typeof window !== 'undefined' ? window.location.origin : ''
+                    const url = `${base}/events/${eventId}?token=${token}`
+                    setGeneratedEventEditLink({ url })
+                    window.navigator.clipboard.writeText(url).then(
+                      () => toast.success('Event edit link copied to clipboard'),
+                      () => toast.success('Event edit link generated')
+                    )
+                  }
+                })
+                .catch((e) => toast.error(reportError(e)))
+                .finally(() => setGeneratingEventEditLink(false))
+            }}
+            disabled={generatingEventEditLink}
+          >
+            {generatingEventEditLink ? 'Generating…' : 'Generate event edit link'}
+          </button>
+          {generatedEventEditLink && (
+            <p style={{ marginTop: '0.75rem', fontSize: '0.9rem' }}>
+              <code style={{ wordBreak: 'break-all' }}>{generatedEventEditLink.url}</code>{' '}
+              <button type="button" className="btn" style={{ flexShrink: 0 }} onClick={() => copyLink(generatedEventEditLink!.url)}>
+                Copy
+              </button>
+            </p>
+          )}
         </section>
       )}
 
       <h2>Decks ({decks.length})</h2>
       {decks.length === 0 ? (
-        <p style={{ color: 'var(--text-muted)' }}>No decks in this event yet. {user === 'admin' && 'Click "Add deck" above to add one.'}</p>
+        <p style={{ color: 'var(--text-muted)' }}>No decks in this event yet. {canEditEvent && 'Use "Add decks" above to add one or more.'}</p>
       ) : (
-        <div className="table-wrap-outer">
-          <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th scope="col">Deck</th>
-                <th scope="col">Player</th>
-                <th scope="col">Rank</th>
-                <th scope="col">Archetype</th>
-                {user === 'admin' && <th scope="col">Actions</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {decks.map((d) => (
-                <tr key={d.deck_id}>
-                  <td>
-                    <Link to={`/decks/${d.deck_id}`} style={{ color: 'var(--accent)' }}>{cellStr(d.name) || 'Unnamed'}</Link>
-                  </td>
-                  <td>{cellStr(d.player)}</td>
-                  <td>{cellStr(d.rank) || '—'}</td>
-                  <td>{cellStr(d.archetype)}</td>
-                  {user === 'admin' && (
-                    <td>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
-                        <button
-                          type="button"
-                          className="btn"
-                          style={{ fontSize: '0.875rem', padding: '0.25rem 0.5rem' }}
-                          onClick={() => openUpdateDeck(d)}
-                        >
-                          Update
-                        </button>
-                        <button
-                          type="button"
-                          className="btn"
-                          style={{ fontSize: '0.875rem', padding: '0.25rem 0.5rem', color: 'var(--danger, #c00)' }}
-                          disabled={deletingDeckId === d.deck_id}
-                          onClick={() => handleDeleteDeck(d.deck_id)}
-                        >
-                          {deletingDeckId === d.deck_id ? '…' : 'Delete deck'}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn"
-                          style={{ fontSize: '0.875rem', padding: '0.25rem 0.5rem' }}
-                          disabled={generatingUpdateLinkFor === d.deck_id}
-                          onClick={() => handleGenerateUpdateLink(d.deck_id)}
-                        >
-                          {generatingUpdateLinkFor === d.deck_id ? '…' : 'Update link'}
-                        </button>
-                      </div>
-                    </td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <>
+          {canEditEvent && editing && (
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '0.75rem' }}>
+              Update deck name, player, rank, and archetype below. Click Save above to save event and all deck changes.
+            </p>
+          )}
+          <div className="table-wrap-outer">
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Deck</th>
+                    <th scope="col">Player</th>
+                    <th scope="col">Rank</th>
+                    <th scope="col">{editing && isEDH ? 'Archetype (commander)' : 'Archetype'}</th>
+                    {canEditEvent && !editing && <th scope="col">Actions</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {decks.map((d) => (
+                    <tr key={d.deck_id}>
+                      {editing ? (
+                        <>
+                          <td>
+                            <input
+                              type="text"
+                              value={getDeckEdit(d).name}
+                              onChange={(e) => setDeckEditField(d.deck_id, 'name', e.target.value, defaultDeckEdit(d))}
+                              placeholder="Deck name"
+                              style={{ width: '100%', minWidth: 120, boxSizing: 'border-box' }}
+                              aria-label={`Deck name for deck ${d.deck_id}`}
+                            />
+                          </td>
+                          <td>
+                            <input
+                              type="text"
+                              value={getDeckEdit(d).player}
+                              onChange={(e) => setDeckEditField(d.deck_id, 'player', e.target.value, defaultDeckEdit(d))}
+                              placeholder="Player"
+                              style={{ width: '100%', minWidth: 100, boxSizing: 'border-box' }}
+                              aria-label={`Player for deck ${d.deck_id}`}
+                            />
+                          </td>
+                          <td>
+                            <input
+                              type="text"
+                              value={getDeckEdit(d).rank}
+                              onChange={(e) => setDeckEditField(d.deck_id, 'rank', e.target.value, defaultDeckEdit(d))}
+                              placeholder="e.g. 1, 2, 3-4"
+                              style={{ width: '100%', minWidth: 70, boxSizing: 'border-box' }}
+                              aria-label={`Rank for deck ${d.deck_id}`}
+                            />
+                          </td>
+                          <td>
+                            {isEDH ? (
+                              <CardSearchInput
+                                id={`bulk-archetype-${d.deck_id}`}
+                                value={getDeckEdit(d).archetype}
+                                onChange={(val) => setDeckEditField(d.deck_id, 'archetype', val, defaultDeckEdit(d))}
+                                placeholder="Search commander..."
+                                aria-label={`Archetype (commander) for deck ${d.deck_id}`}
+                              />
+                            ) : (
+                              <input
+                                type="text"
+                                value={getDeckEdit(d).archetype}
+                                onChange={(e) => setDeckEditField(d.deck_id, 'archetype', e.target.value, defaultDeckEdit(d))}
+                                placeholder="Archetype"
+                                style={{ width: '100%', minWidth: 100, boxSizing: 'border-box' }}
+                                aria-label={`Archetype for deck ${d.deck_id}`}
+                              />
+                            )}
+                          </td>
+                        </>
+                      ) : (
+                        <>
+                          <td>
+                            <Link to={`/decks/${d.deck_id}`} style={{ color: 'var(--accent)' }}>{cellStr(d.name) || 'Unnamed'}</Link>
+                          </td>
+                          <td>{cellStr(d.player)}</td>
+                          <td>{cellStr(d.rank) || '—'}</td>
+                          <td>{cellStr(d.archetype)}</td>
+                          {canEditEvent && (
+                            <td>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
+                                <button
+                                  type="button"
+                                  className="btn"
+                                  style={{ fontSize: '0.875rem', padding: '0.25rem 0.5rem' }}
+                                  onClick={() => openUpdateDeck(d)}
+                                >
+                                  Update
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn"
+                                  style={{ fontSize: '0.875rem', padding: '0.25rem 0.5rem', color: 'var(--danger, #c00)' }}
+                                  disabled={deletingDeckId === d.deck_id}
+                                  onClick={() => handleDeleteDeckClick(d.deck_id)}
+                                >
+                                  {deletingDeckId === d.deck_id ? '…' : 'Delete deck'}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn"
+                                  style={{ fontSize: '0.875rem', padding: '0.25rem 0.5rem' }}
+                                  disabled={uploadingDeck && uploadDeckForDeckId === d.deck_id}
+                                  onClick={() => openUploadDeckModal(d.deck_id)}
+                                >
+                                  {uploadingDeck && uploadDeckForDeckId === d.deck_id ? 'Uploading…' : 'Upload deck'}
+                                </button>
+                                {showUploadLinksSection && (
+                                  <button
+                                    type="button"
+                                    className="btn"
+                                    style={{ fontSize: '0.875rem', padding: '0.25rem 0.5rem' }}
+                                    disabled={generatingUpdateLinkFor === d.deck_id}
+                                    onClick={() => handleGenerateUpdateLink(d.deck_id)}
+                                  >
+                                    {generatingUpdateLinkFor === d.deck_id ? '…' : 'Update link'}
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          )}
+                        </>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
+        </>
       )}
 
-      {user === 'admin' && editingDeckId != null && (
+      {canEditEvent && editingDeckId != null && (
         <div
           role="dialog"
           aria-modal="true"
@@ -564,6 +810,158 @@ export default function EventDetail() {
           </div>
         </div>
       )}
-    </div>
+
+      {canEditEvent && uploadDeckForDeckId != null && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="upload-deck-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '1rem',
+          }}
+          onClick={(e) => e.target === e.currentTarget && closeUploadDeckModal()}
+        >
+          <div
+            className="card"
+            style={{
+              maxWidth: 520,
+              width: '100%',
+              maxHeight: '90vh',
+              overflow: 'auto',
+              margin: '1.5rem',
+              padding: '1.5rem',
+              borderRadius: 12,
+              background: 'var(--bg-card)',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="upload-deck-title" style={{ marginTop: 0, marginBottom: '1rem' }}>
+              Upload deck {decks.find((x) => x.deck_id === uploadDeckForDeckId) ? `— ${cellStr(decks.find((x) => x.deck_id === uploadDeckForDeckId)?.name) || 'Unnamed'}` : ''}
+            </h2>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '0.75rem' }}>
+              Paste a deck list in Moxfield style (section headers: Commander, Mainboard, Sideboard; lines like &quot;4 Lightning Bolt&quot;).
+            </p>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginBottom: '1rem' }}>
+              <span className="label">Deck list</span>
+              <textarea
+                value={uploadDeckListText}
+                onChange={(e) => setUploadDeckListText(e.target.value)}
+                placeholder={`Mainboard\n4 Lightning Bolt\n2 Counterspell\n\nSideboard\n2 Flusterstorm`}
+                rows={14}
+                style={{ width: '100%', boxSizing: 'border-box', fontFamily: 'inherit', fontSize: '0.9rem', resize: 'vertical' }}
+                aria-label="Deck list"
+              />
+            </label>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button type="button" className="btn btn-primary" onClick={handleUploadDeckSubmit} disabled={uploadingDeck}>
+                {uploadingDeck ? 'Uploading…' : 'Upload'}
+              </button>
+              <button type="button" className="btn" onClick={closeUploadDeckModal} disabled={uploadingDeck}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmDeleteEvent && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="confirm-delete-event-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '1rem',
+          }}
+          onClick={(e) => e.target === e.currentTarget && setConfirmDeleteEvent(false)}
+        >
+          <div
+            className="card"
+            style={{
+              maxWidth: 400,
+              width: '100%',
+              padding: '1.5rem',
+              borderRadius: 12,
+              background: 'var(--bg-card)',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="confirm-delete-event-title" style={{ marginTop: 0, marginBottom: '0.75rem' }}>Delete event?</h2>
+            <p style={{ color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
+              Are you sure you want to delete this event and all its decks? This cannot be undone.
+            </p>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button type="button" className="btn" style={{ color: 'var(--danger, #c00)' }} onClick={handleDeleteConfirm} disabled={deleting}>
+                {deleting ? 'Deleting…' : 'Delete event'}
+              </button>
+              <button type="button" className="btn" onClick={() => setConfirmDeleteEvent(false)} disabled={deleting}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmDeleteDeckId != null && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="confirm-delete-deck-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '1rem',
+          }}
+          onClick={(e) => e.target === e.currentTarget && setConfirmDeleteDeckId(null)}
+        >
+          <div
+            className="card"
+            style={{
+              maxWidth: 400,
+              width: '100%',
+              padding: '1.5rem',
+              borderRadius: 12,
+              background: 'var(--bg-card)',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="confirm-delete-deck-title" style={{ marginTop: 0, marginBottom: '0.75rem' }}>Delete deck?</h2>
+            <p style={{ color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
+              Are you sure you want to delete this deck? This cannot be undone.
+            </p>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button type="button" className="btn" style={{ color: 'var(--danger, #c00)' }} onClick={handleDeleteDeckConfirm} disabled={deletingDeckId !== null}>
+                {deletingDeckId === confirmDeleteDeckId ? 'Deleting…' : 'Delete deck'}
+              </button>
+              <button type="button" className="btn" onClick={() => setConfirmDeleteDeckId(null)} disabled={deletingDeckId !== null}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      </div>
+    </>
   )
 }

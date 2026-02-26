@@ -178,6 +178,50 @@ def require_admin(authorization: str | None = Header(None, alias="Authorization"
     return "admin"
 
 
+def require_admin_or_event_edit(
+    event_id: str,
+    authorization: str | None = Header(None, alias="Authorization"),
+    x_event_edit_token: str | None = Header(None, alias="X-Event-Edit-Token"),
+):
+    """Dependency: require admin Bearer token OR valid one-time event-edit token for this event."""
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization[7:].strip()
+        if _verify_admin_token(token):
+            return "admin"
+    if x_event_edit_token and _db and _db.is_database_available():
+        with _db.session_scope() as session:
+            row = _db.get_upload_link(session, x_event_edit_token.strip())
+            if row and getattr(row, "link_type", None) == _db.LINK_TYPE_EVENT_EDIT and row.event_id == _db._event_id_str(event_id):
+                if row.expires_at is not None and row.expires_at < datetime.utcnow():
+                    raise HTTPException(status_code=401, detail="Event edit link expired")
+                return "event_edit"
+    raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+
+def require_admin_or_event_edit_deck(
+    deck_id: int,
+    authorization: str | None = Header(None, alias="Authorization"),
+    x_event_edit_token: str | None = Header(None, alias="X-Event-Edit-Token"),
+):
+    """Dependency: require admin OR valid event-edit token for the event that owns this deck."""
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization[7:].strip()
+        if _verify_admin_token(token):
+            return "admin"
+    deck = _get_deck_by_id(deck_id)
+    if not deck:
+        raise HTTPException(status_code=404, detail="Deck not found")
+    event_id = str(deck.get("event_id", ""))
+    if x_event_edit_token and _db and _db.is_database_available():
+        with _db.session_scope() as session:
+            row = _db.get_upload_link(session, x_event_edit_token.strip())
+            if row and getattr(row, "link_type", None) == _db.LINK_TYPE_EVENT_EDIT and row.event_id == _db._event_id_str(event_id):
+                if row.expires_at is not None and row.expires_at < datetime.utcnow():
+                    raise HTTPException(status_code=401, detail="Event edit link expired")
+                return "event_edit"
+    raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+
 def require_database():
     """Dependency: require database available or raise 503."""
     if not _database_available():
@@ -893,6 +937,8 @@ class CreateEventBody(BaseModel):
 @app.post("/api/events", dependencies=[Depends(require_admin), Depends(require_database)])
 def create_event(body: CreateEventBody):
     """Create a new event (admin-only). Manual events get IDs in a separate namespace from MTGTop8."""
+    if not body.player_count or body.player_count < 1:
+        raise HTTPException(status_code=400, detail="Number of players is required and must be at least 1")
     try:
         with _db.session_scope() as session:
             row = _db.create_event(
@@ -902,7 +948,7 @@ def create_event(body: CreateEventBody):
                 format_id=body.format_id.strip() or "EDH",
                 origin=_db.ORIGIN_MANUAL,
                 event_id=body.event_id,
-                player_count=body.player_count or 0,
+                player_count=body.player_count,
                 store=(body.store or "").strip(),
                 location=(body.location or "").strip(),
             )
@@ -933,7 +979,7 @@ def get_event_by_id(event_id: str):
     raise HTTPException(status_code=404, detail="Event not found")
 
 
-@app.put("/api/events/{event_id}", dependencies=[Depends(require_admin), Depends(require_database)])
+@app.put("/api/events/{event_id}", dependencies=[Depends(require_admin_or_event_edit), Depends(require_database)])
 def update_event_endpoint(
     event_id: str,
     event_name: str | None = Query(None),
@@ -1029,13 +1075,21 @@ async def upload_decks_to_event(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/events/{event_id}/decks/add", dependencies=[Depends(require_admin), Depends(require_database)])
+@app.post("/api/events/{event_id}/decks/add", dependencies=[Depends(require_admin_or_event_edit), Depends(require_database)])
 def add_blank_deck_to_event(event_id: str):
-    """Add one blank deck to an event (admin-only)."""
+    """Add one blank deck to an event (admin-only). Fails if event already has player_count decks."""
     with _db.session_scope() as session:
         ev = _db.get_event(session, event_id)
         if not ev:
             raise HTTPException(status_code=404, detail="Event not found")
+        player_count = getattr(ev, "player_count", None)
+        if player_count is not None and player_count > 0:
+            existing = session.query(_db.DeckRow).filter(_db.DeckRow.event_id == _db._event_id_str(event_id)).count()
+            if existing >= player_count:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Event allows at most {player_count} deck(s). It already has {existing}.",
+                )
         event_name = event_display_name(ev.name, ev.store or "", ev.location or "")
         deck_id = _db.next_manual_deck_id(session)
         blank = {
@@ -1063,6 +1117,7 @@ class CreateUploadLinksBody(BaseModel):
     count: int = 1
     expires_in_days: int | None = None
     deck_id: int | None = None  # when set, create one link for updating this deck (one-time)
+    type: str | None = None  # "event_edit" = one-time link to edit event + decks (no delete event, no new links)
 
 
 class SubmitDeckBody(BaseModel):
@@ -1095,7 +1150,18 @@ def create_upload_links(event_id: str, request: Request, body: CreateUploadLinks
             raise HTTPException(status_code=404, detail="Event not found")
         base_url = _upload_link_base_url(request)
         links = []
-        if body.deck_id is not None:
+        if body.type == "event_edit":
+            # One-time link to edit event and decks (no delete event, no new links)
+            token = secrets.token_urlsafe(32)
+            _db.create_upload_link(
+                session, token, event_id, expires_at=expires_at, link_type=_db.LINK_TYPE_EVENT_EDIT
+            )
+            links.append({
+                "token": token,
+                "url": f"{base_url}/events/{event_id}?token={token}",
+                "expires_at": expires_at.isoformat() if expires_at else None,
+            })
+        elif body.deck_id is not None:
             # One-time link to update an existing deck
             deck_row = session.query(_db.DeckRow).filter(
                 _db.DeckRow.deck_id == body.deck_id,
@@ -1131,6 +1197,8 @@ def get_upload_link_info(token: str):
         row = _db.get_upload_link(session, token)
         if not row:
             raise HTTPException(status_code=404, detail="Link not found or invalid")
+        if getattr(row, "link_type", "deck_upload") == _db.LINK_TYPE_EVENT_EDIT:
+            raise HTTPException(status_code=404, detail="Use event edit link on the event page")
         if row.used_at is not None:
             raise HTTPException(status_code=404, detail="Link already used")
         if row.expires_at is not None and row.expires_at < datetime.utcnow():
@@ -1163,6 +1231,26 @@ def get_upload_link_info(token: str):
                 out["deck_id"] = row.deck_id
                 out["deck"] = None
         return out
+
+
+@app.get("/api/event-edit/{token}", dependencies=[Depends(require_database)])
+def get_event_edit_link_info(token: str):
+    """Validate a one-time event-edit link, mark it as used, and return event_id. Public (no auth)."""
+    with _db.session_scope() as session:
+        row = _db.get_upload_link(session, token)
+        if not row:
+            raise HTTPException(status_code=404, detail="Link not found or invalid")
+        if getattr(row, "link_type", "deck_upload") != _db.LINK_TYPE_EVENT_EDIT:
+            raise HTTPException(status_code=404, detail="Not an event edit link")
+        if row.used_at is not None:
+            raise HTTPException(status_code=404, detail="Link already used")
+        if row.expires_at is not None and row.expires_at < datetime.utcnow():
+            raise HTTPException(status_code=404, detail="Link expired")
+        ev = _db.get_event(session, row.event_id)
+        if not ev:
+            raise HTTPException(status_code=404, detail="Event not found")
+        _db.mark_upload_link_used(session, token)
+        return {"event_id": row.event_id}
 
 
 def _validate_deck_payload(body: SubmitDeckBody) -> None:
@@ -1228,6 +1316,8 @@ def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
         row = _db.get_upload_link(session, token)
         if not row:
             raise HTTPException(status_code=400, detail="Link not found or invalid")
+        if getattr(row, "link_type", "deck_upload") == _db.LINK_TYPE_EVENT_EDIT:
+            raise HTTPException(status_code=400, detail="Use event edit link on the event page")
         if row.used_at is not None:
             raise HTTPException(status_code=400, detail="Link already used")
         if row.expires_at is not None and row.expires_at < datetime.utcnow():
@@ -1293,7 +1383,7 @@ class UpdateDeckBody(BaseModel):
     sideboard: list[DeckCardUpdate] | None = None
 
 
-@app.put("/api/decks/{deck_id}", dependencies=[Depends(require_admin), Depends(require_database)])
+@app.put("/api/decks/{deck_id}", dependencies=[Depends(require_admin_or_event_edit_deck), Depends(require_database)])
 def update_deck_endpoint(deck_id: int, body: UpdateDeckBody):
     """Update deck metadata (admin-only)."""
     deck_dict = _get_deck_by_id(deck_id)
@@ -1337,7 +1427,7 @@ def update_deck_endpoint(deck_id: int, body: UpdateDeckBody):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/decks/{deck_id}", dependencies=[Depends(require_admin), Depends(require_database)])
+@app.delete("/api/decks/{deck_id}", dependencies=[Depends(require_admin_or_event_edit_deck), Depends(require_database)])
 def delete_deck_endpoint(deck_id: int):
     """Delete a single deck (admin-only)."""
     try:
