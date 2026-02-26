@@ -95,8 +95,8 @@ export default function Dashboard() {
     )
   }
 
-  const summary = metagame?.summary ?? { total_decks: 0, unique_commanders: 0, unique_archetypes: 0 }
-  const topCommanders = metagame?.commander_distribution?.slice(0, 5) ?? []
+  const summary = metagame?.summary ?? { total_decks: 0, unique_players: 0, unique_archetypes: 0 }
+  const topPlayers = metagame?.top_players?.slice(0, 5) ?? []
   const topArchetypes = metagame?.archetype_distribution?.slice(0, 5) ?? []
   const topCards = metagame?.top_cards_main?.slice(0, 5) ?? []
   // Parse DD/MM/YY (or DD/MM/YYYY) to YYYYMMDD for chronological sort; invalid/empty => 0 (sort last)
@@ -124,7 +124,7 @@ export default function Dashboard() {
           No deck data yet
         </p>
         <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
-          Load or scrape data from MTGTop8 to see the metagame analysis, top commanders, and more.
+          Load or scrape data from MTGTop8 to see the metagame analysis, top players, and more.
         </p>
         <Link to="/scrape" className="btn" style={{ textDecoration: 'none' }}>
           Load or scrape data
@@ -150,8 +150,8 @@ export default function Dashboard() {
             <div className="label">Events</div>
           </Link>
           <div className="stat-card">
-            <div className="value">{summary.unique_commanders}</div>
-            <div className="label">Unique Commanders</div>
+            <div className="value">{summary.unique_players}</div>
+            <div className="label">Unique Players</div>
           </div>
           <Link to="/archetypes" className="stat-card" style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}>
             <div className="value">{summary.unique_archetypes}</div>
@@ -185,17 +185,17 @@ export default function Dashboard() {
 
       <div className="dashboard-charts-grid">
         <div className="chart-container">
-          <h3 style={{ margin: '0 0 1rem' }}>Top Commanders</h3>
-          {topCommanders.length ? (
+          <h3 style={{ margin: '0 0 1rem' }}>Top Players</h3>
+          {topPlayers.length ? (
             <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-              {topCommanders.map((c, i) => (
-                <li key={c.commander} style={{ padding: '0.5rem 0', borderBottom: '1px solid var(--border)', display: 'flex', gap: '0.5rem', alignItems: 'baseline' }}>
+              {topPlayers.map((p, i) => (
+                <li key={p.player} style={{ padding: '0.5rem 0', borderBottom: '1px solid var(--border)', display: 'flex', gap: '0.5rem', alignItems: 'baseline' }}>
                   <span style={{ color: 'var(--text-muted)', minWidth: 18 }}>{i + 1}.</span>
-                  <Link to={`/decks?deck_name=${encodeURIComponent(c.commander)}`} style={{ color: 'var(--accent)' }}>
-                    {c.commander}
+                  <Link to={`/players/${encodeURIComponent(p.player)}`} style={{ color: 'var(--accent)' }}>
+                    {p.player}
                   </Link>
                   <span style={{ color: 'var(--text-muted)', marginLeft: 'auto', fontSize: '0.875rem', whiteSpace: 'nowrap' }}>
-                    {c.count} decks ({c.pct}%)
+                    {p.wins} win{p.wins !== 1 ? 's' : ''}
                   </span>
                 </li>
               ))}

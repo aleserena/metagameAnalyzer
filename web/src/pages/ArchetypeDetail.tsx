@@ -19,6 +19,7 @@ import type { ArchetypeDetail as ArchetypeDetailType, Deck } from '../types'
 import CardHover from '../components/CardHover'
 import ManaSymbols from '../components/ManaSymbols'
 import Skeleton from '../components/Skeleton'
+import { MTG_COLOR_FILL } from '../constants'
 import { reportError } from '../utils'
 
 const TYPE_ORDER = ['Land', 'Creature', 'Instant', 'Sorcery', 'Enchantment', 'Artifact', 'Planeswalker']
@@ -50,6 +51,7 @@ const CMC_OPTIONS = [0, 1, 2, 3, 4, 5]
 const TYPE_OPTIONS = [...TYPE_ORDER, 'Other']
 const FILTER_SYMBOL_SIZE = 20
 const TOP_CARDS_PER_PAGE = 50
+const WUBRG_ORDER = ['W', 'U', 'B', 'R', 'G'] as const
 
 export default function ArchetypeDetail() {
   const { archetypeName } = useParams<{ archetypeName: string }>()
@@ -204,14 +206,22 @@ export default function ArchetypeDetail() {
     setTopCardsPage(0)
   }
 
+  const archetypeManaCost = (() => {
+    const dist = detail?.average_analysis?.color_distribution
+    if (!dist) return ''
+    const colors = WUBRG_ORDER.filter((c) => (dist[c] ?? 0) > 0)
+    return colors.length ? `{${colors.join('}{')}}` : ''
+  })()
+
   return (
     <div style={{ opacity: loading ? 0.6 : 1, transition: 'opacity 0.2s' }}>
       <button type="button" className="btn" style={{ marginBottom: '1rem' }} onClick={() => navigate(-1)}>
         Back
       </button>
       <div style={{ marginBottom: '1.5rem' }}>
-        <h1 className="page-title" style={{ margin: 0 }}>
+        <h1 className="page-title" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
           {detail.archetype}
+          {archetypeManaCost ? <ManaSymbols manaCost={archetypeManaCost} size={28} /> : null}
         </h1>
         <p style={{ margin: '0.25rem 0 0', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
           Average of {detail.deck_count} deck{detail.deck_count !== 1 ? 's' : ''}
@@ -283,12 +293,12 @@ export default function ArchetypeDetail() {
               <PieChart margin={{ top: 8, right: 8, bottom: 58, left: 8 }}>
                 <Pie
                   data={[
-                    { name: 'White', value: a.color_distribution.W || 0, color: '#fff9e6' },
-                    { name: 'Blue', value: a.color_distribution.U || 0, color: '#0e4d92' },
-                    { name: 'Black', value: a.color_distribution.B || 0, color: '#8b8b8b' },
-                    { name: 'Red', value: a.color_distribution.R || 0, color: '#c41e3a' },
-                    { name: 'Green', value: a.color_distribution.G || 0, color: '#007a33' },
-                    { name: 'Colorless', value: a.color_distribution.C || 0, color: '#b0b0b0' },
+                    { name: 'White', value: a.color_distribution.W || 0, color: MTG_COLOR_FILL.White },
+                    { name: 'Blue', value: a.color_distribution.U || 0, color: MTG_COLOR_FILL.Blue },
+                    { name: 'Black', value: a.color_distribution.B || 0, color: MTG_COLOR_FILL.Black },
+                    { name: 'Red', value: a.color_distribution.R || 0, color: MTG_COLOR_FILL.Red },
+                    { name: 'Green', value: a.color_distribution.G || 0, color: MTG_COLOR_FILL.Green },
+                    { name: 'Colorless', value: a.color_distribution.C || 0, color: MTG_COLOR_FILL.Colorless },
                   ].filter((d) => d.value > 0)}
                   dataKey="value"
                   nameKey="name"
@@ -297,12 +307,12 @@ export default function ArchetypeDetail() {
                   outerRadius={58}
                 >
                   {[
-                    { name: 'White', value: a.color_distribution.W || 0, color: '#fff9e6' },
-                    { name: 'Blue', value: a.color_distribution.U || 0, color: '#0e4d92' },
-                    { name: 'Black', value: a.color_distribution.B || 0, color: '#8b8b8b' },
-                    { name: 'Red', value: a.color_distribution.R || 0, color: '#c41e3a' },
-                    { name: 'Green', value: a.color_distribution.G || 0, color: '#007a33' },
-                    { name: 'Colorless', value: a.color_distribution.C || 0, color: '#b0b0b0' },
+                    { name: 'White', value: a.color_distribution.W || 0, color: MTG_COLOR_FILL.White },
+                    { name: 'Blue', value: a.color_distribution.U || 0, color: MTG_COLOR_FILL.Blue },
+                    { name: 'Black', value: a.color_distribution.B || 0, color: MTG_COLOR_FILL.Black },
+                    { name: 'Red', value: a.color_distribution.R || 0, color: MTG_COLOR_FILL.Red },
+                    { name: 'Green', value: a.color_distribution.G || 0, color: MTG_COLOR_FILL.Green },
+                    { name: 'Colorless', value: a.color_distribution.C || 0, color: MTG_COLOR_FILL.Colorless },
                   ]
                     .filter((d) => d.value > 0)
                     .map((d) => (

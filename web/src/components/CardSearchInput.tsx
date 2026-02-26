@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { getCardSearch } from '../api'
 
 const DEBOUNCE_MS = 300
@@ -29,8 +30,22 @@ export default function CardSearchInput({
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLUListElement>(null)
+  const [dropdownPosition, setDropdownPosition] = useState<{ top: number; left: number; width: number } | null>(null)
 
   const displayValue = open ? query : value
+
+  useLayoutEffect(() => {
+    if (!open || !containerRef.current) {
+      setDropdownPosition(null)
+      return
+    }
+    const rect = containerRef.current.getBoundingClientRect()
+    setDropdownPosition({
+      top: rect.bottom + 2,
+      left: rect.left,
+      width: rect.width,
+    })
+  }, [open])
 
   const fetchOptions = useCallback(async (q: string) => {
     if (q.length < MIN_QUERY_LEN) {
@@ -60,7 +75,10 @@ export default function CardSearchInput({
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false)
+      const target = e.target as Node
+      const inContainer = containerRef.current?.contains(target)
+      const inList = listRef.current?.contains(target)
+      if (!inContainer && !inList) setOpen(false)
     }
     if (open) document.addEventListener('click', handler)
     return () => document.removeEventListener('click', handler)
@@ -172,64 +190,66 @@ export default function CardSearchInput({
           ×
         </button>
       )}
-      {open && (
-        <ul
-          id={`${id ?? 'card-search'}-listbox`}
-          ref={listRef}
-          role="listbox"
-          style={{
-            position: 'absolute',
-            left: 0,
-            right: 0,
-            top: '100%',
-            margin: 0,
-            marginTop: 2,
-            padding: 0,
-            listStyle: 'none',
-            maxHeight: 240,
-            overflowY: 'auto',
-            background: 'var(--bg)',
-            border: '1px solid var(--border)',
-            borderRadius: 6,
-            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-            zIndex: 1000,
-          }}
-        >
-          {loading && (
-            <li style={{ padding: '0.5rem 0.75rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-              Searching…
-            </li>
-          )}
-          {showMinChars && !loading && (
-            <li style={{ padding: '0.5rem 0.75rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-              Type at least {MIN_QUERY_LEN} characters
-            </li>
-          )}
-          {showEmpty && !loading && (
-            <li style={{ padding: '0.5rem 0.75rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-              No cards found
-            </li>
-          )}
-          {!loading &&
-            options.map((name, i) => (
-              <li
-                key={name}
-                id={`${id ?? 'card-search'}-opt-${i}`}
-                role="option"
-                aria-selected={i === highlightedIndex}
-                onMouseEnter={() => setHighlightedIndex(i)}
-                onClick={() => select(name)}
-                style={{
-                  padding: '0.4rem 0.75rem',
-                  cursor: 'pointer',
-                  background: i === highlightedIndex ? 'var(--accent-subtle, rgba(0,120,200,0.15))' : 'transparent',
-                }}
-              >
-                {name}
+      {open &&
+        dropdownPosition &&
+        createPortal(
+          <ul
+            id={`${id ?? 'card-search'}-listbox`}
+            ref={listRef}
+            role="listbox"
+            style={{
+              position: 'fixed',
+              top: dropdownPosition.top,
+              left: dropdownPosition.left,
+              width: dropdownPosition.width,
+              margin: 0,
+              padding: 0,
+              listStyle: 'none',
+              maxHeight: 240,
+              overflowY: 'auto',
+              background: 'var(--bg)',
+              border: '1px solid var(--border)',
+              borderRadius: 6,
+              boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+              zIndex: 1100,
+            }}
+          >
+            {loading && (
+              <li style={{ padding: '0.5rem 0.75rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                Searching…
               </li>
-            ))}
-        </ul>
-      )}
+            )}
+            {showMinChars && !loading && (
+              <li style={{ padding: '0.5rem 0.75rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                Type at least {MIN_QUERY_LEN} characters
+              </li>
+            )}
+            {showEmpty && !loading && (
+              <li style={{ padding: '0.5rem 0.75rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                No cards found
+              </li>
+            )}
+            {!loading &&
+              options.map((name, i) => (
+                <li
+                  key={name}
+                  id={`${id ?? 'card-search'}-opt-${i}`}
+                  role="option"
+                  aria-selected={i === highlightedIndex}
+                  onMouseEnter={() => setHighlightedIndex(i)}
+                  onClick={() => select(name)}
+                  style={{
+                    padding: '0.4rem 0.75rem',
+                    cursor: 'pointer',
+                    background: i === highlightedIndex ? 'var(--accent-subtle, rgba(0,120,200,0.15))' : 'transparent',
+                  }}
+                >
+                  {name}
+                </li>
+              ))}
+          </ul>,
+          document.body
+        )}
     </div>
   )
 }

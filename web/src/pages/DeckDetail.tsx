@@ -11,6 +11,7 @@ import CardGrid from '../components/CardGrid'
 import CardHover from '../components/CardHover'
 import CardSearchInput from '../components/CardSearchInput'
 import ManaSymbols from '../components/ManaSymbols'
+import { MTG_COLOR_FILL } from '../constants'
 import { dateMinusDays, firstDayOfYear, pluralizeType, reportError } from '../utils'
 
 type ViewMode = 'list' | 'scryfall'
@@ -18,6 +19,19 @@ type GroupMode = 'type' | 'cmc' | 'color' | 'none'
 type SortMode = 'name' | 'cmc'
 
 const WUBRG_ORDER = ['W', 'U', 'B', 'R', 'G'] as const
+const SAMPLE_HAND_SIZE = 7
+
+/** Draw up to `count` random cards from mainboard (each card weighted by qty). */
+function drawSampleHand(mainboard: { qty: number; card: string }[], count: number): string[] {
+  const pool = mainboard.flatMap(({ qty, card }) => Array(qty).fill(card) as string[])
+  if (pool.length === 0) return []
+  const n = Math.min(count, pool.length)
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j]!, pool[i]!]
+  }
+  return pool.slice(0, n)
+}
 
 /** EDH archetype: single commander = name; 2+ commanders = "Partner {Colors}" (WUBRG). */
 function getEDHArchetype(
@@ -307,7 +321,7 @@ function DeckEditSection({
             </div>
             <div className="form-group" style={{ marginBottom: 0, width: 80 }}>
               <label htmlFor="deck-edit-rank">Rank</label>
-              <input id="deck-edit-rank" type="text" value={rank} onChange={(e) => setRank(e.target.value)} placeholder="1, 2, 3-4, …" />
+              <input id="deck-edit-rank" type="text" value={rank} onChange={(e) => setRank(e.target.value)} placeholder="1, 2, 3-4, 5-8, 9-16, 17-32, 33-64, 65-128, …" />
             </div>
             {isEDH && (
               <>
@@ -527,7 +541,59 @@ export default function DeckDetail() {
   const [similarDecksSameEventOnly, setSimilarDecksSameEventOnly] = useState(true)
   const [compareSelectedIds, setCompareSelectedIds] = useState<Set<number>>(new Set())
   const [deleting, setDeleting] = useState(false)
+  const [commanderLookup, setCommanderLookup] = useState<Record<string, CardLookupResult> | null>(null)
+  const [sampleHand, setSampleHand] = useState<string[]>([])
+  const [handLookup, setHandLookup] = useState<Record<string, CardLookupResult>>({})
   const MAX_COMPARE = 4
+
+  useEffect(() => {
+    const main = deck?.mainboard ?? []
+    setSampleHand(drawSampleHand(main, SAMPLE_HAND_SIZE))
+  }, [deck?.mainboard])
+
+  useEffect(() => {
+    if (sampleHand.length === 0) {
+      setHandLookup({})
+      return
+    }
+    getCardLookup([...new Set(sampleHand)])
+      .then(setHandLookup)
+      .catch(() => setHandLookup({}))
+  }, [sampleHand.join(',')])
+
+  const drawNewHand = () => {
+    const main = deck?.mainboard ?? []
+    setSampleHand(drawSampleHand(main, SAMPLE_HAND_SIZE))
+  }
+
+  useEffect(() => {
+    const commanders = deck?.commanders?.filter(Boolean) ?? []
+    if (commanders.length === 0) {
+      setCommanderLookup(null)
+      return
+    }
+    getCardLookup(commanders)
+      .then(setCommanderLookup)
+      .catch(() => setCommanderLookup({}))
+  }, [deck?.commanders])
+
+  const deckManaCost = useMemo(() => {
+    const colors: string[] = []
+    if (commanderLookup && deck?.commanders?.length) {
+      const set = new Set<string>()
+      for (const name of deck.commanders) {
+        const entry = commanderLookup[name]
+        if (entry?.error) continue
+        for (const c of entry?.color_identity ?? entry?.colors ?? []) {
+          if ((WUBRG_ORDER as readonly string[]).includes(c)) set.add(c)
+        }
+      }
+      colors.push(...WUBRG_ORDER.filter((c) => set.has(c)))
+    } else if (analysis?.color_distribution) {
+      colors.push(...WUBRG_ORDER.filter((c) => (analysis.color_distribution[c] ?? 0) > 0))
+    }
+    return colors.length ? `{${colors.join('}{')}}` : ''
+  }, [deck?.commanders, commanderLookup, analysis?.color_distribution])
 
   // Exclude 100% overlap (duplicate) decks from the similar list
   const displayedSimilarDecks = useMemo(
@@ -644,9 +710,12 @@ export default function DeckDetail() {
         Back
       </button>
 
-      <h1 className="page-title">{deck.name}</h1>
+      <h1 className="page-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+        {deck.name}
+        {deckManaCost ? <ManaSymbols manaCost={deckManaCost} size={28} /> : null}
+      </h1>
 
-      {deck.duplicate_info && (
+      {deck.duplicate_info && deck.mainboard && deck.mainboard.length > 0 && (
         <div
           style={{
             marginBottom: '1rem',
@@ -810,12 +879,12 @@ export default function DeckDetail() {
                 <PieChart margin={{ top: 8, right: 8, bottom: 58, left: 8 }}>
                   <Pie
                     data={[
-                      { name: 'White', value: analysis.color_distribution.W || 0, color: '#fff9e6' },
-                      { name: 'Blue', value: analysis.color_distribution.U || 0, color: '#0e4d92' },
-                      { name: 'Black', value: analysis.color_distribution.B || 0, color: '#8b8b8b' },
-                      { name: 'Red', value: analysis.color_distribution.R || 0, color: '#c41e3a' },
-                      { name: 'Green', value: analysis.color_distribution.G || 0, color: '#007a33' },
-                      { name: 'Colorless', value: analysis.color_distribution.C || 0, color: '#b0b0b0' },
+                      { name: 'White', value: analysis.color_distribution.W || 0, color: MTG_COLOR_FILL.White },
+                      { name: 'Blue', value: analysis.color_distribution.U || 0, color: MTG_COLOR_FILL.Blue },
+                      { name: 'Black', value: analysis.color_distribution.B || 0, color: MTG_COLOR_FILL.Black },
+                      { name: 'Red', value: analysis.color_distribution.R || 0, color: MTG_COLOR_FILL.Red },
+                      { name: 'Green', value: analysis.color_distribution.G || 0, color: MTG_COLOR_FILL.Green },
+                      { name: 'Colorless', value: analysis.color_distribution.C || 0, color: MTG_COLOR_FILL.Colorless },
                     ].filter((d) => d.value > 0)}
                     dataKey="value"
                     nameKey="name"
@@ -824,12 +893,12 @@ export default function DeckDetail() {
                     outerRadius={58}
                   >
                     {[
-                      { name: 'White', value: analysis.color_distribution.W || 0, color: '#fff9e6' },
-                      { name: 'Blue', value: analysis.color_distribution.U || 0, color: '#0e4d92' },
-                      { name: 'Black', value: analysis.color_distribution.B || 0, color: '#8b8b8b' },
-                      { name: 'Red', value: analysis.color_distribution.R || 0, color: '#c41e3a' },
-                      { name: 'Green', value: analysis.color_distribution.G || 0, color: '#007a33' },
-                      { name: 'Colorless', value: analysis.color_distribution.C || 0, color: '#b0b0b0' },
+                      { name: 'White', value: analysis.color_distribution.W || 0, color: MTG_COLOR_FILL.White },
+                      { name: 'Blue', value: analysis.color_distribution.U || 0, color: MTG_COLOR_FILL.Blue },
+                      { name: 'Black', value: analysis.color_distribution.B || 0, color: MTG_COLOR_FILL.Black },
+                      { name: 'Red', value: analysis.color_distribution.R || 0, color: MTG_COLOR_FILL.Red },
+                      { name: 'Green', value: analysis.color_distribution.G || 0, color: MTG_COLOR_FILL.Green },
+                      { name: 'Colorless', value: analysis.color_distribution.C || 0, color: MTG_COLOR_FILL.Colorless },
                     ]
                       .filter((d) => d.value > 0)
                       .map((d) => (
@@ -1168,6 +1237,71 @@ export default function DeckDetail() {
             ) : null}
           </div>
         </>
+      )}
+
+      {deck.mainboard && deck.mainboard.length > 0 && (
+        <div className="chart-container" style={{ marginBottom: '1.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+            <h3 style={{ margin: 0 }}>Sample hand</h3>
+            <button type="button" className="btn" onClick={drawNewHand}>
+              New hand
+            </button>
+          </div>
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: '0.5rem',
+              alignItems: 'flex-start',
+            }}
+          >
+            {sampleHand.map((cardName, i) => {
+              const data = handLookup[cardName]
+              const img = data?.error ? null : (data?.image_uris?.normal ?? data?.image_uris?.small)
+              return (
+                <Link
+                  key={`${cardName}-${i}`}
+                  to={`/decks?card=${encodeURIComponent(cardName)}`}
+                  style={{
+                    display: 'block',
+                    width: 140,
+                    flexShrink: 0,
+                    borderRadius: 4,
+                    overflow: 'hidden',
+                    background: 'var(--bg-card)',
+                    border: '1px solid var(--border)',
+                    textDecoration: 'none',
+                    color: 'inherit',
+                  }}
+                  title={cardName}
+                >
+                  {img ? (
+                    <img
+                      src={img}
+                      alt={cardName}
+                      style={{ width: '100%', height: 'auto', display: 'block', verticalAlign: 'middle' }}
+                    />
+                  ) : (
+                    <div
+                      style={{
+                        aspectRatio: '223/311',
+                        padding: '0.5rem',
+                        fontSize: '0.75rem',
+                        color: 'var(--text-muted)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        textAlign: 'center',
+                      }}
+                    >
+                      {cardName}
+                    </div>
+                  )}
+                </Link>
+              )
+            })}
+          </div>
+        </div>
       )}
 
       {deck && (
