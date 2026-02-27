@@ -13,14 +13,15 @@ import {
   Cell,
   Legend,
 } from 'recharts'
-import { getMetagame, getDateRange, getFormatInfo, getEvents, getCardLookup } from '../api'
+import { getMetagame, getFormatInfo, getCardLookup } from '../api'
 import type { CardLookupResult } from '../api'
 import CardHover from '../components/CardHover'
 import EventSelector from '../components/EventSelector'
 import ManaSymbols from '../components/ManaSymbols'
 import Skeleton from '../components/Skeleton'
 import { reportError } from '../utils'
-import type { MetagameReport, Event } from '../types'
+import type { MetagameReport } from '../types'
+import { useEventMetadata } from '../hooks/useEventMetadata'
 import { MTG_COLOR_FILL } from '../constants'
 import { PIE_TOOLTIP_STYLE, PieChartTooltipContent } from '../components/PieChartTooltip'
 
@@ -77,13 +78,11 @@ export default function Metagame() {
   const [topCardsPage, setTopCardsPage] = useState(0)
   const [cardMeta, setCardMeta] = useState<Record<string, CardLookupResult>>({})
   const [loadingCardMeta, setLoadingCardMeta] = useState(false)
+  const { events, maxDate, lastEventDate, error: eventMetadataError } = useEventMetadata()
   const [filterColor, setFilterColor] = useState<string[]>([])
   const [filterCmc, setFilterCmc] = useState<number[]>([])
   const [filterType, setFilterType] = useState<string[]>([])
-  const [maxDate, setMaxDate] = useState<string | null>(null)
-  const [lastEventDate, setLastEventDate] = useState<string | null>(null)
   const [formatName, setFormatName] = useState<string | null>(null)
-  const [events, setEvents] = useState<Event[]>([])
 
   useEffect(() => {
     const param = searchParams.get('event_ids') ?? searchParams.get('event_id')
@@ -92,12 +91,11 @@ export default function Metagame() {
   }, [searchParams])
 
   useEffect(() => {
-    getDateRange().then((r) => {
-      setMaxDate(r.max_date)
-      setLastEventDate(r.last_event_date)
-    })
+    if (eventMetadataError) toast.error(reportError(new Error(eventMetadataError)))
+  }, [eventMetadataError])
+
+  useEffect(() => {
     getFormatInfo().then((r) => setFormatName(r.format_name))
-    getEvents().then((r) => setEvents(r.events))
   }, [])
 
   useEffect(() => {

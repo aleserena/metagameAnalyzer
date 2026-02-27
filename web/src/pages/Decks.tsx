@@ -1,18 +1,20 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { getDecks, getEvents, getDateRange, getDuplicateDecks } from '../api'
-import type { Deck, Event } from '../types'
+import { getDecks, getDuplicateDecks } from '../api'
+import type { Deck } from '../types'
+import { useEventMetadata } from '../hooks/useEventMetadata'
+import { useDebouncedSearchParams } from '../hooks/useDebouncedSearchParams'
 import EventSelector from '../components/EventSelector'
 import CardSearchInput from '../components/CardSearchInput'
 import { Skeleton, SkeletonTable } from '../components/Skeleton'
 import { reportError } from '../utils'
 
+const FILTER_KEYS = ['deck_name', 'archetype', 'player', 'card'] as const
 const DEBOUNCE_MS = 300
 
 export default function Decks() {
   const [decks, setDecks] = useState<Deck[]>([])
-  const [events, setEvents] = useState<Event[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -20,12 +22,15 @@ export default function Decks() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
 
+  const { events, maxDate, lastEventDate, error: eventMetadataError } = useEventMetadata()
+  const { filters, setFilter } = useDebouncedSearchParams({
+    keys: [...FILTER_KEYS],
+    debounceMs: DEBOUNCE_MS,
+  })
   const eventIdsParam = searchParams.get('event_ids') ?? searchParams.get('event_id')
   const eventIds: (number | string)[] = eventIdsParam
     ? eventIdsParam.split(',').map((s) => s.trim()).filter(Boolean)
     : []
-  const [maxDate, setMaxDate] = useState<string | null>(null)
-  const [lastEventDate, setLastEventDate] = useState<string | null>(null)
   const [duplicateDeckIds, setDuplicateDeckIds] = useState<Set<number>>(new Set())
   const deckName = searchParams.get('deck_name')
   const archetype = searchParams.get('archetype')
@@ -37,14 +42,16 @@ export default function Decks() {
   const limit = 25
   const skip = (page - 1) * limit
 
-  const [localDeckName, setLocalDeckName] = useState(deckName ?? '')
-  const [localArchetype, setLocalArchetype] = useState(archetype ?? '')
-  const [localPlayer, setLocalPlayer] = useState(player ?? '')
-  const [localCard, setLocalCard] = useState(card ?? '')
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const setUrlParam = (key: string, value: string | null) => {
+    const params = new URLSearchParams(searchParams)
+    if (value) params.set(key, value)
+    else params.delete(key)
+    params.delete('page')
+    navigate({ search: params.toString() })
+  }
 
   const setEventIdsFilter = (ids: (number | string)[]) => {
-    setFilter('event_ids', ids.length ? ids.map(String).join(',') : null)
+    setUrlParam('event_ids', ids.length ? ids.map(String).join(',') : null)
   }
 
   const toggleSelect = (id: number) => {
@@ -57,41 +64,8 @@ export default function Decks() {
   }
 
   useEffect(() => {
-    setLocalDeckName(deckName ?? '')
-    setLocalArchetype(archetype ?? '')
-    setLocalPlayer(player ?? '')
-    setLocalCard(card ?? '')
-  }, [deckName, archetype, player, card])
-
-  useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => {
-      debounceRef.current = null
-      const params = new URLSearchParams(searchParams)
-      if (localDeckName) params.set('deck_name', localDeckName)
-      else params.delete('deck_name')
-      if (localArchetype) params.set('archetype', localArchetype)
-      else params.delete('archetype')
-      if (localPlayer) params.set('player', localPlayer)
-      else params.delete('player')
-      if (localCard) params.set('card', localCard)
-      else params.delete('card')
-      params.delete('page')
-      const next = params.toString()
-      if (next !== searchParams.toString()) navigate({ search: next })
-    }, DEBOUNCE_MS)
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current)
-    }
-  }, [localDeckName, localArchetype, localPlayer, localCard])
-
-  useEffect(() => {
-    getEvents().then((r) => setEvents(r.events))
-    getDateRange().then((r) => {
-      setMaxDate(r.max_date)
-      setLastEventDate(r.last_event_date)
-    })
-  }, [])
+    if (eventMetadataError) toast.error(reportError(new Error(eventMetadataError)))
+  }, [eventMetadataError])
 
   useEffect(() => {
     getDuplicateDecks(eventIds.length ? eventIds.map(String).join(',') : undefined)
@@ -130,14 +104,6 @@ export default function Decks() {
       .finally(() => setLoading(false))
   }, [eventIdsParam, deckName, archetype, player, card, sort, order, skip, limit])
 
-  const setFilter = (key: string, value: string | null) => {
-    const params = new URLSearchParams(searchParams)
-    if (value) params.set(key, value)
-    else params.delete(key)
-    params.delete('page')
-    navigate({ search: params.toString() })
-  }
-
   const handleSortHeader = (sortKey: 'date' | 'rank' | 'name' | 'player') => {
     const nextOrder = sort === sortKey ? (order === 'asc' ? 'desc' : 'asc') : sortKey === 'date' || sortKey === 'rank' ? 'desc' : 'asc'
     const params = new URLSearchParams(searchParams)
@@ -148,10 +114,6 @@ export default function Decks() {
   }
 
   const clearFilters = () => {
-    setLocalDeckName('')
-    setLocalArchetype('')
-    setLocalPlayer('')
-    setLocalCard('')
     navigate({ pathname: '/decks', search: '' })
   }
 
@@ -228,8 +190,8 @@ export default function Decks() {
               id="decks-name"
               type="text"
               placeholder="Search deck name..."
-              value={localDeckName}
-              onChange={(e) => setLocalDeckName(e.target.value)}
+              value={filters.deck_name ?? ''}
+              onChange={(e) => setFilter('deck_name', e.target.value || null)}
               aria-label="Search deck name"
             />
           </div>
@@ -239,8 +201,8 @@ export default function Decks() {
               id="decks-archetype"
               type="text"
               placeholder="Search archetype..."
-              value={localArchetype}
-              onChange={(e) => setLocalArchetype(e.target.value)}
+              value={filters.archetype ?? ''}
+              onChange={(e) => setFilter('archetype', e.target.value || null)}
               aria-label="Search archetype"
             />
           </div>
@@ -250,8 +212,8 @@ export default function Decks() {
               id="decks-player"
               type="text"
               placeholder="Search player..."
-              value={localPlayer}
-              onChange={(e) => setLocalPlayer(e.target.value)}
+              value={filters.player ?? ''}
+              onChange={(e) => setFilter('player', e.target.value || null)}
               aria-label="Search player"
             />
           </div>
@@ -259,8 +221,8 @@ export default function Decks() {
             <label htmlFor="decks-card">Card</label>
             <CardSearchInput
               id="decks-card"
-              value={localCard}
-              onChange={setLocalCard}
+              value={filters.card ?? ''}
+              onChange={(v) => setFilter('card', v || null)}
               placeholder="Search by card..."
               aria-label="Search by card"
             />

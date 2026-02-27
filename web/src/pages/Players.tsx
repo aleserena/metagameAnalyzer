@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { getPlayers, getDateRange } from '../api'
+import { getPlayers } from '../api'
+import { useEventMetadata } from '../hooks/useEventMetadata'
 import type { PlayerStats } from '../types'
 import Skeleton from '../components/Skeleton'
 import { useFetch } from '../hooks/useFetch'
@@ -10,12 +11,11 @@ import { dateMinusDays, firstDayOfYear, reportError } from '../utils'
 type SortKey = 'player' | 'wins' | 'top2' | 'top4' | 'top8' | 'points' | 'deck_count'
 
 export default function Players() {
+  const { maxDate, lastEventDate, error: eventMetadataError } = useEventMetadata()
   const [sortBy, setSortBy] = useState<SortKey>('wins')
   const [sortDesc, setSortDesc] = useState(true)
   const [dateFrom, setDateFrom] = useState<string | null>(null)
   const [dateTo, setDateTo] = useState<string | null>(null)
-  const [maxDate, setMaxDate] = useState<string | null>(null)
-  const [lastEventDate, setLastEventDate] = useState<string | null>(null)
 
   const { data, loading, error, refetch } = useFetch<{ players: PlayerStats[] }>(
     () => getPlayers(dateFrom, dateTo).then((r) => ({ players: r.players })),
@@ -24,11 +24,8 @@ export default function Players() {
   const players = data?.players ?? []
 
   useEffect(() => {
-    getDateRange().then((r) => {
-      setMaxDate(r.max_date)
-      setLastEventDate(r.last_event_date)
-    })
-  }, [])
+    if (eventMetadataError) toast.error(reportError(new Error(eventMetadataError)))
+  }, [eventMetadataError])
 
   useEffect(() => {
     if (error) toast.error(reportError(new Error(error)))
