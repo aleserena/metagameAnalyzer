@@ -8,10 +8,20 @@ import { useDebouncedSearchParams } from '../hooks/useDebouncedSearchParams'
 import EventSelector from '../components/EventSelector'
 import CardSearchInput from '../components/CardSearchInput'
 import { Skeleton, SkeletonTable } from '../components/Skeleton'
+import ManaSymbols from '../components/ManaSymbols'
 import { reportError } from '../utils'
 
-const FILTER_KEYS = ['deck_name', 'archetype', 'player', 'card'] as const
+const FILTER_KEYS = ['deck_name', 'archetype', 'player', 'card', 'colors'] as const
 const DEBOUNCE_MS = 300
+
+const COLOR_OPTIONS: { value: string; manaCost: string; title: string }[] = [
+  { value: 'W', manaCost: '{W}', title: 'White' },
+  { value: 'U', manaCost: '{U}', title: 'Blue' },
+  { value: 'B', manaCost: '{B}', title: 'Black' },
+  { value: 'R', manaCost: '{R}', title: 'Red' },
+  { value: 'G', manaCost: '{G}', title: 'Green' },
+  { value: 'C', manaCost: '{C}', title: 'Colorless' },
+]
 
 export default function Decks() {
   const [decks, setDecks] = useState<Deck[]>([])
@@ -36,6 +46,7 @@ export default function Decks() {
   const archetype = searchParams.get('archetype')
   const player = searchParams.get('player')
   const card = searchParams.get('card')
+  const colors = searchParams.get('colors')
   const sort = searchParams.get('sort') ?? 'date'
   const order = searchParams.get('order') ?? 'desc'
   const page = parseInt(searchParams.get('page') ?? '1', 10)
@@ -88,6 +99,7 @@ export default function Decks() {
       archetype: archetype ?? undefined,
       player: player ?? undefined,
       card: card ?? undefined,
+      colors: colors ?? undefined,
       sort,
       order,
       skip,
@@ -102,7 +114,7 @@ export default function Decks() {
         toast.error(reportError(e))
       })
       .finally(() => setLoading(false))
-  }, [eventIdsParam, deckName, archetype, player, card, sort, order, skip, limit])
+  }, [eventIdsParam, deckName, archetype, player, card, colors, sort, order, skip, limit])
 
   const handleSortHeader = (sortKey: 'date' | 'rank' | 'name' | 'player') => {
     const nextOrder = sort === sortKey ? (order === 'asc' ? 'desc' : 'asc') : sortKey === 'date' || sortKey === 'rank' ? 'desc' : 'asc'
@@ -126,6 +138,7 @@ export default function Decks() {
       archetype: archetype ?? undefined,
       player: player ?? undefined,
       card: card ?? undefined,
+      colors: colors ?? undefined,
       sort,
       order,
       skip,
@@ -142,8 +155,27 @@ export default function Decks() {
       .finally(() => setLoading(false))
   }
 
-  const hasActiveFilters = !!(eventIds.length || deckName || archetype || player || card)
+  const hasActiveFilters = !!(eventIds.length || deckName || archetype || player || card || colors)
   const totalPages = Math.ceil(total / limit)
+
+  const getDeckManaCost = (deck: Deck): string => {
+    const colors = deck.color_identity ?? []
+    if (!colors.length) return ''
+    return `{${colors.join('}{')}}`
+  }
+
+  const selectedColors = (filters.colors ?? '')
+    .split(',')
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean)
+
+  const toggleColorFilter = (value: string) => {
+    const set = new Set(selectedColors)
+    if (set.has(value)) set.delete(value)
+    else set.add(value)
+    const next = Array.from(set)
+    setFilter('colors', next.length ? next.join(',') : null)
+  }
 
   return (
     <div>
@@ -181,65 +213,95 @@ export default function Decks() {
               boxSizing: 'border-box',
             }}
           >
-          <span style={{ width: '100%', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            Filters
-          </span>
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label htmlFor="decks-name">Deck name</label>
-            <input
-              id="decks-name"
-              type="text"
-              placeholder="Search deck name..."
-              value={filters.deck_name ?? ''}
-              onChange={(e) => setFilter('deck_name', e.target.value || null)}
-              aria-label="Search deck name"
+            <span style={{ width: '100%', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Filters
+            </span>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label htmlFor="decks-name">Deck name</label>
+              <input
+                id="decks-name"
+                type="text"
+                placeholder="Search deck name..."
+                value={filters.deck_name ?? ''}
+                onChange={(e) => setFilter('deck_name', e.target.value || null)}
+                aria-label="Search deck name"
+              />
+            </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label htmlFor="decks-archetype">Archetype</label>
+              <input
+                id="decks-archetype"
+                type="text"
+                placeholder="Search archetype..."
+                value={filters.archetype ?? ''}
+                onChange={(e) => setFilter('archetype', e.target.value || null)}
+                aria-label="Search archetype"
+              />
+            </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label htmlFor="decks-player">Player</label>
+              <input
+                id="decks-player"
+                type="text"
+                placeholder="Search player..."
+                value={filters.player ?? ''}
+                onChange={(e) => setFilter('player', e.target.value || null)}
+                aria-label="Search player"
+              />
+            </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label htmlFor="decks-card">Card</label>
+              <CardSearchInput
+                id="decks-card"
+                value={filters.card ?? ''}
+                onChange={(v) => setFilter('card', v || null)}
+                placeholder="Search by card..."
+                aria-label="Search by card"
+              />
+            </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label>Colors</label>
+              <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
+                {COLOR_OPTIONS.map((opt) => {
+                  const active = selectedColors.includes(opt.value)
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => toggleColorFilter(opt.value)}
+                      style={{
+                        borderRadius: 999,
+                        border: active ? '1px solid var(--accent)' : '1px solid var(--border)',
+                        padding: '0.1rem 0.4rem',
+                        background: active ? 'var(--accent-soft, var(--accent))' : 'transparent',
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        opacity: active ? 1 : 0.9,
+                      }}
+                      aria-pressed={active}
+                      title={opt.title}
+                    >
+                      <ManaSymbols manaCost={opt.manaCost} size={14} />
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+            <EventSelector
+              events={events}
+              selectedIds={eventIds}
+              onChange={setEventIdsFilter}
+              showDatePresets
+              maxDate={maxDate}
+              lastEventDate={lastEventDate}
             />
-          </div>
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label htmlFor="decks-archetype">Archetype</label>
-            <input
-              id="decks-archetype"
-              type="text"
-              placeholder="Search archetype..."
-              value={filters.archetype ?? ''}
-              onChange={(e) => setFilter('archetype', e.target.value || null)}
-              aria-label="Search archetype"
-            />
-          </div>
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label htmlFor="decks-player">Player</label>
-            <input
-              id="decks-player"
-              type="text"
-              placeholder="Search player..."
-              value={filters.player ?? ''}
-              onChange={(e) => setFilter('player', e.target.value || null)}
-              aria-label="Search player"
-            />
-          </div>
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label htmlFor="decks-card">Card</label>
-            <CardSearchInput
-              id="decks-card"
-              value={filters.card ?? ''}
-              onChange={(v) => setFilter('card', v || null)}
-              placeholder="Search by card..."
-              aria-label="Search by card"
-            />
-          </div>
-          <EventSelector
-            events={events}
-            selectedIds={eventIds}
-            onChange={setEventIdsFilter}
-            showDatePresets
-            maxDate={maxDate}
-            lastEventDate={lastEventDate}
-          />
-          {hasActiveFilters && (
-            <button type="button" className="btn" onClick={clearFilters} style={{ marginBottom: 0 }}>
-              Clear filters
-            </button>
-          )}
+            {hasActiveFilters && (
+              <button type="button" className="btn" onClick={clearFilters} style={{ marginBottom: 0 }}>
+                Clear filters
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -333,71 +395,77 @@ export default function Decks() {
                 </tr>
               </thead>
               <tbody>
-                {decks.map((d) => (
-                  <tr
-                    key={d.deck_id}
-                    className="clickable"
-                    onClick={() => navigate(`/decks/${d.deck_id}`)}
-                  >
-                    <td onClick={(e) => e.stopPropagation()}>
-                      <input
-                        type="checkbox"
-                        checked={selected.has(d.deck_id)}
-                        onChange={() => toggleSelect(d.deck_id)}
-                        title="Select for comparison"
-                      />
-                    </td>
-                    <td
-                      style={{ cursor: 'pointer', color: 'var(--accent)' }}
-                      onClick={(e) => { e.stopPropagation(); navigate(`/decks/${d.deck_id}`) }}
+                {decks.map((d) => {
+                  const manaCost = getDeckManaCost(d)
+                  return (
+                    <tr
+                      key={d.deck_id}
+                      className="clickable"
+                      onClick={() => navigate(`/decks/${d.deck_id}`)}
                     >
-                      {d.name}
-                      {(!d.mainboard || d.mainboard.length === 0) ? (
-                        <span
-                          style={{
-                            marginLeft: 6,
-                            fontSize: '0.7rem',
-                            padding: '0.1rem 0.35rem',
-                            background: 'rgba(220, 53, 69, 0.2)',
-                            borderRadius: 4,
-                            color: 'var(--danger, #dc3545)',
-                          }}
-                          title="No cards in mainboard"
-                        >
-                          empty
+                      <td onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={selected.has(d.deck_id)}
+                          onChange={() => toggleSelect(d.deck_id)}
+                          title="Select for comparison"
+                        />
+                      </td>
+                      <td
+                        style={{ cursor: 'pointer', color: 'var(--accent)' }}
+                        onClick={(e) => { e.stopPropagation(); navigate(`/decks/${d.deck_id}`) }}
+                      >
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          {d.name}
+                          {manaCost && <ManaSymbols manaCost={manaCost} size={16} />}
                         </span>
-                      ) : duplicateDeckIds.has(d.deck_id) ? (
-                        <span
-                          style={{
-                            marginLeft: 6,
-                            fontSize: '0.7rem',
-                            padding: '0.1rem 0.35rem',
-                            background: 'rgba(247, 147, 26, 0.2)',
-                            borderRadius: 4,
-                            color: 'var(--warning)',
-                          }}
-                          title="Identical mainboard to another deck"
-                        >
-                          dup
-                        </span>
-                      ) : null}
-                    </td>
-                    <td
-                      style={{ cursor: 'pointer', color: 'var(--accent)' }}
-                      onClick={(e) => { e.stopPropagation(); navigate(`/players/${encodeURIComponent(d.player)}`) }}
-                    >
-                      {d.player}
-                    </td>
-                    <td
-                      style={{ cursor: 'pointer', color: 'var(--accent)' }}
-                      onClick={(e) => { e.stopPropagation(); navigate(`/decks?event_ids=${encodeURIComponent(String(d.event_id))}`) }}
-                    >
-                      {d.event_name}
-                    </td>
-                    <td>{d.date}</td>
-                    <td>{d.rank || '-'}</td>
-                  </tr>
-                ))}
+                        {(!d.mainboard || d.mainboard.length === 0) ? (
+                          <span
+                            style={{
+                              marginLeft: 6,
+                              fontSize: '0.7rem',
+                              padding: '0.1rem 0.35rem',
+                              background: 'rgba(220, 53, 69, 0.2)',
+                              borderRadius: 4,
+                              color: 'var(--danger, #dc3545)',
+                            }}
+                            title="No cards in mainboard"
+                          >
+                            empty
+                          </span>
+                        ) : duplicateDeckIds.has(d.deck_id) ? (
+                          <span
+                            style={{
+                              marginLeft: 6,
+                              fontSize: '0.7rem',
+                              padding: '0.1rem 0.35rem',
+                              background: 'rgba(247, 147, 26, 0.2)',
+                              borderRadius: 4,
+                              color: 'var(--warning)',
+                            }}
+                            title="Identical mainboard to another deck"
+                          >
+                            dup
+                          </span>
+                        ) : null}
+                      </td>
+                      <td
+                        style={{ cursor: 'pointer', color: 'var(--accent)' }}
+                        onClick={(e) => { e.stopPropagation(); navigate(`/players/${encodeURIComponent(d.player)}`) }}
+                      >
+                        {d.player}
+                      </td>
+                      <td
+                        style={{ cursor: 'pointer', color: 'var(--accent)' }}
+                        onClick={(e) => { e.stopPropagation(); navigate(`/decks?event_ids=${encodeURIComponent(String(d.event_id))}`) }}
+                      >
+                        {d.event_name}
+                      </td>
+                      <td>{d.date}</td>
+                      <td>{d.rank || '-'}</td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
             </div>

@@ -109,6 +109,8 @@ export async function getDecks(params?: {
   archetype?: string
   player?: string
   card?: string
+  /** Commander-based color identity filter, e.g. "W,U" for Azorius. */
+  colors?: string
   sort?: string
   order?: string
   skip?: number
@@ -122,6 +124,7 @@ export async function getDecks(params?: {
   if (params?.archetype) search.set('archetype', params.archetype)
   if (params?.player) search.set('player', params.player)
   if (params?.card) search.set('card', params.card)
+  if (params?.colors) search.set('colors', params.colors)
   if (params?.sort) search.set('sort', params.sort)
   if (params?.order) search.set('order', params.order)
   if (params?.skip != null) search.set('skip', String(params.skip))

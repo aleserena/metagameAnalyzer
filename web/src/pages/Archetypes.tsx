@@ -5,7 +5,17 @@ import { getMetagame, getDateRange, getEvents, getFormatInfo } from '../api'
 import type { MetagameReport, Event } from '../types'
 import EventSelector from '../components/EventSelector'
 import Skeleton from '../components/Skeleton'
+import ManaSymbols from '../components/ManaSymbols'
 import { reportError } from '../utils'
+
+const COLOR_OPTIONS: { value: string; manaCost: string; title: string }[] = [
+  { value: 'W', manaCost: '{W}', title: 'White' },
+  { value: 'U', manaCost: '{U}', title: 'Blue' },
+  { value: 'B', manaCost: '{B}', title: 'Black' },
+  { value: 'R', manaCost: '{R}', title: 'Red' },
+  { value: 'G', manaCost: '{G}', title: 'Green' },
+  { value: 'C', manaCost: '{C}', title: 'Colorless' },
+]
 
 export default function Archetypes() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -24,6 +34,7 @@ export default function Archetypes() {
   type SortKey = 'archetype' | 'count' | 'pct' | 'countTop8' | 'pctTop8' | 'conversion'
   const [sortBy, setSortBy] = useState<SortKey>('pct')
   const [sortDesc, setSortDesc] = useState(true)
+  const [filterColors, setFilterColors] = useState<string[]>([])
 
   useEffect(() => {
     const param = searchParams.get('event_ids') ?? searchParams.get('event_id')
@@ -63,13 +74,13 @@ export default function Archetypes() {
 
   const archetypes = metagame?.archetype_distribution ?? []
   const archetypesTop8 = metagame?.archetype_distribution_top8 ?? []
-  const byName: Record<string, { archetype: string; count: number; pct: number; countTop8: number; pctTop8: number; conversion: number }> = {}
+  const byName: Record<string, { archetype: string; count: number; pct: number; countTop8: number; pctTop8: number; conversion: number; colors?: string[] }> = {}
   for (const r of archetypes) {
     byName[r.archetype] = { ...r, countTop8: 0, pctTop8: 0, conversion: 0 }
   }
   for (const r of archetypesTop8) {
     if (!byName[r.archetype]) {
-      byName[r.archetype] = { archetype: r.archetype, count: 0, pct: 0, countTop8: r.count, pctTop8: r.pct, conversion: 0 }
+      byName[r.archetype] = { archetype: r.archetype, count: 0, pct: 0, countTop8: r.count, pctTop8: r.pct, conversion: 0, colors: r.colors }
     } else {
       byName[r.archetype].countTop8 = r.count
       byName[r.archetype].pctTop8 = r.pct
@@ -86,7 +97,16 @@ export default function Archetypes() {
       setSortDesc(key === 'archetype' ? false : true)
     }
   }
-  const sortedRows = Object.values(byName).sort((a, b) => {
+  const rows = Object.values(byName)
+  const filteredRows = rows.filter((row) => {
+    if (filterColors.length === 0) return true
+    const colors = row.colors ?? archetypes.find((a) => a.archetype === row.archetype)?.colors ?? []
+    if (!colors.length) return false
+    const set = new Set(colors)
+    return filterColors.every((c) => set.has(c))
+  })
+
+  const sortedRows = filteredRows.sort((a, b) => {
     let cmp = 0
     switch (sortBy) {
       case 'archetype':
@@ -194,6 +214,51 @@ export default function Archetypes() {
           <p style={{ margin: '0 0 1rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
             Click column headers to sort. Conversion = % of that archetype&apos;s decks that made top 8. Click an archetype for average deck stats and most played cards.
           </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Filter by color:</span>
+            {COLOR_OPTIONS.map((opt) => {
+              const active = filterColors.includes(opt.value)
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => {
+                    setFilterColors((prev) => {
+                      const set = new Set(prev)
+                      if (set.has(opt.value)) set.delete(opt.value)
+                      else set.add(opt.value)
+                      return Array.from(set)
+                    })
+                  }}
+                  style={{
+                    borderRadius: 999,
+                    border: active ? '1px solid var(--accent)' : '1px solid var(--border)',
+                    padding: '0.1rem 0.4rem',
+                    background: active ? 'var(--accent-soft, var(--accent))' : 'transparent',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    opacity: active ? 1 : 0.9,
+                  }}
+                  aria-pressed={active}
+                  title={opt.title}
+                >
+                  <ManaSymbols manaCost={opt.manaCost} size={16} />
+                </button>
+              )
+            })}
+            {filterColors.length > 0 && (
+              <button
+                type="button"
+                className="btn"
+                style={{ padding: '0.15rem 0.5rem', fontSize: '0.75rem' }}
+                onClick={() => setFilterColors([])}
+              >
+                Clear colors
+              </button>
+            )}
+          </div>
           <div style={{ overflowX: 'auto' }}>
             <table className="table">
               <thead>
@@ -249,25 +314,32 @@ export default function Archetypes() {
                 </tr>
               </thead>
               <tbody>
-                {sortedRows.map((row) => (
-                  <tr key={row.archetype}>
-                    <td>
-                      <Link
-                        to={`/archetypes/${encodeURIComponent(row.archetype)}${eventIds.length ? `?event_ids=${encodeURIComponent(eventIds.map(String).join(','))}` : ''}`}
-                        style={{ color: 'var(--accent)', fontWeight: 500 }}
-                      >
-                        {row.archetype}
-                      </Link>
-                    </td>
-                    <td style={{ textAlign: 'right' }}>{row.count}</td>
-                    <td style={{ textAlign: 'right' }}>{row.pct}%</td>
-                    <td style={{ textAlign: 'right' }}>{row.countTop8}</td>
-                    <td style={{ textAlign: 'right' }}>{row.pctTop8 > 0 ? `${row.pctTop8}%` : '—'}</td>
-                    <td style={{ textAlign: 'right' }} title={`${row.countTop8} / ${row.count} decks`}>
-                      {row.count > 0 ? `${row.conversion}%` : '—'}
-                    </td>
-                  </tr>
-                ))}
+                {sortedRows.map((row) => {
+                  const colors = row.colors ?? archetypes.find((a) => a.archetype === row.archetype)?.colors
+                  const manaCost = colors && colors.length ? `{${colors.join('}{')}}` : ''
+                  return (
+                    <tr key={row.archetype}>
+                      <td>
+                        <Link
+                          to={`/archetypes/${encodeURIComponent(row.archetype)}${eventIds.length ? `?event_ids=${encodeURIComponent(eventIds.map(String).join(','))}` : ''}`}
+                          style={{ color: 'var(--accent)', fontWeight: 500 }}
+                        >
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            {row.archetype}
+                            {manaCost && <ManaSymbols manaCost={manaCost} size={18} />}
+                          </span>
+                        </Link>
+                      </td>
+                      <td style={{ textAlign: 'right' }}>{row.count}</td>
+                      <td style={{ textAlign: 'right' }}>{row.pct}%</td>
+                      <td style={{ textAlign: 'right' }}>{row.countTop8}</td>
+                      <td style={{ textAlign: 'right' }}>{row.pctTop8 > 0 ? `${row.pctTop8}%` : '—'}</td>
+                      <td style={{ textAlign: 'right' }} title={`${row.countTop8} / ${row.count} decks`}>
+                        {row.count > 0 ? `${row.conversion}%` : '—'}
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>

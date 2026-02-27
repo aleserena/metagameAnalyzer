@@ -648,6 +648,10 @@ def list_decks(
     archetype: str | None = Query(None, description="Filter by archetype (substring)"),
     player: str | None = Query(None, description="Filter by player name (substring)"),
     card: str | None = Query(None, description="Filter by card name (substring, commander, mainboard or sideboard)"),
+    colors: str | None = Query(
+        None,
+        description="Filter by commander color identity (comma-separated, e.g. 'W,U' for Azorius)",
+    ),
     sort: str = Query("date", description="Sort by: date, rank, player, name"),
     order: str = Query("desc", description="Sort order: asc, desc"),
     skip: int = Query(0, ge=0),
@@ -689,12 +693,57 @@ def list_decks(
                 for e in section
             )
         ]
+
+    # Optional filter by commander-based color identity (EDH / Commander decks).
+    # Also attaches color_identity (ordered WUBRG + C for colorless) to each deck for UI mana symbols.
+    color_filter: set[str] | None = None
+    if colors:
+        wanted = {c.strip().upper() for c in colors.split(",") if c.strip()}
+        valid = {"W", "U", "B", "R", "G", "C"}
+        color_filter = {c for c in wanted if c in valid} or None
+
+    try:
+        if filtered:
+            deck_objs = [Deck.from_dict(d) for d in filtered]
+            commander_names = list(
+                {c for deck in deck_objs for c in effective_commanders(deck) if c}
+            )
+            metadata = lookup_cards(commander_names) if commander_names else {}
+            color_order = ["W", "U", "B", "R", "G", "C"]
+            filtered_with_colors: list[dict] = []
+            for deck_obj, d in zip(deck_objs, filtered):
+                ec = effective_commanders(deck_obj)
+                ci: set[str] = set()
+                for name in ec:
+                    entry = metadata.get(name)
+                    if entry and "error" not in entry:
+                        for c in entry.get("color_identity") or entry.get("colors") or []:
+                            if c in {"W", "U", "B", "R", "G"}:
+                                ci.add(c)
+                # Treat EDH/Commander decks with no colors as colorless ("C") for filtering and display.
+                is_edh = (deck_obj.format_id or "").upper() in {"EDH", "CEDH", "COMMANDER"}
+                if not ci and is_edh and ec:
+                    ci.add("C")
+                if ci:
+                    d["color_identity"] = [c for c in color_order if c in ci]
+                if color_filter:
+                    # Require deck to contain all selected colors.
+                    if not ci or not color_filter.issubset(ci):
+                        continue
+                    filtered_with_colors.append(d)
+            if color_filter:
+                filtered = filtered_with_colors
+    except Exception:
+        # Color identity and color filter are cosmetic; ignore lookup failures.
+        logger.exception("Color identity lookup failed for /api/decks")
+
     sort_val = sort if sort in ("date", "rank", "player", "name") else "date"
     order_val = order if order in ("asc", "desc") else "desc"
     key_fn, reverse = _deck_sort_key_by(sort_val, order_val)
     filtered = sorted(filtered, key=key_fn, reverse=reverse)
     total = len(filtered)
     page = filtered[skip : skip + limit]
+
     # Normalize player names for display (merge aliases)
     page = [{**d, "player": _normalize_player(d.get("player") or "")} for d in page]
     if is_admin == "admin" and event_id is not None and _database_available():
@@ -1811,24 +1860,38 @@ def get_metagame(
     color_count_buckets: dict[int, float] = {n: 0.0 for n in range(6)}
     # Per color-count commander scores for tooltip "top decks in this bucket"
     color_count_deck_scores: dict[int, dict[str, float]] = {n: {} for n in range(6)}
+    # Per-archetype color identity derived from commanders (for UI mana symbols).
+    archetype_color_sets: dict[str, set[str]] = {}
+
     for d in decks:
         ec = effective_commanders(d)
         if not ec:
             continue
-        ci = set()
+        ci: set[str] = set()
         for name in ec:
             entry = lookup.get(name)
             if entry and "error" not in entry:
                 for c in entry.get("color_identity") or entry.get("colors") or []:
                     if c in _COLOR_LABEL:
                         ci.add(c)
-        if len(ci) == 0:
+        is_colorless = len(ci) == 0
+        if is_colorless:
             color_counts["Colorless"] += 1
             colors_for_deck = ["Colorless"]
         else:
             for c in ci:
                 color_counts[c] += 1
             colors_for_deck = list(ci)
+
+        # Track colors per archetype for archetype list UI.
+        arch = (d.archetype or "").strip()
+        if arch:
+            s = archetype_color_sets.setdefault(arch, set())
+            if is_colorless:
+                s.add("C")
+            else:
+                for c in ci:
+                    s.add(c)
         w = rank_weights.get(normalize_rank(d.rank or ""), 1.0) if placement_weighted else 1.0
         commander_key = " / ".join(sorted(ec))
         for c in colors_for_deck:
@@ -1870,6 +1933,19 @@ def get_metagame(
         for k in _COLOR_ORDER
         if color_counts[k] > 0
     ]
+
+    # Attach commander-based color identity to archetype_distribution entries so the
+    # frontend can render mana symbols and filter by color without extra calls.
+    if "archetype_distribution" in result and archetype_color_sets:
+        color_code_order = ["W", "U", "B", "R", "G", "C"]
+        for row in result["archetype_distribution"]:
+            arch = (row.get("archetype") or "").strip()
+            colors = archetype_color_sets.get(arch)
+            if not colors:
+                continue
+            ordered = [c for c in color_code_order if c in colors]
+            if ordered:
+                row["colors"] = ordered
     top_players = player_leaderboard(
         decks, normalize_player=_normalize_player, rank_weights=rank_weights
     )[:5]

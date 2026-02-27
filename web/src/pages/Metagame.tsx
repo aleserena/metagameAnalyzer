@@ -565,73 +565,131 @@ export default function Metagame() {
             <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Filter:</span>
             <span style={{ fontWeight: 600 }}>Color</span>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
-            {COLOR_OPTIONS.map((opt) => (
-              <label key={opt.value} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', cursor: 'pointer', fontSize: '0.8rem' }} title={opt.title}>
-                <input
-                  type="checkbox"
-                  checked={filterColor.includes(opt.value)}
-                  onChange={(e) => {
-                    if (e.target.checked) setFilterColorAndResetPage([...filterColor, opt.value])
-                    else setFilterColorAndResetPage(filterColor.filter((x) => x !== opt.value))
+            {COLOR_OPTIONS.map((opt) => {
+              const active = filterColor.includes(opt.value)
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => {
+                    if (loadingCardMeta) return
+                    if (active) {
+                      setFilterColorAndResetPage(filterColor.filter((x) => x !== opt.value))
+                    } else {
+                      setFilterColorAndResetPage([...filterColor, opt.value])
+                    }
                   }}
                   disabled={loadingCardMeta}
-                />
-                {opt.manaCost ? (
-                  <ManaSymbols manaCost={opt.manaCost} size={FILTER_SYMBOL_SIZE} />
-                ) : (
-                  <span
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      width: FILTER_SYMBOL_SIZE,
-                      height: FILTER_SYMBOL_SIZE,
-                      borderRadius: '50%',
-                      background: '#c9b037',
-                      color: '#1a1a1a',
-                      fontSize: 11,
-                      fontWeight: 700,
-                    }}
-                  >
-                    M
-                  </span>
-                )}
-              </label>
-            ))}
+                  title={opt.title}
+                  style={{
+                    borderRadius: 999,
+                    border: active ? '1px solid var(--accent)' : '1px solid var(--border)',
+                    padding: '0.1rem 0.4rem',
+                    background: active ? 'var(--accent-soft, var(--accent))' : 'transparent',
+                    cursor: loadingCardMeta ? 'default' : 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    opacity: active ? 1 : 0.9,
+                  }}
+                  aria-pressed={active}
+                >
+                  {opt.manaCost ? (
+                    <ManaSymbols manaCost={opt.manaCost} size={FILTER_SYMBOL_SIZE} />
+                  ) : (
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        width: FILTER_SYMBOL_SIZE,
+                        height: FILTER_SYMBOL_SIZE,
+                        borderRadius: '50%',
+                        background: '#c9b037',
+                        color: '#1a1a1a',
+                        fontSize: 11,
+                        fontWeight: 700,
+                      }}
+                    >
+                      M
+                    </span>
+                  )}
+                </button>
+              )
+            })}
           </div>
           <span style={{ fontWeight: 600 }}>Cost</span>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
-            {CMC_OPTIONS.map((opt) => (
-              <label key={opt} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', cursor: 'pointer', fontSize: '0.8rem' }} title={opt === 5 ? '5+' : `CMC ${opt}`}>
-                <input
-                  type="checkbox"
-                  checked={filterCmc.includes(opt)}
-                  onChange={(e) => {
-                    if (e.target.checked) setFilterCmcAndResetPage([...filterCmc, opt])
-                    else setFilterCmcAndResetPage(filterCmc.filter((x) => x !== opt))
+            {CMC_OPTIONS.map((opt) => {
+              const active = filterCmc.includes(opt)
+              return (
+                <button
+                  key={opt}
+                  type="button"
+                  onClick={() => {
+                    if (loadingCardMeta) return
+                    if (active) {
+                      setFilterCmcAndResetPage(filterCmc.filter((x) => x !== opt))
+                    } else {
+                      setFilterCmcAndResetPage([...filterCmc, opt])
+                    }
                   }}
                   disabled={loadingCardMeta}
-                />
-                <ManaSymbols manaCost={`{${opt}}`} size={FILTER_SYMBOL_SIZE} />
-              </label>
-            ))}
+                  title={opt === 5 ? '5+' : `CMC ${opt}`}
+                  style={{
+                    borderRadius: 999,
+                    border: active ? '1px solid var(--accent)' : '1px solid var(--border)',
+                    padding: '0.1rem 0.4rem',
+                    background: active ? 'var(--accent-soft, var(--accent))' : 'transparent',
+                    cursor: loadingCardMeta ? 'default' : 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    opacity: active ? 1 : 0.9,
+                  }}
+                  aria-pressed={active}
+                >
+                  <ManaSymbols manaCost={`{${opt}}`} size={FILTER_SYMBOL_SIZE} />
+                </button>
+              )
+            })}
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
             <span style={{ fontWeight: 600 }}>Type</span>
-            {TYPE_OPTIONS.map((opt) => (
-              <label key={opt} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', cursor: 'pointer', fontSize: '0.8rem' }}>
-                <input
-                  type="checkbox"
-                  checked={filterType.includes(opt)}
-                  onChange={(e) => {
-                    if (e.target.checked) setFilterTypeAndResetPage([...filterType, opt])
-                    else setFilterTypeAndResetPage(filterType.filter((x) => x !== opt))
+            {TYPE_OPTIONS.map((opt) => {
+              const active = filterType.includes(opt)
+              return (
+                <button
+                  key={opt}
+                  type="button"
+                  onClick={() => {
+                    if (loadingCardMeta) return
+                    if (active) {
+                      setFilterTypeAndResetPage(filterType.filter((x) => x !== opt))
+                    } else {
+                      setFilterTypeAndResetPage([...filterType, opt])
+                    }
                   }}
                   disabled={loadingCardMeta}
-                />
-                {opt}
-              </label>
-            ))}
+                  style={{
+                    borderRadius: 999,
+                    border: active ? '1px solid var(--accent)' : '1px solid var(--border)',
+                    padding: '0.1rem 0.4rem',
+                    background: active ? 'var(--accent-soft, var(--accent))' : 'transparent',
+                    cursor: loadingCardMeta ? 'default' : 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    fontSize: '0.8rem',
+                    color: active ? '#ffffff' : 'var(--text)',
+                    opacity: active ? 1 : 0.9,
+                  }}
+                  aria-pressed={active}
+                >
+                  {opt}
+                </button>
+              )
+            })}
           </div>
           <button
             type="button"
