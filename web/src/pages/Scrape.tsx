@@ -3,6 +3,7 @@ import { useBlocker } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { getToken } from '../contexts/AuthContext'
 import { stopScrape } from '../api'
+import Modal from '../components/Modal'
 import { reportError } from '../utils'
 import { FORMATS, META_EDH } from '../config'
 
@@ -269,57 +270,33 @@ export default function Scrape() {
       )}
 
       {blocker.state === 'blocked' && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.5)',
-            zIndex: 10000,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-          aria-hidden="false"
+        <Modal
+          title="Scraping is in progress. Are you sure you want to leave?"
+          onClose={() => blocker.reset?.()}
+          closeOnOverlayClick={false}
+          size={400}
+          contentRef={blockerDialogRef}
         >
-          <div
-            ref={blockerDialogRef}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="scrape-blocker-title"
-            aria-label="Leave page confirmation"
-            style={{
-              background: 'var(--bg-card)',
-              border: '1px solid var(--border)',
-              borderRadius: 12,
-              padding: '2rem',
-              maxWidth: 400,
-              textAlign: 'center',
-            }}
-          >
-            <p id="scrape-blocker-title" style={{ marginBottom: '1.5rem', fontSize: '1rem' }}>
-              Scraping is in progress. Are you sure you want to leave?
-            </p>
-            <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
-              <button
-                type="button"
-                className="btn"
-                onClick={() => blocker.reset?.()}
-                aria-label="Stay on page"
-              >
-                Stay
-              </button>
-              <button
-                type="button"
-                className="btn"
-                style={{ background: 'var(--danger, #e53e3e)' }}
-                onClick={() => blocker.proceed?.()}
-                aria-label="Leave page"
-              >
-                Leave
-              </button>
-            </div>
+          <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => blocker.reset?.()}
+              aria-label="Stay on page"
+            >
+              Stay
+            </button>
+            <button
+              type="button"
+              className="btn"
+              style={{ background: 'var(--danger, #e53e3e)' }}
+              onClick={() => blocker.proceed?.()}
+              aria-label="Leave page"
+            >
+              Leave
+            </button>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   )

@@ -4,8 +4,10 @@ import { Toaster } from 'react-hot-toast'
 import toast from 'react-hot-toast'
 import { getUploadLinkInfo, submitDeckWithUploadLink, submitFeedbackWithUploadLink, submitDecklistWithUploadLink } from '../api'
 import { parseMoxfieldDeckList, formatMoxfieldDeckList } from '../lib/deckListParser'
+import { MATCHUP_RESULT_OPTIONS, matchupItemToRow } from '../lib/matchups'
 import { reportError } from '../utils'
 import CardSearchInput from '../components/CardSearchInput'
+import Modal from '../components/Modal'
 
 export default function UploadDeck() {
   const { token } = useParams<{ token: string }>()
@@ -40,14 +42,6 @@ export default function UploadDeck() {
   const [archetype, setArchetype] = useState('')
   const [feedbackDeckName, setFeedbackDeckName] = useState('')
   const [feedbackRank, setFeedbackRank] = useState('')
-  const MATCHUP_RESULT_OPTIONS = [
-    { value: 'win', label: 'You win' },
-    { value: 'loss', label: 'You lose' },
-    { value: 'draw', label: 'Draw' },
-    { value: 'intentional_draw', label: 'Intentional draw' },
-    { value: 'intentional_draw_win', label: 'Intentional draw (you win)' },
-    { value: 'intentional_draw_loss', label: 'Intentional draw (you lose)' },
-  ] as const
   const [matchups, setMatchups] = useState<Array<{ opponent_player: string; result: string; intentional_draw: boolean }>>([
     { opponent_player: '', result: 'draw', intentional_draw: false },
   ])
@@ -85,27 +79,8 @@ export default function UploadDeck() {
             event_players?: string[]
             opponent_reported_matchups?: Array<{ opponent_player: string; result: string; intentional_draw?: boolean }>
           }
-          const ourMatchups = (deckWithExtras.matchups || []).map((m) => {
-            const raw = (m.result || '').trim().toLowerCase()
-            let result: string = 'draw'
-            if (raw === 'intentional_draw' || raw === 'intentional_draw_win' || raw === 'intentional_draw_loss') {
-              result = raw
-            } else if (raw) {
-              if (raw === 'win' || raw === '2-1' || raw === '1-0' || raw === '2-0') result = 'win'
-              else if (raw === 'loss' || raw === '1-2' || raw === '0-1' || raw === '0-2') result = 'loss'
-              else if (raw === 'draw' || raw === '1-1' || raw === '0-0') result = 'draw'
-            }
-            return {
-              opponent_player: (m.opponent_player ?? '').trim(),
-              result,
-              intentional_draw: ['intentional_draw', 'intentional_draw_win', 'intentional_draw_loss'].includes(raw),
-            }
-          })
-          const reportedAgainstMe = (deckWithExtras.opponent_reported_matchups || []).map((m) => ({
-            opponent_player: (m.opponent_player ?? '').trim(),
-            result: (m.result || 'draw').toLowerCase(),
-            intentional_draw: Boolean(m.intentional_draw),
-          }))
+          const ourMatchups = (deckWithExtras.matchups || []).map((m) => matchupItemToRow(m))
+          const reportedAgainstMe = (deckWithExtras.opponent_reported_matchups || []).map((m) => matchupItemToRow(m))
           const byOpponent = new Map<string, { opponent_player: string; result: string; intentional_draw: boolean }>()
           for (const m of reportedAgainstMe) {
             if (m.opponent_player) byOpponent.set(m.opponent_player, m)
@@ -265,6 +240,12 @@ export default function UploadDeck() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           {isFeedback ? (
             <>
+              {info?.deck?.player && (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                  <span className="label">Player</span>
+                  <span>{info.deck.player}</span>
+                </label>
+              )}
               <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
                 <span className="label">Archetype / commander (EDH) *</span>
                 {(info?.format_id ?? '').toLowerCase() === 'edh' || (info?.format_id ?? '').toLowerCase() === 'commander' ? (
@@ -419,64 +400,34 @@ export default function UploadDeck() {
       </p>
 
       {isFeedback && showUploadDeckModal && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="upload-deck-list-title"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.6)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: '1rem',
-          }}
-          onClick={(e) => e.target === e.currentTarget && closeUploadDeckModal()}
+        <Modal
+          title="Upload deck list"
+          onClose={closeUploadDeckModal}
+          size={520}
         >
-          <div
-            className="card"
-            style={{
-              maxWidth: 520,
-              width: '100%',
-              maxHeight: '90vh',
-              overflow: 'auto',
-              margin: '1.5rem',
-              padding: '1.5rem',
-              borderRadius: 12,
-              background: 'var(--bg-card)',
-              boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 id="upload-deck-list-title" style={{ marginTop: 0, marginBottom: '1rem' }}>
-              Upload deck list
-            </h2>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '0.75rem' }}>
-              Paste a deck list in Moxfield style (section headers: Commander, Mainboard, Sideboard; lines like &quot;4 Lightning Bolt&quot;).
-            </p>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginBottom: '1rem' }}>
-              <span className="label">Deck list</span>
-              <textarea
-                value={uploadDeckListText}
-                onChange={(e) => setUploadDeckListText(e.target.value)}
-                placeholder={`Mainboard\n4 Lightning Bolt\n2 Counterspell\n\nSideboard\n2 Flusterstorm`}
-                rows={14}
-                style={{ width: '100%', boxSizing: 'border-box', fontFamily: 'inherit', fontSize: '0.9rem', resize: 'vertical' }}
-                aria-label="Deck list"
-              />
-            </label>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <button type="button" className="btn btn-primary" onClick={handleUploadDeckListSubmit} disabled={uploadingDeck}>
-                {uploadingDeck ? 'Uploading…' : 'Upload'}
-              </button>
-              <button type="button" className="btn" onClick={closeUploadDeckModal} disabled={uploadingDeck}>
-                Cancel
-              </button>
-            </div>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '0.75rem' }}>
+            Paste a deck list in Moxfield style (section headers: Commander, Mainboard, Sideboard; lines like &quot;4 Lightning Bolt&quot;).
+          </p>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginBottom: '1rem' }}>
+            <span className="label">Deck list</span>
+            <textarea
+              value={uploadDeckListText}
+              onChange={(e) => setUploadDeckListText(e.target.value)}
+              placeholder={`Mainboard\n4 Lightning Bolt\n2 Counterspell\n\nSideboard\n2 Flusterstorm`}
+              rows={14}
+              style={{ width: '100%', boxSizing: 'border-box', fontFamily: 'inherit', fontSize: '0.9rem', resize: 'vertical' }}
+              aria-label="Deck list"
+            />
+          </label>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button type="button" className="btn btn-primary" onClick={handleUploadDeckListSubmit} disabled={uploadingDeck}>
+              {uploadingDeck ? 'Uploading…' : 'Upload'}
+            </button>
+            <button type="button" className="btn" onClick={closeUploadDeckModal} disabled={uploadingDeck}>
+              Cancel
+            </button>
           </div>
-        </div>
+        </Modal>
       )}
       </div>
     </>

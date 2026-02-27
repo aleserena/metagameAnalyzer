@@ -17,42 +17,13 @@ import {
 import { getArchetypeDetail, getCardLookup, getDecks, getMatchupsSummary } from '../api'
 import type { CardLookupResult } from '../api'
 import type { ArchetypeDetail as ArchetypeDetailType, Deck } from '../types'
-import CardHover from '../components/CardHover'
 import ManaSymbols from '../components/ManaSymbols'
 import Skeleton from '../components/Skeleton'
+import TopCardsSection from '../components/TopCardsSection'
 import { MTG_COLOR_FILL } from '../constants'
 import { PieChartTooltipContent } from '../components/PieChartTooltip'
 import { reportError } from '../utils'
 
-const TYPE_ORDER = ['Land', 'Creature', 'Instant', 'Sorcery', 'Enchantment', 'Artifact', 'Planeswalker']
-function getCardTypes(typeLine: string | undefined): string[] {
-  if (!typeLine) return ['Other']
-  const upper = typeLine.toUpperCase()
-  const types = TYPE_ORDER.filter((t) => upper.includes(t.toUpperCase()))
-  return types.length > 0 ? types : ['Other']
-}
-function colorCategory(colors: string[] | undefined): string {
-  if (!colors || colors.length === 0) return 'Colorless'
-  if (colors.length >= 2) return 'Multicolor'
-  return colors[0]!
-}
-function cmcBucket(cmc: number | undefined): number {
-  if (typeof cmc !== 'number' || cmc < 0) return 0
-  return cmc >= 5 ? 5 : cmc
-}
-const COLOR_OPTIONS: { value: string; manaCost: string | null; title: string }[] = [
-  { value: 'W', manaCost: '{W}', title: 'White' },
-  { value: 'U', manaCost: '{U}', title: 'Blue' },
-  { value: 'B', manaCost: '{B}', title: 'Black' },
-  { value: 'R', manaCost: '{R}', title: 'Red' },
-  { value: 'G', manaCost: '{G}', title: 'Green' },
-  { value: 'Colorless', manaCost: '{C}', title: 'Colorless' },
-  { value: 'Multicolor', manaCost: null, title: 'Multicolor' },
-]
-const CMC_OPTIONS = [0, 1, 2, 3, 4, 5]
-const TYPE_OPTIONS = [...TYPE_ORDER, 'Other']
-const FILTER_SYMBOL_SIZE = 20
-const TOP_CARDS_PER_PAGE = 50
 const WUBRG_ORDER = ['W', 'U', 'B', 'R', 'G'] as const
 
 export default function ArchetypeDetail() {
@@ -63,10 +34,6 @@ export default function ArchetypeDetail() {
   const [notFound, setNotFound] = useState(false)
   const [cardMeta, setCardMeta] = useState<Record<string, CardLookupResult>>({})
   const [loadingCardMeta, setLoadingCardMeta] = useState(false)
-  const [filterColor, setFilterColor] = useState<string[]>([])
-  const [filterCmc, setFilterCmc] = useState<number[]>([])
-  const [filterType, setFilterType] = useState<string[]>([])
-  const [topCardsPage, setTopCardsPage] = useState(0)
   const [topDecks, setTopDecks] = useState<Deck[]>([])
   const [ignoreLands, setIgnoreLands] = useState(false)
   const [matchupRows, setMatchupRows] = useState<Awaited<ReturnType<typeof getMatchupsSummary>>['list']>([])
@@ -177,44 +144,6 @@ export default function ArchetypeDetail() {
   const hasType = a.type_distribution && Object.keys(a.type_distribution).length > 0
 
   const topMain = detail.top_cards_main ?? []
-  const hasAnyFilter = filterColor.length > 0 || filterCmc.length > 0 || filterType.length > 0
-  const filteredTopCards = topMain.filter((c) => {
-    const m = cardMeta[c.card]
-    if (!m || 'error' in m) return !hasAnyFilter
-    const colors = m.color_identity ?? m.colors ?? []
-    const cat = colorCategory(colors)
-    const bucket = cmcBucket(m.cmc)
-    const cardTypes = getCardTypes(m.type_line)
-    if (filterColor.length > 0 && !filterColor.includes(cat)) return false
-    if (filterCmc.length > 0 && !filterCmc.includes(bucket)) return false
-    if (filterType.length > 0 && !filterType.some((t) => cardTypes.includes(t))) return false
-    return true
-  })
-  const filteredTotal = filteredTopCards.length
-  const filteredPages = Math.ceil(filteredTotal / TOP_CARDS_PER_PAGE)
-  const safePage = Math.min(topCardsPage, Math.max(0, filteredPages - 1))
-  const topCardsSlice = filteredTopCards.slice(
-    safePage * TOP_CARDS_PER_PAGE,
-    (safePage + 1) * TOP_CARDS_PER_PAGE
-  )
-  const setFilterColorAndResetPage = (v: string[]) => {
-    setFilterColor(v)
-    setTopCardsPage(0)
-  }
-  const setFilterCmcAndResetPage = (v: number[]) => {
-    setFilterCmc(v)
-    setTopCardsPage(0)
-  }
-  const setFilterTypeAndResetPage = (v: string[]) => {
-    setFilterType(v)
-    setTopCardsPage(0)
-  }
-  const clearFilters = () => {
-    setFilterColor([])
-    setFilterCmc([])
-    setFilterType([])
-    setTopCardsPage(0)
-  }
 
   const archetypeManaCost = (() => {
     const dist = detail?.average_analysis?.color_distribution
@@ -505,185 +434,24 @@ export default function ArchetypeDetail() {
         )}
       </div>
 
-      <div className="chart-container" style={{ marginTop: '1.5rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-            <h3 style={{ margin: 0 }}>Most played cards</h3>
+      <div style={{ marginTop: '1.5rem' }}>
+        <TopCardsSection
+          title="Most played cards"
+          topCardsMain={topMain}
+          cardMeta={cardMeta}
+          loadingCardMeta={loadingCardMeta}
+          extraToolbar={
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.875rem' }}>
               <input
                 type="checkbox"
                 checked={ignoreLands}
-                onChange={(e) => {
-                  setIgnoreLands(e.target.checked)
-                  setTopCardsPage(0)
-                }}
+                onChange={(e) => setIgnoreLands(e.target.checked)}
                 aria-label="Ignore lands"
               />
               Ignore lands
             </label>
-          </div>
-          {topMain.length > 0 && (
-            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-              <span style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
-                {filteredTotal === 0 ? '0' : `${safePage * TOP_CARDS_PER_PAGE + 1}–${Math.min((safePage + 1) * TOP_CARDS_PER_PAGE, filteredTotal)}`} of {filteredTotal}
-              </span>
-              <button
-                type="button"
-                className="btn"
-                style={{ padding: '0.2rem 0.5rem', fontSize: '0.8rem' }}
-                disabled={safePage === 0}
-                onClick={() => setTopCardsPage((p) => Math.max(0, p - 1))}
-              >
-                Prev
-              </button>
-              <button
-                type="button"
-                className="btn"
-                style={{ padding: '0.2rem 0.5rem', fontSize: '0.8rem' }}
-                disabled={filteredTotal <= TOP_CARDS_PER_PAGE || safePage >= filteredPages - 1}
-                onClick={() => setTopCardsPage((p) => Math.min(filteredPages - 1, p + 1))}
-              >
-                Next
-              </button>
-            </div>
-          )}
-        </div>
-
-        {topMain.length > 0 && (
-          <div
-            className="top-cards-filters"
-            style={{
-              padding: '0.5rem 0.75rem',
-              background: 'var(--bg)',
-              border: '1px solid var(--border)',
-              borderRadius: 8,
-              marginBottom: '1rem',
-              fontSize: '0.8125rem',
-            }}
-          >
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
-              <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Filter:</span>
-              <span style={{ fontWeight: 600 }}>Color</span>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
-                {COLOR_OPTIONS.map((opt) => (
-                  <label key={opt.value} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', cursor: 'pointer', fontSize: '0.8rem' }} title={opt.title}>
-                    <input
-                      type="checkbox"
-                      checked={filterColor.includes(opt.value)}
-                      onChange={(e) => {
-                        if (e.target.checked) setFilterColorAndResetPage([...filterColor, opt.value])
-                        else setFilterColorAndResetPage(filterColor.filter((x) => x !== opt.value))
-                      }}
-                      disabled={loadingCardMeta}
-                    />
-                    {opt.manaCost ? (
-                      <ManaSymbols manaCost={opt.manaCost} size={FILTER_SYMBOL_SIZE} />
-                    ) : (
-                      <span
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          width: FILTER_SYMBOL_SIZE,
-                          height: FILTER_SYMBOL_SIZE,
-                          borderRadius: '50%',
-                          background: '#c9b037',
-                          color: '#1a1a1a',
-                          fontSize: 11,
-                          fontWeight: 700,
-                        }}
-                      >
-                        M
-                      </span>
-                    )}
-                  </label>
-                ))}
-              </div>
-              <span style={{ fontWeight: 600 }}>Cost</span>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
-                {CMC_OPTIONS.map((opt) => (
-                  <label key={opt} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', cursor: 'pointer', fontSize: '0.8rem' }} title={opt === 5 ? '5+' : `CMC ${opt}`}>
-                    <input
-                      type="checkbox"
-                      checked={filterCmc.includes(opt)}
-                      onChange={(e) => {
-                        if (e.target.checked) setFilterCmcAndResetPage([...filterCmc, opt])
-                        else setFilterCmcAndResetPage(filterCmc.filter((x) => x !== opt))
-                      }}
-                      disabled={loadingCardMeta}
-                    />
-                    <ManaSymbols manaCost={`{${opt}}`} size={FILTER_SYMBOL_SIZE} />
-                  </label>
-                ))}
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
-                <span style={{ fontWeight: 600 }}>Type</span>
-                {TYPE_OPTIONS.map((opt) => (
-                  <label key={opt} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', cursor: 'pointer', fontSize: '0.8rem' }}>
-                    <input
-                      type="checkbox"
-                      checked={filterType.includes(opt)}
-                      onChange={(e) => {
-                        if (e.target.checked) setFilterTypeAndResetPage([...filterType, opt])
-                        else setFilterTypeAndResetPage(filterType.filter((x) => x !== opt))
-                      }}
-                      disabled={loadingCardMeta}
-                    />
-                    {opt}
-                  </label>
-                ))}
-              </div>
-              <button
-                type="button"
-                className="btn"
-                style={{ padding: '0.2rem 0.5rem', fontSize: '0.8rem' }}
-                onClick={clearFilters}
-                disabled={!hasAnyFilter}
-              >
-                Clear filters
-              </button>
-            </div>
-          </div>
-        )}
-
-        {loadingCardMeta && <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '0.5rem' }}>Loading card data…</p>}
-        {hasAnyFilter && filteredTotal === 0 && !loadingCardMeta && (
-          <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>No cards match the current filters.</p>
-        )}
-        {detail.top_cards_main.length === 0 ? (
-          <p style={{ color: 'var(--text-muted)' }}>No card data.</p>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Card</th>
-                  <th style={{ textAlign: 'right' }}>In decks</th>
-                  <th style={{ textAlign: 'right' }}>Total copies</th>
-                </tr>
-              </thead>
-              <tbody>
-                {topCardsSlice.map((c, i) => (
-                  <tr key={c.card}>
-                    <td style={{ color: 'var(--text-muted)' }}>{safePage * TOP_CARDS_PER_PAGE + i + 1}</td>
-                    <td>
-                      <CardHover cardName={c.card}>
-                        <span style={{ cursor: 'pointer', color: 'var(--accent)' }}>{c.card}</span>
-                      </CardHover>
-                    </td>
-                    <td style={{ textAlign: 'right' }}>
-                      {c.decks > 0
-                        ? `${Number.isInteger(c.total_copies / c.decks) ? c.total_copies / c.decks : (c.total_copies / c.decks).toFixed(1)} in ${c.play_rate_pct}% of decks`
-                        : `— in ${c.play_rate_pct}% of decks`}
-                    </td>
-                    <td style={{ textAlign: 'right' }}>{c.total_copies}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+          }
+        />
       </div>
     </div>
   )

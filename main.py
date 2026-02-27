@@ -2,7 +2,6 @@
 """CLI for MTGTop8 scraper and metagame analyzer."""
 
 import argparse
-import json
 import sys
 
 
@@ -34,6 +33,7 @@ def main() -> int:
 
     if args.command == "scrape":
         from src.mtgtop8.scraper import scrape
+        from src.mtgtop8.storage import save_json
 
         event_ids = None
         if args.events:
@@ -51,17 +51,16 @@ def main() -> int:
             on_progress=on_progress,
         )
         data = [d.to_dict() for d in decks]
-        with open(args.output, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        save_json(args.output, data, indent=2, ensure_ascii=False)
         print(f"Saved {len(decks)} decks to {args.output}", file=sys.stderr)
         return 0
 
     if args.command == "analyze":
         from src.mtgtop8.analyzer import analyze, write_report
         from src.mtgtop8.models import Deck
+        from src.mtgtop8.storage import load_json
 
-        with open(args.input, encoding="utf-8") as f:
-            data = json.load(f)
+        data = load_json(args.input, default=[], suppress_errors=False) or []
         decks = [Deck.from_dict(d) for d in data]
         report = analyze(decks, placement_weighted=args.placement_weighted)
         write_report(report, args.output)

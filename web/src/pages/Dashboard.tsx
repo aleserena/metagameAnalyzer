@@ -1,34 +1,25 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { getMetagame, getEvents, getDateRange } from '../api'
+import { getMetagame } from '../api'
 import type { MetagameReport, Event } from '../types'
+import { useEventMetadata } from '../hooks/useEventMetadata'
 import CardHover from '../components/CardHover'
 import EventSelector from '../components/EventSelector'
 import { Skeleton, SkeletonList } from '../components/Skeleton'
 import { reportError } from '../utils'
 
 export default function Dashboard() {
+  const { events, maxDate, lastEventDate, error: eventMetadataError } = useEventMetadata()
   const [metagame, setMetagame] = useState<MetagameReport | null>(null)
-  const [events, setEvents] = useState<Event[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [ignoreLands, setIgnoreLands] = useState(false)
   const [eventIds, setEventIds] = useState<(number | string)[]>([])
-  const [maxDate, setMaxDate] = useState<string | null>(null)
-  const [lastEventDate, setLastEventDate] = useState<string | null>(null)
 
   useEffect(() => {
-    getEvents()
-      .then((r) => setEvents(r.events))
-      .catch((e) => toast.error(reportError(e)))
-    getDateRange()
-      .then((r) => {
-        setMaxDate(r.max_date)
-        setLastEventDate(r.last_event_date)
-      })
-      .catch((e) => toast.error(reportError(e)))
-  }, [])
+    if (eventMetadataError) toast.error(reportError(new Error(eventMetadataError)))
+  }, [eventMetadataError])
 
   useEffect(() => {
     setLoading(true)

@@ -17,6 +17,8 @@ export interface Deck {
   sideboard: DeckCard[]
   commanders: string[]
   archetype: string | null
+  /** Commander-based color identity (WUBRG), when available. */
+  color_identity?: string[]
   duplicate_info?: DeckDuplicateInfo
   /** True if this player has an email stored (admin event view only). */
   has_email?: boolean
@@ -38,6 +40,8 @@ export interface ArchetypeDistribution {
   archetype: string
   count: number
   pct: number
+  /** Commander-based color identity (WUBRG), when available. */
+  colors?: string[]
 }
 
 export interface TopCard {

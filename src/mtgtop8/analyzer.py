@@ -1,9 +1,8 @@
 """Metagame analysis for scraped decks."""
-
-import json
 from typing import Any, Callable
 
 from .models import Deck
+from .storage import save_json
 
 # Rank to weight for placement-weighted stats (higher = better)
 RANK_WEIGHTS: dict[str, float] = {
@@ -662,5 +661,4 @@ def find_duplicate_decks(decks: list[Deck]) -> dict[int, list[int]]:
 
 def write_report(report: dict[str, Any], path: str) -> None:
     """Write analysis report as JSON."""
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2, ensure_ascii=False)
+    save_json(path, report, indent=2, ensure_ascii=False)

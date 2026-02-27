@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { dateMinusDays, dateSortKey, dateInRange, firstDayOfYear, getErrorMessage, pluralizeType, reportError } from './utils'
+import { dateMinusDays, dateSortKey, dateInRange, firstDayOfYear, getDateRangeFromPreset, getErrorMessage, pluralizeType, reportError } from './utils'
 
 describe('getErrorMessage', () => {
   const genericMessage = 'There was an issue with the application, please refresh the page'
@@ -88,6 +88,20 @@ describe('firstDayOfYear', () => {
   it('returns 01/01/YY for given date', () => {
     expect(firstDayOfYear('15/06/26')).toBe('01/01/26')
     expect(firstDayOfYear('01/12/25')).toBe('01/01/25')
+  })
+})
+
+describe('getDateRangeFromPreset', () => {
+  it('returns null range for "all" or missing maxDate', () => {
+    expect(getDateRangeFromPreset(null, null, 'all')).toEqual({ dateFrom: null, dateTo: null })
+    expect(getDateRangeFromPreset('15/06/26', null, 'all')).toEqual({ dateFrom: null, dateTo: null })
+  })
+  it('returns lastEventDate for "lastEvent"', () => {
+    expect(getDateRangeFromPreset('15/06/26', '10/06/26', 'lastEvent')).toEqual({ dateFrom: '10/06/26', dateTo: '10/06/26' })
+  })
+  it('computes from/to for presets', () => {
+    expect(getDateRangeFromPreset('15/06/26', null, 'thisYear')).toEqual({ dateFrom: '01/01/26', dateTo: '15/06/26' })
+    expect(getDateRangeFromPreset('15/06/26', null, '2weeks')).toEqual({ dateFrom: '01/06/26', dateTo: '15/06/26' })
   })
 })
 

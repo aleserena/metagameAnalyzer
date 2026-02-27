@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { getMatchupsSummary, getEvents, getDateRange } from '../api'
-import type { Event } from '../types'
+import { getMatchupsSummary } from '../api'
 import EventSelector from '../components/EventSelector'
+import FiltersPanel from '../components/FiltersPanel'
+import { useEventMetadata } from '../hooks/useEventMetadata'
 import Skeleton from '../components/Skeleton'
+import toast from 'react-hot-toast'
 import { reportError } from '../utils'
 
 const DROPDOWN_MAX_HEIGHT = 240
@@ -27,12 +29,10 @@ function heatmapColor(pct: number): string {
 }
 
 export default function Matchups() {
+  const { events, maxDate, lastEventDate, error: eventMetadataError } = useEventMetadata()
   const [summary, setSummary] = useState<Awaited<ReturnType<typeof getMatchupsSummary>> | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [events, setEvents] = useState<Event[]>([])
-  const [maxDate, setMaxDate] = useState<string | null>(null)
-  const [lastEventDate, setLastEventDate] = useState<string | null>(null)
   const [formatId, setFormatId] = useState('')
   const [eventIds, setEventIds] = useState<(number | string)[]>([])
   const [selectedArchetypes, setSelectedArchetypes] = useState<string[]>([])
@@ -45,12 +45,8 @@ export default function Matchups() {
   const [archetypeMaxHeight, setArchetypeMaxHeight] = useState(DROPDOWN_MAX_HEIGHT)
 
   useEffect(() => {
-    getEvents().then((r) => setEvents(r.events))
-    getDateRange().then((r) => {
-      setMaxDate(r.max_date)
-      setLastEventDate(r.last_event_date)
-    })
-  }, [])
+    if (eventMetadataError) toast.error(reportError(new Error(eventMetadataError)))
+  }, [eventMetadataError])
 
   useEffect(() => {
     setLoading(true)
@@ -112,24 +108,7 @@ export default function Matchups() {
 
       <div className="table-wrap-outer" style={{ marginBottom: '1.5rem' }}>
         <div className="table-wrap" style={{ overflow: 'visible' }}>
-          <div
-            className="filters-group"
-            style={{
-              display: 'flex',
-              gap: '1rem',
-              flexWrap: 'wrap',
-              alignItems: 'flex-end',
-              padding: '1rem',
-              background: 'var(--bg)',
-              border: '1px solid var(--border)',
-              borderRadius: 8,
-              width: '100%',
-              boxSizing: 'border-box',
-            }}
-          >
-            <span style={{ width: '100%', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Filters
-            </span>
+          <FiltersPanel>
             <div className="form-group" style={{ marginBottom: 0 }}>
               <label htmlFor="matchups-format">Format</label>
               <select
@@ -256,7 +235,7 @@ export default function Matchups() {
               maxDate={maxDate}
               lastEventDate={lastEventDate}
             />
-          </div>
+          </FiltersPanel>
         </div>
       </div>
 
