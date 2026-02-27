@@ -1,12 +1,12 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class IgnoreLandsCardsBody(BaseModel):
-    cards: list[str] = []
+    cards: list[str] = Field(default_factory=list)
 
 
 class RankWeightsBody(BaseModel):
-    weights: dict[str, float] = {}
+    weights: dict[str, float] = Field(default_factory=dict)
 
 
 class MatchupsMinMatchesBody(BaseModel):

@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class EventResponse(BaseModel):
@@ -32,16 +32,20 @@ class NewEventBody(BaseModel):
 
 
 class LoadBody(BaseModel):
-    decks: list[dict] = []
+    decks: list[dict] = Field(default_factory=list)
     new_event: NewEventBody | None = None
 
 
 class ScrapeBody(BaseModel):
-    format_id: str
+    # Accepts JSON key "format" (frontend) while exposing field name "format_id" in Python.
+    format_id: str = Field(alias="format")
     period: str | None = None
     meta: int | None = None
     store: str | None = None
     event_ids: list[int] | None = None
     ignore_existing_events: bool = False
     force_replace: bool = False
+
+    class Config:
+        allow_population_by_field_name = True
 

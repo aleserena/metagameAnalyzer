@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class SubmitDeckBody(BaseModel):
@@ -6,8 +6,8 @@ class SubmitDeckBody(BaseModel):
     player: str = ""
     name: str = ""
     rank: str = ""
-    mainboard: list[dict] = []  # [{"qty": int, "card": str}, ...]
-    sideboard: list[dict] = []
+    mainboard: list[dict] = Field(default_factory=list)  # [{"qty": int, "card": str}, ...]
+    sideboard: list[dict] = Field(default_factory=list)
     commanders: list[str] | None = None
 
 
@@ -20,8 +20,8 @@ class DeckListBody(BaseModel):
     """Deck list update via feedback link (mainboard, sideboard, commanders)."""
 
     mainboard: list[DeckCardUpdate]
-    sideboard: list[DeckCardUpdate] = []
-    commanders: list[str] = []
+    sideboard: list[DeckCardUpdate] = Field(default_factory=list)
+    commanders: list[str] = Field(default_factory=list)
 
 
 class UpdateDeckBody(BaseModel):

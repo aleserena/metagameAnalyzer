@@ -7,6 +7,7 @@ import { useEventMetadata } from '../hooks/useEventMetadata'
 import { useDebouncedSearchParams } from '../hooks/useDebouncedSearchParams'
 import EventSelector from '../components/EventSelector'
 import CardSearchInput from '../components/CardSearchInput'
+import FiltersPanel from '../components/FiltersPanel'
 import { Skeleton, SkeletonTable } from '../components/Skeleton'
 import ManaSymbols from '../components/ManaSymbols'
 import { reportError } from '../utils'
@@ -198,24 +199,7 @@ export default function Decks() {
 
       <div className="table-wrap-outer" style={{ marginBottom: '1.5rem' }}>
         <div className="table-wrap" style={{ overflow: 'visible' }}>
-          <div
-            className="filters-group"
-            style={{
-              display: 'flex',
-              gap: '1rem',
-              flexWrap: 'wrap',
-              alignItems: 'flex-end',
-              padding: '1rem',
-              background: 'var(--bg)',
-              border: '1px solid var(--border)',
-              borderRadius: 8,
-              width: '100%',
-              boxSizing: 'border-box',
-            }}
-          >
-            <span style={{ width: '100%', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Filters
-            </span>
+          <FiltersPanel>
             <div className="form-group" style={{ marginBottom: 0 }}>
               <label htmlFor="decks-name">Deck name</label>
               <input
@@ -302,7 +286,7 @@ export default function Decks() {
                 Clear filters
               </button>
             )}
-          </div>
+          </FiltersPanel>
         </div>
       </div>
 

@@ -26,10 +26,15 @@ import type { EventWithOrigin } from '../api'
 import type { Deck } from '../types'
 import { useAuth } from '../contexts/AuthContext'
 import { useFetch } from '../hooks/useFetch'
+import Modal from '../components/Modal'
+import UpdateDeckForm from '../components/event/UpdateDeckForm'
+import UploadDeckForm from '../components/event/UploadDeckForm'
+import MatchupsForm from '../components/event/MatchupsForm'
 import PageError from '../components/PageError'
 import PageSkeleton from '../components/PageSkeleton'
 import CardSearchInput from '../components/CardSearchInput'
 import { parseMoxfieldDeckList } from '../lib/deckListParser'
+import { matchupItemToRow } from '../lib/matchups'
 import { reportError, ddMmYyToIso, isoToDdMmYy } from '../utils'
 
 /** Coerce value for display; avoid [object Object]. */
@@ -386,42 +391,14 @@ export default function EventDetail() {
       .finally(() => setUploadingDeck(false))
   }
 
-  const MATCHUP_RESULT_OPTIONS = [
-    { value: 'win', label: 'You win' },
-    { value: 'loss', label: 'You lose' },
-    { value: 'draw', label: 'Draw' },
-    { value: 'intentional_draw', label: 'Intentional draw' },
-    { value: 'intentional_draw_win', label: 'Intentional draw (you win)' },
-    { value: 'intentional_draw_loss', label: 'Intentional draw (you lose)' },
-  ] as const
-
   const openUpdateMatchupsModal = (deckId: number) => {
     setMatchupsDeckId(deckId)
     setMatchupsList([])
     setLoadingMatchups(true)
     getDeckMatchups(deckId)
       .then((res) => {
-        const ourMatchups = (res.matchups || []).map((m) => {
-          const raw = (m.result || '').trim().toLowerCase()
-          let result: string = 'draw'
-          if (raw === 'intentional_draw' || raw === 'intentional_draw_win' || raw === 'intentional_draw_loss') {
-            result = raw
-          } else if (raw) {
-            if (raw === 'win' || raw === '2-1' || raw === '1-0' || raw === '2-0') result = 'win'
-            else if (raw === 'loss' || raw === '1-2' || raw === '0-1' || raw === '0-2') result = 'loss'
-            else if (raw === 'draw' || raw === '1-1' || raw === '0-0') result = 'draw'
-          }
-          return {
-            opponent_player: (m.opponent_player ?? '').trim(),
-            result,
-            intentional_draw: ['intentional_draw', 'intentional_draw_win', 'intentional_draw_loss'].includes(raw),
-          }
-        })
-        const reportedAgainstMe = (res.opponent_reported_matchups || []).map((m) => ({
-          opponent_player: (m.opponent_player ?? '').trim(),
-          result: (m.result || 'draw').toLowerCase(),
-          intentional_draw: Boolean(m.intentional_draw),
-        }))
+        const ourMatchups = (res.matchups || []).map((m) => matchupItemToRow(m))
+        const reportedAgainstMe = (res.opponent_reported_matchups || []).map((m) => matchupItemToRow(m))
         const byOpponent = new Map<string, { opponent_player: string; result: string; intentional_draw: boolean }>()
         for (const m of reportedAgainstMe) {
           if (m.opponent_player) byOpponent.set(m.opponent_player, m)
@@ -1052,391 +1029,122 @@ export default function EventDetail() {
       )}
 
       {canEditEvent && editingDeckId != null && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="update-deck-title"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.6)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: '1rem',
-          }}
-          onClick={(e) => e.target === e.currentTarget && closeUpdateDeck()}
-        >
-          <div
-            className="card"
-            style={{
-              maxWidth: 420,
-              width: '100%',
-              maxHeight: '90vh',
-              overflow: 'auto',
-              margin: '1.5rem',
-              padding: '1.5rem',
-              borderRadius: 12,
-              background: 'var(--bg-card)',
-              boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 id="update-deck-title" style={{ marginTop: 0, marginBottom: '1rem' }}>Update deck</h2>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '1rem' }}>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                <span className="label">Deck name</span>
-                <input
-                  type="text"
-                  value={editDeckName}
-                  onChange={(e) => setEditDeckName(e.target.value)}
-                  style={{ width: '100%', boxSizing: 'border-box' }}
-                  placeholder="Deck name"
-                />
-              </label>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                <span className="label">Player</span>
-                <input
-                  type="text"
-                  value={editDeckPlayer}
-                  onChange={(e) => setEditDeckPlayer(e.target.value)}
-                  style={{ width: '100%', boxSizing: 'border-box' }}
-                  placeholder="Player"
-                />
-              </label>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                <span className="label">Rank</span>
-                <input
-                  type="text"
-                  value={editDeckRank}
-                  onChange={(e) => setEditDeckRank(e.target.value)}
-                  style={{ width: '100%', boxSizing: 'border-box' }}
-                  placeholder="e.g. 1, 2, 3-4, 5-8, 9-16, 17-32, 33-64, 65-128"
-                />
-              </label>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                <span className="label">
-                  {(event?.format_id ?? '').toLowerCase() === 'edh' || (event?.format_id ?? '').toLowerCase() === 'commander'
-                    ? 'Archetype (commander)'
-                    : 'Archetype'}
-                </span>
-                {(event?.format_id ?? '').toLowerCase() === 'edh' || (event?.format_id ?? '').toLowerCase() === 'commander' ? (
-                  <CardSearchInput
-                    value={editDeckArchetype}
-                    onChange={setEditDeckArchetype}
-                    placeholder="Search commander..."
-                    aria-label="Archetype (commander)"
-                  />
-                ) : (
-                  <input
-                    type="text"
-                    value={editDeckArchetype}
-                    onChange={(e) => setEditDeckArchetype(e.target.value)}
-                    style={{ width: '100%', boxSizing: 'border-box' }}
-                    placeholder="Archetype"
-                  />
-                )}
-              </label>
-            </div>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <button type="button" className="btn" onClick={saveDeckUpdate} disabled={savingDeck}>
-                {savingDeck ? 'Saving…' : 'Save'}
-              </button>
-              <button type="button" className="btn" onClick={closeUpdateDeck}>
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
+        <Modal title="Update deck" onClose={closeUpdateDeck} size={420}>
+          <UpdateDeckForm
+            name={editDeckName}
+            player={editDeckPlayer}
+            rank={editDeckRank}
+            archetype={editDeckArchetype}
+            isEDH={isEDH}
+            onNameChange={setEditDeckName}
+            onPlayerChange={setEditDeckPlayer}
+            onRankChange={setEditDeckRank}
+            onArchetypeChange={setEditDeckArchetype}
+            onSave={saveDeckUpdate}
+            onCancel={closeUpdateDeck}
+            saving={savingDeck}
+          />
+        </Modal>
       )}
 
       {canEditEvent && uploadDeckForDeckId != null && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="upload-deck-title"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.6)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: '1rem',
-          }}
-          onClick={(e) => e.target === e.currentTarget && closeUploadDeckModal()}
+        <Modal
+          title={`Upload deck ${decks.find((x) => x.deck_id === uploadDeckForDeckId) ? `— ${cellStr(decks.find((x) => x.deck_id === uploadDeckForDeckId)?.name) || 'Unnamed'}` : ''}`}
+          onClose={closeUploadDeckModal}
+          size={520}
         >
-          <div
-            className="card"
-            style={{
-              maxWidth: 520,
-              width: '100%',
-              maxHeight: '90vh',
-              overflow: 'auto',
-              margin: '1.5rem',
-              padding: '1.5rem',
-              borderRadius: 12,
-              background: 'var(--bg-card)',
-              boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 id="upload-deck-title" style={{ marginTop: 0, marginBottom: '1rem' }}>
-              Upload deck {decks.find((x) => x.deck_id === uploadDeckForDeckId) ? `— ${cellStr(decks.find((x) => x.deck_id === uploadDeckForDeckId)?.name) || 'Unnamed'}` : ''}
-            </h2>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '0.75rem' }}>
-              Paste a deck list in Moxfield style (section headers: Commander, Mainboard, Sideboard; lines like &quot;4 Lightning Bolt&quot;).
-            </p>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginBottom: '1rem' }}>
-              <span className="label">Deck list</span>
-              <textarea
-                value={uploadDeckListText}
-                onChange={(e) => setUploadDeckListText(e.target.value)}
-                placeholder={`Mainboard\n4 Lightning Bolt\n2 Counterspell\n\nSideboard\n2 Flusterstorm`}
-                rows={14}
-                style={{ width: '100%', boxSizing: 'border-box', fontFamily: 'inherit', fontSize: '0.9rem', resize: 'vertical' }}
-                aria-label="Deck list"
-              />
-            </label>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <button type="button" className="btn btn-primary" onClick={handleUploadDeckSubmit} disabled={uploadingDeck}>
-                {uploadingDeck ? 'Uploading…' : 'Upload'}
-              </button>
-              <button type="button" className="btn" onClick={closeUploadDeckModal} disabled={uploadingDeck}>
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
+          <UploadDeckForm
+            deckListText={uploadDeckListText}
+            onDeckListChange={setUploadDeckListText}
+            onSubmit={handleUploadDeckSubmit}
+            onCancel={closeUploadDeckModal}
+            uploading={uploadingDeck}
+          />
+        </Modal>
       )}
 
       {matchupsDeckId != null && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="update-matchups-title"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.6)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: '1rem',
-          }}
-          onClick={(e) => e.target === e.currentTarget && !savingMatchups && closeUpdateMatchupsModal()}
+        <Modal
+          title={`Update matchups ${decks.find((d) => d.deck_id === matchupsDeckId) ? `— ${cellStr(decks.find((d) => d.deck_id === matchupsDeckId)?.name) || 'Unnamed'}` : ''}`}
+          onClose={() => !savingMatchups && closeUpdateMatchupsModal()}
+          closeOnOverlayClick={!savingMatchups}
+          size={520}
         >
-          <div
-            className="card"
-            style={{
-              maxWidth: 520,
-              width: '100%',
-              maxHeight: '90vh',
-              overflow: 'auto',
-              margin: '1.5rem',
-              padding: '1.5rem',
-              borderRadius: 12,
-              background: 'var(--bg-card)',
-              boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 id="update-matchups-title" style={{ marginTop: 0, marginBottom: '1rem' }}>
-              Update matchups {decks.find((d) => d.deck_id === matchupsDeckId) ? `— ${cellStr(decks.find((d) => d.deck_id === matchupsDeckId)?.name) || 'Unnamed'}` : ''}
-            </h2>
-            <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
-              Result is for <strong>this deck (you)</strong> vs the selected opponent. Use &quot;Intentional draw&quot; for agreed draws; use &quot;Intentional draw (you win/lose)&quot; when the result is ID but tiebreakers assign a win or loss. Opponent name must match a player in this event.
-            </p>
-            {loadingMatchups ? (
-              <p>Loading…</p>
-            ) : (
-              <>
-                <div style={{ marginBottom: '1rem' }}>
-                  {matchupsList.map((m, i) => (
-                    <div key={i} style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center', marginBottom: '0.5rem' }}>
-                      <select
-                        value={m.opponent_player}
-                        onChange={(e) => updateMatchupRow(i, 'opponent_player', e.target.value)}
-                        style={{ minWidth: 140 }}
-                        disabled={savingMatchups}
-                        aria-label="Opponent"
-                      >
-                        <option value="">Select opponent</option>
-                        {matchupsOpponentOptions.map((name) => (
-                          <option key={name} value={name}>{name}</option>
-                        ))}
-                      </select>
-                      <select
-                        value={m.result || 'draw'}
-                        onChange={(e) => updateMatchupRow(i, 'result', e.target.value)}
-                        disabled={savingMatchups}
-                        style={{ minWidth: 200 }}
-                        aria-label="Result (you vs this opponent)"
-                        title="Result for you vs this opponent"
-                      >
-                        {MATCHUP_RESULT_OPTIONS.map((opt) => (
-                          <option key={opt.value} value={opt.value}>{opt.label}</option>
-                        ))}
-                      </select>
-                      <button type="button" className="btn" style={{ padding: '0.2rem 0.5rem' }} onClick={() => removeMatchupRow(i)} disabled={savingMatchups}>
-                        Remove
-                      </button>
-                    </div>
-                  ))}
-                  <button type="button" className="btn" style={{ marginTop: '0.35rem' }} onClick={addMatchupRow} disabled={savingMatchups || matchupsList.length >= 10}>
-                    Add matchup
-                  </button>
-                </div>
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  <button type="button" className="btn btn-primary" onClick={handleSaveMatchups} disabled={savingMatchups}>
-                    {savingMatchups ? 'Saving…' : 'Save'}
-                  </button>
-                  <button type="button" className="btn" onClick={closeUpdateMatchupsModal} disabled={savingMatchups}>
-                    Cancel
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
+          <MatchupsForm
+            matchupsList={matchupsList}
+            opponentOptions={matchupsOpponentOptions}
+            loading={loadingMatchups}
+            saving={savingMatchups}
+            onUpdateRow={updateMatchupRow}
+            onRemoveRow={removeMatchupRow}
+            onAddRow={addMatchupRow}
+            onSave={handleSaveMatchups}
+            onCancel={closeUpdateMatchupsModal}
+          />
+        </Modal>
       )}
 
       {confirmDeleteEvent && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="confirm-delete-event-title"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.6)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: '1rem',
-          }}
-          onClick={(e) => e.target === e.currentTarget && setConfirmDeleteEvent(false)}
+        <Modal
+          title="Delete event?"
+          onClose={() => setConfirmDeleteEvent(false)}
+          danger
+          size={400}
         >
-          <div
-            className="card"
-            style={{
-              maxWidth: 400,
-              width: '100%',
-              padding: '1.5rem',
-              borderRadius: 12,
-              background: 'var(--bg-card)',
-              boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 id="confirm-delete-event-title" style={{ marginTop: 0, marginBottom: '0.75rem' }}>Delete event?</h2>
-            <p style={{ color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
-              Are you sure you want to delete this event and all its decks? This cannot be undone.
-            </p>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <button type="button" className="btn" style={{ color: 'var(--danger, #c00)' }} onClick={handleDeleteConfirm} disabled={deleting}>
-                {deleting ? 'Deleting…' : 'Delete event'}
-              </button>
-              <button type="button" className="btn" onClick={() => setConfirmDeleteEvent(false)} disabled={deleting}>
-                Cancel
-              </button>
-            </div>
+          <p style={{ color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
+            Are you sure you want to delete this event and all its decks? This cannot be undone.
+          </p>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button type="button" className="btn" style={{ color: 'var(--danger, #c00)' }} onClick={handleDeleteConfirm} disabled={deleting}>
+              {deleting ? 'Deleting…' : 'Delete event'}
+            </button>
+            <button type="button" className="btn" onClick={() => setConfirmDeleteEvent(false)} disabled={deleting}>
+              Cancel
+            </button>
           </div>
-        </div>
+        </Modal>
       )}
 
       {confirmDeleteDeckId != null && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="confirm-delete-deck-title"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.6)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: '1rem',
-          }}
-          onClick={(e) => e.target === e.currentTarget && setConfirmDeleteDeckId(null)}
+        <Modal
+          title="Delete deck?"
+          onClose={() => setConfirmDeleteDeckId(null)}
+          danger
+          size={400}
         >
-          <div
-            className="card"
-            style={{
-              maxWidth: 400,
-              width: '100%',
-              padding: '1.5rem',
-              borderRadius: 12,
-              background: 'var(--bg-card)',
-              boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 id="confirm-delete-deck-title" style={{ marginTop: 0, marginBottom: '0.75rem' }}>Delete deck?</h2>
-            <p style={{ color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
-              Are you sure you want to delete this deck? This cannot be undone.
-            </p>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <button type="button" className="btn" style={{ color: 'var(--danger, #c00)' }} onClick={handleDeleteDeckConfirm} disabled={deletingDeckId !== null}>
-                {deletingDeckId === confirmDeleteDeckId ? 'Deleting…' : 'Delete deck'}
-              </button>
-              <button type="button" className="btn" onClick={() => setConfirmDeleteDeckId(null)} disabled={deletingDeckId !== null}>
-                Cancel
-              </button>
-            </div>
+          <p style={{ color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
+            Are you sure you want to delete this deck? This cannot be undone.
+          </p>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button type="button" className="btn" style={{ color: 'var(--danger, #c00)' }} onClick={handleDeleteDeckConfirm} disabled={deletingDeckId !== null}>
+              {deletingDeckId === confirmDeleteDeckId ? 'Deleting…' : 'Delete deck'}
+            </button>
+            <button type="button" className="btn" onClick={() => setConfirmDeleteDeckId(null)} disabled={deletingDeckId !== null}>
+              Cancel
+            </button>
           </div>
-        </div>
+        </Modal>
       )}
 
       {blocker.state === 'blocked' && hasUnsavedEdits && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="unsaved-changes-title"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.6)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: '1rem',
-          }}
-          onClick={(e) => e.target === e.currentTarget && blocker.reset()}
+        <Modal
+          title="Unsaved changes"
+          onClose={() => blocker.reset?.()}
+          closeOnOverlayClick={false}
+          size={400}
         >
-          <div
-            className="card"
-            style={{
-              maxWidth: 400,
-              width: '100%',
-              padding: '1.5rem',
-              borderRadius: 12,
-              background: 'var(--bg-card)',
-              boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 id="unsaved-changes-title" style={{ marginTop: 0, marginBottom: '0.75rem' }}>Unsaved changes</h2>
-            <p style={{ color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
-              You have unsaved changes. Do you want to leave this page? Your changes will be lost.
-            </p>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <button type="button" className="btn btn-primary" onClick={() => blocker.proceed()}>
-                Leave
-              </button>
-              <button type="button" className="btn" onClick={() => blocker.reset()}>
-                Stay
-              </button>
-            </div>
+          <p style={{ color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
+            You have unsaved changes. Do you want to leave this page? Your changes will be lost.
+          </p>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button type="button" className="btn btn-primary" onClick={() => blocker.proceed?.()}>
+              Leave
+            </button>
+            <button type="button" className="btn" onClick={() => blocker.reset?.()}>
+              Stay
+            </button>
           </div>
-        </div>
+        </Modal>
       )}
 
       </div>

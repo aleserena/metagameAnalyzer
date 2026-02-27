@@ -6,7 +6,8 @@ import { useEventMetadata } from '../hooks/useEventMetadata'
 import type { PlayerStats } from '../types'
 import Skeleton from '../components/Skeleton'
 import { useFetch } from '../hooks/useFetch'
-import { dateMinusDays, firstDayOfYear, reportError } from '../utils'
+import { getDateRangeFromPreset, reportError } from '../utils'
+import type { DatePreset } from '../utils'
 
 type SortKey = 'player' | 'wins' | 'top2' | 'top4' | 'top8' | 'points' | 'deck_count'
 
@@ -31,31 +32,10 @@ export default function Players() {
     if (error) toast.error(reportError(new Error(error)))
   }, [error])
 
-  const setPreset = (preset: 'all' | '2weeks' | 'month' | '2months' | '6months' | 'thisYear' | 'lastEvent') => {
-    if (preset === 'all' || !maxDate) {
-      setDateFrom(null)
-      setDateTo(null)
-      return
-    }
-    if (preset === 'lastEvent' && lastEventDate) {
-      setDateFrom(lastEventDate)
-      setDateTo(lastEventDate)
-      return
-    }
-    setDateTo(maxDate)
-    setDateFrom(
-      preset === '2weeks'
-        ? dateMinusDays(maxDate, 14)
-        : preset === 'month'
-          ? dateMinusDays(maxDate, 30)
-          : preset === '2months'
-            ? dateMinusDays(maxDate, 60)
-            : preset === '6months'
-              ? dateMinusDays(maxDate, 183)
-              : preset === 'thisYear'
-                ? firstDayOfYear(maxDate)
-                : maxDate
-    )
+  const setPreset = (preset: DatePreset) => {
+    const { dateFrom: from, dateTo: to } = getDateRangeFromPreset(maxDate, lastEventDate, preset)
+    setDateFrom(from)
+    setDateTo(to)
   }
 
   const handleSort = (key: SortKey) => {

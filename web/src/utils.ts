@@ -112,6 +112,42 @@ export function firstDayOfYear(ddMmYy: string): string {
   return `01/01/${yy}`
 }
 
+/** Date range preset identifier used across EventSelector, Players, DeckDetail */
+export type DatePreset = 'all' | '2weeks' | 'month' | '2months' | '6months' | 'thisYear' | 'lastEvent'
+
+/**
+ * Return dateFrom/dateTo (DD/MM/YY) for a preset. Use for date-range filters and event filtering.
+ * - all: null, null
+ * - lastEvent: lastEventDate, lastEventDate (when lastEventDate is set)
+ * - others: from = computed from maxDate, to = maxDate
+ */
+export function getDateRangeFromPreset(
+  maxDate: string | null,
+  lastEventDate: string | null,
+  preset: DatePreset
+): { dateFrom: string | null; dateTo: string | null } {
+  if (preset === 'all' || !maxDate) {
+    return { dateFrom: null, dateTo: null }
+  }
+  if (preset === 'lastEvent' && lastEventDate) {
+    return { dateFrom: lastEventDate, dateTo: lastEventDate }
+  }
+  const dateTo = maxDate
+  const dateFrom =
+    preset === '2weeks'
+      ? dateMinusDays(maxDate, 14)
+      : preset === 'month'
+        ? dateMinusDays(maxDate, 30)
+        : preset === '2months'
+          ? dateMinusDays(maxDate, 60)
+          : preset === '6months'
+            ? dateMinusDays(maxDate, 183)
+            : preset === 'thisYear'
+              ? firstDayOfYear(maxDate)
+              : maxDate
+  return { dateFrom, dateTo }
+}
+
 /** Convert DD/MM/YY to YYYY-MM-DD for use with input type="date". Returns '' if invalid. */
 export function ddMmYyToIso(ddMmYy: string): string {
   const t = ddMmYy.trim()

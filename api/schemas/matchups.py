@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class MatchupItem(BaseModel):
@@ -9,7 +9,7 @@ class MatchupItem(BaseModel):
 
 
 class AdminMatchupsBody(BaseModel):
-    matchups: list[MatchupItem] = []
+    matchups: list[MatchupItem] = Field(default_factory=list)
 
 
 class PatchMatchupBody(BaseModel):

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Event } from '../types'
-import { dateMinusDays, dateInRange, firstDayOfYear } from '../utils'
+import { dateInRange, getDateRangeFromPreset } from '../utils'
+import type { DatePreset } from '../utils'
 
 export interface EventSelectorProps {
   events: Event[]
@@ -47,7 +48,8 @@ export default function EventSelector({
     setMaxHeight(Math.min(DROPDOWN_MAX_HEIGHT, Math.max(100, available)))
   }, [open])
 
-  const setPreset = (preset: 'all' | '2weeks' | 'month' | '2months' | '6months' | 'thisYear' | 'lastEvent') => {
+  const setPreset = (preset: DatePreset) => {
+    const { dateFrom, dateTo } = getDateRangeFromPreset(maxDate ?? null, lastEventDate ?? null, preset)
     if (preset === 'all' || !maxDate) {
       onChange([])
       return
@@ -57,18 +59,7 @@ export default function EventSelector({
       onChange(ids)
       return
     }
-    const to = maxDate
-    const from =
-      preset === '2weeks'
-        ? dateMinusDays(maxDate, 14)
-        : preset === 'month'
-          ? dateMinusDays(maxDate, 30)
-          : preset === '2months'
-            ? dateMinusDays(maxDate, 60)
-            : preset === '6months'
-              ? dateMinusDays(maxDate, 183)
-              : firstDayOfYear(maxDate)
-    const ids = events.filter((e) => dateInRange(e.date, from, to)).map((e) => e.event_id)
+    const ids = events.filter((e) => dateInRange(e.date, dateFrom, dateTo)).map((e) => e.event_id)
     onChange(ids)
   }
 

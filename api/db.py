@@ -219,16 +219,7 @@ def deck_row_to_dict(row: DeckRow) -> dict:
 
 
 def dict_to_deck_row(d: dict, origin: str = ORIGIN_MTGTOP8) -> DeckRow:
-    mainboard = d.get("mainboard", [])
-    sideboard = d.get("sideboard", [])
-    if mainboard and isinstance(mainboard[0], dict):
-        pass
-    else:
-        mainboard = [{"qty": q, "card": c} for q, c in mainboard]
-    if sideboard and isinstance(sideboard[0], dict):
-        pass
-    else:
-        sideboard = [{"qty": q, "card": c} for q, c in sideboard]
+    mainboard, sideboard = _normalize_boards(d)
     return DeckRow(
         deck_id=d["deck_id"],
         event_id=_event_id_str(d["event_id"]),
@@ -255,16 +246,7 @@ def get_all_decks(session: Session) -> list[dict]:
 def upsert_deck(session: Session, d: dict, origin: str = ORIGIN_MTGTOP8) -> DeckRow:
     """Insert or update a deck by deck_id. For scrape duplicate protection (re-scrape same event = update)."""
     row = session.query(DeckRow).filter(DeckRow.deck_id == d["deck_id"]).first()
-    mainboard = d.get("mainboard", [])
-    sideboard = d.get("sideboard", [])
-    if mainboard and isinstance(mainboard[0], dict):
-        pass
-    else:
-        mainboard = [{"qty": q, "card": c} for q, c in mainboard]
-    if sideboard and isinstance(sideboard[0], dict):
-        pass
-    else:
-        sideboard = [{"qty": q, "card": c} for q, c in sideboard]
+    mainboard, sideboard = _normalize_boards(d)
     if row:
         row.event_id = _event_id_str(d.get("event_id", row.event_id))
         row.format_id = d.get("format_id", row.format_id)
@@ -319,20 +301,35 @@ def next_manual_deck_id(session: Session) -> int:
 # --- Repository helpers: events ---
 
 
+def event_row_to_dict(row: EventRow) -> dict:
+    """Convert an EventRow into the canonical event dict shape used by the API."""
+    return {
+        "event_id": row.event_id,
+        "event_name": row.name,
+        "store": row.store or "",
+        "location": row.location or "",
+        "date": row.date,
+        "format_id": row.format_id,
+        "player_count": row.player_count or 0,
+    }
+
+
+def _normalize_boards(d: dict) -> tuple[list[dict], list[dict]]:
+    """Ensure mainboard/sideboard are lists of {qty, card} dicts."""
+    mainboard = d.get("mainboard", []) or []
+    sideboard = d.get("sideboard", []) or []
+
+    def _ensure_board(board):
+        if board and isinstance(board[0], dict):
+            return board
+        return [{"qty": q, "card": c} for q, c in board]
+
+    return _ensure_board(mainboard), _ensure_board(sideboard)
+
+
 def get_all_events(session: Session) -> list[dict]:
     rows = session.query(EventRow).order_by(EventRow.date.desc(), EventRow.event_id).all()
-    return [
-        {
-            "event_id": r.event_id,
-            "event_name": r.name,
-            "store": r.store or "",
-            "location": r.location or "",
-            "date": r.date,
-            "format_id": r.format_id,
-            "player_count": r.player_count or 0,
-        }
-        for r in rows
-    ]
+    return [event_row_to_dict(r) for r in rows]
 
 
 def get_mtgtop8_event_ids(session: Session) -> set[int]:

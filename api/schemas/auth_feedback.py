@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class LoginBody(BaseModel):
@@ -17,5 +17,5 @@ class SiteFeedbackBody(BaseModel):
 
 
 class CardLookupBody(BaseModel):
-    names: list[str] = []
+    names: list[str] = Field(default_factory=list)
 

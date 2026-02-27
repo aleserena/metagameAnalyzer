@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { getMatchupsSummary } from '../api'
 import EventSelector from '../components/EventSelector'
+import FiltersPanel from '../components/FiltersPanel'
 import { useEventMetadata } from '../hooks/useEventMetadata'
 import Skeleton from '../components/Skeleton'
 import toast from 'react-hot-toast'
@@ -107,24 +108,7 @@ export default function Matchups() {
 
       <div className="table-wrap-outer" style={{ marginBottom: '1.5rem' }}>
         <div className="table-wrap" style={{ overflow: 'visible' }}>
-          <div
-            className="filters-group"
-            style={{
-              display: 'flex',
-              gap: '1rem',
-              flexWrap: 'wrap',
-              alignItems: 'flex-end',
-              padding: '1rem',
-              background: 'var(--bg)',
-              border: '1px solid var(--border)',
-              borderRadius: 8,
-              width: '100%',
-              boxSizing: 'border-box',
-            }}
-          >
-            <span style={{ width: '100%', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Filters
-            </span>
+          <FiltersPanel>
             <div className="form-group" style={{ marginBottom: 0 }}>
               <label htmlFor="matchups-format">Format</label>
               <select
@@ -251,7 +235,7 @@ export default function Matchups() {
               maxDate={maxDate}
               lastEventDate={lastEventDate}
             />
-          </div>
+          </FiltersPanel>
         </div>
       </div>
 

@@ -1,6 +1,7 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .decks import SubmitDeckBody
+from .matchups import MatchupItem
 
 
 class CreateUploadLinksBody(BaseModel):
@@ -10,16 +11,9 @@ class CreateUploadLinksBody(BaseModel):
     expires_in_days: int | None = None
 
 
-class EventFeedbackMatchupItem(BaseModel):
-    opponent_player: str
-    result: str  # win | loss | draw | intentional_draw
-    result_note: str | None = None
-    round: int | None = None
-
-
 class EventFeedbackBody(BaseModel):
     archetype: str
     deck_name: str | None = None
     rank: str | None = None
-    matchups: list[EventFeedbackMatchupItem] = []
+    matchups: list[MatchupItem] = Field(default_factory=list)
 

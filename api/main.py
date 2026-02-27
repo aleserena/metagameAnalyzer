@@ -75,10 +75,9 @@ from api.schemas.settings import (
     RankWeightsBody,
     SendFeedbackLinkToPlayerBody,
 )
-from api.schemas.upload import CreateUploadLinksBody, EventFeedbackBody, EventFeedbackMatchupItem
+from api.schemas.upload import CreateUploadLinksBody, EventFeedbackBody
+from api.services import settings as settings_service
 from src.mtgtop8.analyzer import (
-    DEFAULT_IGNORE_LANDS_SET,
-    RANK_WEIGHTS as DEFAULT_RANK_WEIGHTS,
     analyze,
     archetype_aggregate_analysis,
     deck_analysis,
@@ -269,34 +268,6 @@ def _aliases_path() -> Path:
     return DATA_DIR / "player_aliases.json"
 
 
-def _ignore_lands_cards_path() -> Path:
-    return DATA_DIR / "ignore_lands_cards.json"
-
-
-def _rank_weights_path() -> Path:
-    return DATA_DIR / "rank_weights.json"
-
-
-def _get_rank_weights() -> dict[str, float]:
-    """Load rank -> points from file, or return default."""
-    p = _rank_weights_path()
-    data = load_json(p, default={}, suppress_errors=True) or {}
-    weights = data.get("weights")
-    if isinstance(weights, dict):
-        return {k: float(v) for k, v in weights.items() if isinstance(v, (int, float))}
-    return dict(DEFAULT_RANK_WEIGHTS)
-
-
-def _get_ignore_lands_cards() -> list[str]:
-    """Load ignore-lands card list from file, or return default sorted list."""
-    p = _ignore_lands_cards_path()
-    data = load_json(p, default={}, suppress_errors=True) or {}
-    cards = data.get("cards")
-    if isinstance(cards, list) and all(isinstance(c, str) for c in cards):
-        return sorted(set(c.strip() for c in cards if c.strip()))
-    return sorted(DEFAULT_IGNORE_LANDS_SET)
-
-
 def _load_player_aliases() -> None:
     global _player_aliases
     if _database_available():
@@ -400,10 +371,43 @@ def _normalize_split_cards(decks: list[dict]) -> list[dict]:
     return decks
 
 
+def _normalize_card_entry(entry) -> dict | None:
+    """Normalize a single card entry from dict or Pydantic model into {qty, card}."""
+    if entry is None:
+        return None
+    if isinstance(entry, dict):
+        qty = int(entry.get("qty", 1) or 1)
+        raw = str(entry.get("card", ""))
+    else:
+        qty = int(getattr(entry, "qty", 1) or 1)
+        raw = getattr(entry, "card", "") or ""
+    name = _normalize_card_name(raw)
+    if not name:
+        return None
+    return {"qty": qty, "card": name}
+
+
+def _build_board(entries) -> list[dict]:
+    """Normalize a list of card entries into [{qty, card}, ...], dropping empty names."""
+    board: list[dict] = []
+    for e in entries or []:
+        normalized = _normalize_card_entry(e)
+        if normalized:
+            board.append(normalized)
+    return board
+
+
+def _normalize_commanders(commanders) -> list[str]:
+    """Normalize a commanders list to normalized card-name strings."""
+    if not commanders:
+        return []
+    return [_normalize_card_name(c) for c in commanders if _normalize_card_name(c)]
+
+
 def _load_from_file(path: str) -> None:
     global _decks
-    with open(path, encoding="utf-8") as f:
-        _decks = _normalize_split_cards(json.load(f))
+    data = load_json(path, default=[], suppress_errors=False)
+    _decks = _normalize_split_cards(data or [])
     _invalidate_metagame()
 
 
@@ -937,7 +941,8 @@ def _compute_events_list() -> list[dict]:
         try:
             with _db.session_scope() as session:
                 rows = _db.get_all_events(session)
-            return [{"event_id": e["event_id"], "event_name": e["event_name"], "store": e.get("store", ""), "location": e.get("location", ""), "date": e["date"], "format_id": e["format_id"], "player_count": e.get("player_count", 0)} for e in rows]
+            # Rows are already in canonical event dict shape via db.event_row_to_dict
+            return rows
         except Exception as e:
             logger.exception("Failed to list events from DB: %s", e)
     return _events_from_decks(_decks)
@@ -975,15 +980,7 @@ def create_event(body: CreateEventBody):
                 location=(body.location or "").strip(),
             )
             _invalidate_events_cache()
-            return EventResponse(
-                event_id=row.event_id,
-                event_name=row.name,
-                store=row.store or "",
-                location=row.location or "",
-                date=row.date,
-                format_id=row.format_id,
-                player_count=row.player_count or 0,
-            )
+            return EventResponse(**_db.event_row_to_dict(row))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -999,15 +996,7 @@ def get_event_by_id(event_id: str):
             with _db.session_scope() as session:
                 row = _db.get_event(session, event_id)
                 if row:
-                    return EventResponse(
-                        event_id=row.event_id,
-                        event_name=row.name,
-                        store=row.store or "",
-                        location=row.location or "",
-                        date=row.date,
-                        format_id=row.format_id,
-                        player_count=row.player_count or 0,
-                    )
+                    return EventResponse(**_db.event_row_to_dict(row))
         except Exception as e:
             logger.exception("Failed to get event: %s", e)
     # Fallback: find from _decks
@@ -1419,9 +1408,9 @@ def _submit_create_with_upload_link(session, row, ev, event_name: str, body: Sub
     commanders = body.commanders if body.commanders is not None else []
     if not isinstance(commanders, list):
         commanders = []
-    mainboard = [{"qty": int(c.get("qty", 1)), "card": _normalize_card_name(str(c.get("card", "")))} for c in (body.mainboard or []) if _normalize_card_name(str(c.get("card", "")))]
-    sideboard = [{"qty": int(c.get("qty", 1)), "card": _normalize_card_name(str(c.get("card", "")))} for c in (body.sideboard or []) if _normalize_card_name(str(c.get("card", "")))]
-    commanders = [_normalize_card_name(c) for c in commanders if _normalize_card_name(c)]
+    mainboard = _build_board(body.mainboard)
+    sideboard = _build_board(body.sideboard)
+    commanders = _normalize_commanders(commanders)
     format_id = (ev.format_id or "").upper()
     if format_id == "EDH" and not commanders and mainboard:
         commanders = [mainboard[0]["card"]]
@@ -1466,9 +1455,9 @@ def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
             commanders = body.commanders if body.commanders is not None else []
             if not isinstance(commanders, list):
                 commanders = []
-            mainboard = [{"qty": int(c.get("qty", 1)), "card": _normalize_card_name(str(c.get("card", "")))} for c in (body.mainboard or []) if _normalize_card_name(str(c.get("card", "")))]
-            sideboard = [{"qty": int(c.get("qty", 1)), "card": _normalize_card_name(str(c.get("card", "")))} for c in (body.sideboard or []) if _normalize_card_name(str(c.get("card", "")))]
-            commanders = [_normalize_card_name(c) for c in commanders if _normalize_card_name(c)]
+            mainboard = _build_board(body.mainboard)
+            sideboard = _build_board(body.sideboard)
+            commanders = _normalize_commanders(commanders)
             format_id = (current.get("format_id") or "").upper()
             if format_id == "EDH" and not commanders and mainboard:
                 commanders = [mainboard[0]["card"]]
@@ -1558,11 +1547,11 @@ def submit_decklist_with_upload_link(token: str, body: DeckListBody):
     deck_dict = _get_deck_by_id(deck_id)
     if not deck_dict:
         raise HTTPException(status_code=404, detail="Deck not found")
-    mainboard = [{"qty": c.qty, "card": _normalize_card_name(c.card or "")} for c in (body.mainboard or []) if _normalize_card_name(c.card or "")]
+    mainboard = _build_board(body.mainboard)
     if not mainboard:
         raise HTTPException(status_code=400, detail="mainboard must have at least one card")
-    sideboard = [{"qty": c.qty, "card": _normalize_card_name(c.card or "")} for c in (body.sideboard or []) if _normalize_card_name(c.card or "")]
-    commanders = [_normalize_card_name(c) for c in (body.commanders or []) if c and str(c).strip()]
+    sideboard = _build_board(body.sideboard)
+    commanders = _normalize_commanders(body.commanders or [])
     current = dict(deck_dict)
     current["mainboard"] = mainboard
     current["sideboard"] = sideboard
@@ -1605,11 +1594,11 @@ def update_deck_endpoint(deck_id: int, body: UpdateDeckBody):
             current["date"] = ev.date
             current["format_id"] = ev.format_id
     if body.commanders is not None:
-        current["commanders"] = [_normalize_card_name(c) for c in body.commanders if c and str(c).strip()]
+        current["commanders"] = _normalize_commanders(body.commanders)
     if body.mainboard is not None:
-        current["mainboard"] = [{"qty": c.qty, "card": _normalize_card_name(c.card or "")} for c in body.mainboard if _normalize_card_name(c.card or "")]
+        current["mainboard"] = _build_board(body.mainboard)
     if body.sideboard is not None:
-        current["sideboard"] = [{"qty": c.qty, "card": _normalize_card_name(c.card or "")} for c in body.sideboard if _normalize_card_name(c.card or "")]
+        current["sideboard"] = _build_board(body.sideboard)
     # EDH: if no commander present, use first mainboard card as commander
     if (current.get("format_id") or "").upper() == "EDH" and not current.get("commanders") and current.get("mainboard"):
         current["commanders"] = [current["mainboard"][0]["card"]]
@@ -1833,8 +1822,8 @@ def get_metagame(
         decks = [d for d in decks_all if is_top8(d.rank)]
     else:
         decks = decks_all
-    ignore_lands_cards = set(_get_ignore_lands_cards()) if ignore_lands else None
-    rank_weights = _get_rank_weights()
+    ignore_lands_cards = set(settings_service.get_ignore_lands_cards()) if ignore_lands else None
+    rank_weights = settings_service.get_rank_weights()
     result = analyze(
         decks,
         placement_weighted=placement_weighted,
@@ -2000,8 +1989,8 @@ def get_archetype_detail(
                 if "error" not in v and k.lower() == name.lower():
                     merged[name] = v
                     break
-    ignore_lands_cards = set(_get_ignore_lands_cards()) if ignore_lands else None
-    rank_weights = _get_rank_weights()
+    ignore_lands_cards = set(settings_service.get_ignore_lands_cards()) if ignore_lands else None
+    rank_weights = settings_service.get_rank_weights()
     average_analysis = archetype_aggregate_analysis(decks, merged)
     top_main = top_cards_main(
         decks,
@@ -2024,45 +2013,37 @@ def get_archetype_detail(
 @app.get("/api/settings/ignore-lands-cards")
 def get_ignore_lands_cards(_: str = Depends(require_admin)):
     """Return list of card names excluded when 'Ignore lands' is checked (admin-only)."""
-    return {"cards": _get_ignore_lands_cards()}
+    return {"cards": settings_service.get_ignore_lands_cards()}
 
 
 @app.put("/api/settings/ignore-lands-cards")
 def put_ignore_lands_cards(body: IgnoreLandsCardsBody, _: str = Depends(require_admin)):
     """Update list of cards excluded when 'Ignore lands' is checked (admin-only)."""
-    cards = [c.strip() for c in body.cards if isinstance(c, str) and c.strip()]
-    save_json(_ignore_lands_cards_path(), {"cards": sorted(set(cards))}, indent=2, ensure_ascii=False)
-    return {"cards": _get_ignore_lands_cards()}
+    return {"cards": settings_service.set_ignore_lands_cards(body.cards)}
 
 
 @app.get("/api/settings/rank-weights")
 def get_rank_weights(_: str = Depends(require_admin)):
     """Return points per placement (1st, 2nd, 3-4, etc.). Admin-only."""
-    return {"weights": _get_rank_weights()}
+    return {"weights": settings_service.get_rank_weights()}
 
 
 @app.put("/api/settings/rank-weights")
 def put_rank_weights(body: RankWeightsBody, _: str = Depends(require_admin)):
     """Update points per placement (admin-only)."""
-    weights = {k: float(v) for k, v in body.weights.items() if v is not None}
-    save_json(_rank_weights_path(), {"weights": weights}, indent=2, ensure_ascii=False)
-    return {"weights": _get_rank_weights()}
+    return {"weights": settings_service.set_rank_weights(body.weights)}
 
 
 @app.get("/api/settings/matchups-min-matches", dependencies=[Depends(require_admin), Depends(require_database)])
 def get_matchups_min_matches_setting():
     """Return minimum matches threshold for matchup summary (admin)."""
-    with _db.session_scope() as session:
-        n = _db.get_matchups_min_matches(session)
-    return {"value": n}
+    return {"value": settings_service.get_matchups_min_matches()}
 
 
 @app.put("/api/settings/matchups-min-matches", dependencies=[Depends(require_admin), Depends(require_database)])
 def put_matchups_min_matches_setting(body: MatchupsMinMatchesBody):
     """Set minimum matches threshold for matchup summary (admin)."""
-    n = max(0, body.value)
-    with _db.session_scope() as session:
-        _db.set_matchups_min_matches(session, n)
+    n = settings_service.set_matchups_min_matches(body.value)
     return {"value": n}
 
 
@@ -2744,7 +2725,7 @@ def get_players(
         return {"players": []}
     filtered = _filter_decks_by_date(_decks, date_from, date_to)
     decks = [Deck.from_dict(d) for d in filtered]
-    rank_weights = _get_rank_weights()
+    rank_weights = settings_service.get_rank_weights()
     return {"players": player_leaderboard(decks, normalize_player=_normalize_player, rank_weights=rank_weights)}
 
 
@@ -2757,7 +2738,7 @@ def get_player_detail(player_name: str):
     if not player_decks:
         raise HTTPException(status_code=404, detail="Player not found")
     decks = [Deck.from_dict(d) for d in player_decks]
-    rank_weights = _get_rank_weights()
+    rank_weights = settings_service.get_rank_weights()
     stats_list = player_leaderboard(decks, rank_weights=rank_weights)
     if not stats_list:
         raise HTTPException(status_code=404, detail="Player not found")
@@ -2785,7 +2766,7 @@ def get_player_detail(player_name: str):
 
 
 @app.post("/api/load", dependencies=[Depends(require_database)])
-async def load_decks(
+def load_decks(
     body: LoadBody | None = None,
     file: UploadFile | None = File(None),
     _: str = Depends(require_admin),
@@ -2793,8 +2774,8 @@ async def load_decks(
     """Load decks from JSON into the database. Body: { "decks": [...] } or { "path": "decks.json" }, or upload file. Requires PostgreSQL."""
     global _decks
     if file:
-        content = await file.read()
         try:
+            content = file.file.read()
             _decks = _normalize_split_cards(json.loads(content.decode("utf-8")))
         except json.JSONDecodeError as e:
             logger.warning("Load decks: invalid JSON from upload: %s", e)
@@ -2882,7 +2863,7 @@ async def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
     import queue
     import re
 
-    format_id = body.format
+    format_id = body.format_id
     period = body.period
     store = body.store
     event_ids = body.event_ids

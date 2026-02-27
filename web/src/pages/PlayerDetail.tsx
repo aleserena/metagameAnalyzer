@@ -5,6 +5,7 @@ import { getPlayerDetail, getSimilarPlayers, addPlayerAlias, getPlayerAliases, p
 import type { PlayerDetail as PlayerDetailData } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import { useFetch } from '../hooks/useFetch'
+import Modal from '../components/Modal'
 import PageError from '../components/PageError'
 import PageSkeleton from '../components/PageSkeleton'
 import { reportError } from '../utils'
@@ -185,78 +186,53 @@ export default function PlayerDetail() {
       )}
 
       {emailModalOpen && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="set-email-title"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.6)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: '1rem',
-          }}
-          onClick={(e) => e.target === e.currentTarget && setEmailModalOpen(false)}
+        <Modal
+          title="Set player email"
+          onClose={() => setEmailModalOpen(false)}
+          size={400}
         >
-          <div
-            className="card"
-            style={{
-              maxWidth: 400,
-              width: '100%',
-              padding: '1.5rem',
-              borderRadius: 12,
-              background: 'var(--bg-card)',
-              boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 id="set-email-title" style={{ marginTop: 0, marginBottom: '1rem' }}>Set player email</h2>
-            <p style={{ marginBottom: '0.5rem', fontWeight: 600 }}>{data?.player}</p>
-            <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-              Enter email for this player. Leave empty to remove. Stored value is never shown.
-            </p>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginBottom: '1rem' }}>
-              <span className="label">Email</span>
-              <input
-                type="email"
-                value={emailValue}
-                onChange={(e) => setEmailValue(e.target.value)}
-                placeholder="player@example.com"
-                style={{ width: '100%', boxSizing: 'border-box' }}
-                aria-label="Email address"
-              />
-            </label>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <button
-                type="button"
-                className="btn btn-primary"
-                disabled={savingEmail}
-                onClick={async () => {
-                  if (!data?.player) return
-                  setSavingEmail(true)
-                  try {
-                    await putPlayerEmail(data.player, emailValue.trim())
-                    setEmailModalOpen(false)
-                    toast.success(emailValue.trim() ? 'Email saved' : 'Email removed')
-                    refetch()
-                  } catch (e) {
-                    toast.error(reportError(e as Error))
-                  } finally {
-                    setSavingEmail(false)
-                  }
-                }}
-              >
-                {savingEmail ? 'Saving…' : 'Save'}
-              </button>
-              <button type="button" className="btn" onClick={() => setEmailModalOpen(false)} disabled={savingEmail}>
-                Cancel
-              </button>
-            </div>
+          <p style={{ marginBottom: '0.5rem', fontWeight: 600 }}>{data?.player}</p>
+          <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
+            Enter email for this player. Leave empty to remove. Stored value is never shown.
+          </p>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginBottom: '1rem' }}>
+            <span className="label">Email</span>
+            <input
+              type="email"
+              value={emailValue}
+              onChange={(e) => setEmailValue(e.target.value)}
+              placeholder="player@example.com"
+              style={{ width: '100%', boxSizing: 'border-box' }}
+              aria-label="Email address"
+            />
+          </label>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={savingEmail}
+              onClick={async () => {
+                if (!data?.player) return
+                setSavingEmail(true)
+                try {
+                  await putPlayerEmail(data.player, emailValue.trim())
+                  setEmailModalOpen(false)
+                  toast.success(emailValue.trim() ? 'Email saved' : 'Email removed')
+                  refetch()
+                } catch (e) {
+                  toast.error(reportError(e as Error))
+                } finally {
+                  setSavingEmail(false)
+                }
+              }}
+            >
+              {savingEmail ? 'Saving…' : 'Save'}
+            </button>
+            <button type="button" className="btn" onClick={() => setEmailModalOpen(false)} disabled={savingEmail}>
+              Cancel
+            </button>
           </div>
-        </div>
+        </Modal>
       )}
 
       <div className="chart-container">
