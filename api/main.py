@@ -69,7 +69,12 @@ from api.schemas.decks import DeckCardUpdate, DeckListBody, ImportMoxfieldBody, 
 from api.schemas.events import CreateEventBody, EventResponse, LoadBody, NewEventBody, ScrapeBody, UploadDecksBody
 from api.schemas.matchups import AdminMatchupsBody, MatchupItem, PatchMatchupBody
 from api.schemas.players import PlayerAliasBody, PlayerEmailBody
-from api.schemas.settings import IgnoreLandsCardsBody, MatchupsMinMatchesBody, RankWeightsBody
+from api.schemas.settings import (
+    IgnoreLandsCardsBody,
+    MatchupsMinMatchesBody,
+    RankWeightsBody,
+    SendFeedbackLinkToPlayerBody,
+)
 from api.schemas.upload import CreateUploadLinksBody, EventFeedbackBody, EventFeedbackMatchupItem
 from src.mtgtop8.analyzer import (
     DEFAULT_IGNORE_LANDS_SET,

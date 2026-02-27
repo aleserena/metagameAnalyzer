@@ -12,3 +12,8 @@ class RankWeightsBody(BaseModel):
 class MatchupsMinMatchesBody(BaseModel):
     value: int = 0
 
+
+class SendFeedbackLinkToPlayerBody(BaseModel):
+    """Body for sending a single feedback link email to a player for a given event."""
+
+    player: str = ""
