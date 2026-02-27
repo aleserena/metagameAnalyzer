@@ -1,10 +1,11 @@
 """Scryfall API client for card metadata and images."""
 
-import json
 import time
 from pathlib import Path
 
 import requests
+
+from .storage import load_json, save_json
 
 SCRYFALL_COLLECTION = "https://api.scryfall.com/cards/collection"
 SCRYFALL_SEARCH = "https://api.scryfall.com/cards/search"
@@ -28,21 +29,12 @@ def _load_cache() -> None:
     global _card_cache
     if _card_cache:
         return
-    if CACHE_FILE.exists():
-        try:
-            with open(CACHE_FILE, encoding="utf-8") as f:
-                _card_cache = json.load(f)
-        except Exception:
-            pass
+    data = load_json(CACHE_FILE, default={}, suppress_errors=True)
+    _card_cache = data or {}
 
 
 def _save_cache() -> None:
-    try:
-        CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(_card_cache, f, ensure_ascii=False)
-    except Exception:
-        pass
+    save_json(CACHE_FILE, _card_cache, ensure_ascii=False, suppress_errors=True)
 
 
 def clear_cache() -> None:

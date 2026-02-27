@@ -3,6 +3,8 @@
 import re
 from typing import Tuple
 
+from .normalize import normalize_card_name
+
 
 def parse_event_display(s: str) -> Tuple[str, str, str]:
     """Parse event title into (name, store, location).
@@ -69,9 +71,7 @@ def _parse_card_line(line: str) -> tuple[int, str] | None:
     """Parse 'N Card Name' into (qty, card_name)."""
     m = re.match(r"^(\d+)\s+(.+)$", line.strip())
     if m:
-        card_name = m.group(2).strip()
-        # MTGTop8 uses single '/' for split cards; Scryfall expects '//'
-        card_name = re.sub(r"\s+/\s+", " // ", card_name)
+        card_name = normalize_card_name(m.group(2))
         return int(m.group(1)), card_name
     return None
 

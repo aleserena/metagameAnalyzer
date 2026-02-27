@@ -47,3 +47,22 @@ def test_date_in_range():
     assert api_main._date_in_range("01/01/26", "15/02/26", "28/02/26") is False
     assert api_main._date_in_range("01/03/26", "01/02/26", "28/02/26") is False
     assert api_main._date_in_range("15/02/26", None, None) is True
+
+
+def test_filter_decks_for_query_event_ids_overrides_dates():
+    decks = [
+        {"deck_id": 1, "event_id": 1, "date": "01/01/26"},
+        {"deck_id": 2, "event_id": 2, "date": "15/02/26"},
+    ]
+    # When event_ids is provided, date_from/date_to are ignored
+    filtered = api_main._filter_decks_for_query(decks, None, "2", "01/01/26", "31/12/26")
+    assert [d["deck_id"] for d in filtered] == [2]
+
+
+def test_filter_decks_for_query_dates_when_no_event_ids():
+    decks = [
+        {"deck_id": 1, "event_id": 1, "date": "01/01/26"},
+        {"deck_id": 2, "event_id": 2, "date": "15/02/26"},
+    ]
+    filtered = api_main._filter_decks_for_query(decks, None, None, "01/02/26", "28/02/26")
+    assert [d["deck_id"] for d in filtered] == [2]
