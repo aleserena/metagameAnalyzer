@@ -1,7 +1,27 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useParams, Link, useNavigate, useBlocker, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { getEvent, getDecks, updateEvent, addDeckToEvent, deleteEvent, createEventEditLink, getEventEditLinkInfo, updateDeck, deleteDeck, setEventEditToken, clearEventEditToken, sendMissingDeckLinks, sendFeedbackLinks, sendFeedbackLinkToPlayer, getMatchupDiscrepancies, patchMatchup, getDeckMatchups, updateDeckMatchups } from '../api'
+import {
+  getEvent,
+  getDecks,
+  updateEvent,
+  addDeckToEvent,
+  deleteEvent,
+  createEventEditLink,
+  getEventEditLinkInfo,
+  updateDeck,
+  deleteDeck,
+  setEventEditToken,
+  clearEventEditToken,
+  sendMissingDeckLinks,
+  sendFeedbackLinks,
+  sendFeedbackLinkToPlayer,
+  getMatchupDiscrepancies,
+  patchMatchup,
+  getDeckMatchups,
+  updateDeckMatchups,
+  createEventUploadLinks,
+} from '../api'
 import type { EventWithOrigin } from '../api'
 import type { Deck } from '../types'
 import { useAuth } from '../contexts/AuthContext'
@@ -82,6 +102,7 @@ export default function EventDetail() {
   const [sendingMissingLinks, setSendingMissingLinks] = useState(false)
   const [sendingFeedbackLinks, setSendingFeedbackLinks] = useState(false)
   const [sendingFeedbackLinkForPlayer, setSendingFeedbackLinkForPlayer] = useState<string | null>(null)
+  const [generatingFeedbackLinkForDeckId, setGeneratingFeedbackLinkForDeckId] = useState<number | null>(null)
   const [discrepancies, setDiscrepancies] = useState<Awaited<ReturnType<typeof getMatchupDiscrepancies>>['discrepancies'] | null>(null)
   const [loadingDiscrepancies, setLoadingDiscrepancies] = useState(false)
   const [fixingPairKey, setFixingPairKey] = useState<string | null>(null)
@@ -520,6 +541,31 @@ export default function EventDetail() {
         }
       })
       .finally(() => setSendingFeedbackLinkForPlayer(null))
+  }
+
+  const handleGenerateFeedbackLinkForDeck = (deckId: number, playerName: string) => {
+    if (!eventId) return
+    if (!playerName.trim()) {
+      toast.error('Player name missing for this deck.')
+      return
+    }
+    setGeneratingFeedbackLinkForDeckId(deckId)
+    createEventUploadLinks(eventId, { deck_id: deckId, type: 'feedback' })
+      .then((res) => {
+        if (!res.links.length) {
+          toast.error('No feedback link returned from server.')
+          return
+        }
+        const token = res.links[0].token
+        const base = typeof window !== 'undefined' ? window.location.origin : ''
+        const url = `${base}/upload/${token}`
+        window.navigator.clipboard.writeText(url).then(
+          () => toast.success('Feedback link copied to clipboard'),
+          () => toast.success('Feedback link generated')
+        )
+      })
+      .catch((e) => toast.error(reportError(e)))
+      .finally(() => setGeneratingFeedbackLinkForDeckId(null))
   }
 
   const loadDiscrepancies = () => {
@@ -968,15 +1014,28 @@ export default function EventDetail() {
                                   Update matchups
                                 </button>
                                 {showUploadLinksSection && (
-                                  <button
-                                    type="button"
-                                    className="btn"
-                                    style={{ fontSize: '0.875rem', padding: '0.25rem 0.5rem' }}
-                                    disabled={sendingFeedbackLinkForPlayer !== null}
-                                    onClick={() => handleSendFeedbackLinkToPlayer(cellStr(d.player))}
-                                  >
-                                    {sendingFeedbackLinkForPlayer === cellStr(d.player) ? 'Sending…' : 'Send feedback link'}
-                                  </button>
+                                  <>
+                                    <button
+                                      type="button"
+                                      className="btn"
+                                      style={{ fontSize: '0.875rem', padding: '0.25rem 0.5rem' }}
+                                      disabled={generatingFeedbackLinkForDeckId === d.deck_id}
+                                      onClick={() => handleGenerateFeedbackLinkForDeck(d.deck_id, cellStr(d.player))}
+                                    >
+                                      {generatingFeedbackLinkForDeckId === d.deck_id ? 'Generating…' : 'Generate feedback link'}
+                                    </button>
+                                    {d.has_email && (
+                                      <button
+                                        type="button"
+                                        className="btn"
+                                        style={{ fontSize: '0.875rem', padding: '0.25rem 0.5rem' }}
+                                        disabled={sendingFeedbackLinkForPlayer !== null}
+                                        onClick={() => handleSendFeedbackLinkToPlayer(cellStr(d.player))}
+                                      >
+                                        {sendingFeedbackLinkForPlayer === cellStr(d.player) ? 'Sending…' : 'Email feedback link'}
+                                      </button>
+                                    )}
+                                  </>
                                 )}
                               </div>
                             </td>

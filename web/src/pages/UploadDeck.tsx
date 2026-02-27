@@ -265,6 +265,12 @@ export default function UploadDeck() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           {isFeedback ? (
             <>
+              {info?.deck?.player && (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                  <span className="label">Player</span>
+                  <span>{info.deck.player}</span>
+                </label>
+              )}
               <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
                 <span className="label">Archetype / commander (EDH) *</span>
                 {(info?.format_id ?? '').toLowerCase() === 'edh' || (info?.format_id ?? '').toLowerCase() === 'commander' ? (
