@@ -228,6 +228,11 @@ export async function getEvents(): Promise<{ events: EventWithOrigin[] }> {
   return fetchApi('/events')
 }
 
+/** Admin only. Returns event_ids that have at least one matchup discrepancy. */
+export async function getEventIdsWithDiscrepancies(): Promise<{ event_ids: string[] }> {
+  return fetchApi('/events/event-ids-with-discrepancies')
+}
+
 export async function getEvent(eventId: number | string): Promise<EventWithOrigin & { player_count?: number }> {
   return fetchApi(`/events/${encodeURIComponent(String(eventId))}`)
 }
@@ -315,6 +320,8 @@ export async function getMatchupDiscrepancies(eventId: string): Promise<{
   discrepancies: Array<{
     deck_id_a: number
     deck_id_b: number
+    player_a: string
+    player_b: string
     matchup_a: { id: number; result: string; result_note?: string; round?: number }
     matchup_b: { id: number; result: string; result_note?: string; round?: number }
     result_a: string

@@ -41,9 +41,12 @@ export default function UploadDeck() {
   const [feedbackDeckName, setFeedbackDeckName] = useState('')
   const [feedbackRank, setFeedbackRank] = useState('')
   const MATCHUP_RESULT_OPTIONS = [
-    { value: 'win', label: 'Win' },
-    { value: 'loss', label: 'Lose' },
+    { value: 'win', label: 'You win' },
+    { value: 'loss', label: 'You lose' },
     { value: 'draw', label: 'Draw' },
+    { value: 'intentional_draw', label: 'Intentional draw' },
+    { value: 'intentional_draw_win', label: 'Intentional draw (you win)' },
+    { value: 'intentional_draw_loss', label: 'Intentional draw (you lose)' },
   ] as const
   const [matchups, setMatchups] = useState<Array<{ opponent_player: string; result: string; intentional_draw: boolean }>>([
     { opponent_player: '', result: 'draw', intentional_draw: false },
@@ -84,14 +87,19 @@ export default function UploadDeck() {
           }
           const ourMatchups = (deckWithExtras.matchups || []).map((m) => {
             const raw = (m.result || '').trim().toLowerCase()
-            const isID = raw === 'intentional_draw' || Boolean(m.intentional_draw)
             let result: string = 'draw'
-            if (!isID && raw) {
+            if (raw === 'intentional_draw' || raw === 'intentional_draw_win' || raw === 'intentional_draw_loss') {
+              result = raw
+            } else if (raw) {
               if (raw === 'win' || raw === '2-1' || raw === '1-0' || raw === '2-0') result = 'win'
               else if (raw === 'loss' || raw === '1-2' || raw === '0-1' || raw === '0-2') result = 'loss'
               else if (raw === 'draw' || raw === '1-1' || raw === '0-0') result = 'draw'
             }
-            return { opponent_player: (m.opponent_player ?? '').trim(), result, intentional_draw: isID }
+            return {
+              opponent_player: (m.opponent_player ?? '').trim(),
+              result,
+              intentional_draw: ['intentional_draw', 'intentional_draw_win', 'intentional_draw_loss'].includes(raw),
+            }
           })
           const reportedAgainstMe = (deckWithExtras.opponent_reported_matchups || []).map((m) => ({
             opponent_player: (m.opponent_player ?? '').trim(),
@@ -130,7 +138,7 @@ export default function UploadDeck() {
             .filter((m) => (m.opponent_player || '').trim())
             .map((m) => ({
               opponent_player: m.opponent_player.trim(),
-              result: m.intentional_draw && (m.result || 'draw') === 'draw' ? 'intentional_draw' : (m.result || 'draw'),
+              result: m.result || 'draw',
             })),
         }
         await submitFeedbackWithUploadLink(token, payload)
@@ -311,7 +319,7 @@ export default function UploadDeck() {
               <div>
                 <span className="label" style={{ display: 'block', marginBottom: '0.5rem' }}>Matchups (max 10)</span>
                 <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
-                  Result: Win / Lose / Draw, or check Intentional draw for an agreed draw.
+                  Result is for you vs the selected opponent. Use &quot;Intentional draw (you win/lose)&quot; when the result is ID but tiebreakers assign a win or loss.
                 </p>
                 {matchups.map((m, i) => (
                   <div key={i} style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center', marginBottom: '0.5rem' }}>
@@ -331,23 +339,13 @@ export default function UploadDeck() {
                       value={m.result || 'draw'}
                       onChange={(e) => updateMatchup(i, 'result', e.target.value)}
                       disabled={submitting}
-                      style={{ minWidth: 90 }}
-                      aria-label="Result"
-                      title={m.intentional_draw ? 'Intentional draw (Win/Lose still recorded if selected)' : undefined}
+                      style={{ minWidth: 200 }}
+                      aria-label="Result (you vs this opponent)"
                     >
                       {MATCHUP_RESULT_OPTIONS.map((opt) => (
                         <option key={opt.value} value={opt.value}>{opt.label}</option>
                       ))}
                     </select>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.875rem' }}>
-                      <input
-                        type="checkbox"
-                        checked={m.intentional_draw}
-                        onChange={(e) => updateMatchup(i, 'intentional_draw', e.target.checked)}
-                        disabled={submitting}
-                      />
-                      Intentional draw
-                    </label>
                     <button type="button" className="btn" style={{ padding: '0.2rem 0.5rem' }} onClick={() => removeMatchup(i)} disabled={submitting}>
                       Remove
                     </button>

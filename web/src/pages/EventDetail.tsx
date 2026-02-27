@@ -84,7 +84,7 @@ export default function EventDetail() {
   const [sendingFeedbackLinkForPlayer, setSendingFeedbackLinkForPlayer] = useState<string | null>(null)
   const [discrepancies, setDiscrepancies] = useState<Awaited<ReturnType<typeof getMatchupDiscrepancies>>['discrepancies'] | null>(null)
   const [loadingDiscrepancies, setLoadingDiscrepancies] = useState(false)
-  const [fixingMatchupId, setFixingMatchupId] = useState<number | null>(null)
+  const [fixingPairKey, setFixingPairKey] = useState<string | null>(null)
   const [matchupsDeckId, setMatchupsDeckId] = useState<number | null>(null)
   const [matchupsList, setMatchupsList] = useState<Array<{ opponent_player: string; result: string; intentional_draw: boolean }>>([])
   const [loadingMatchups, setLoadingMatchups] = useState(false)
@@ -366,9 +366,12 @@ export default function EventDetail() {
   }
 
   const MATCHUP_RESULT_OPTIONS = [
-    { value: 'win', label: 'Win' },
-    { value: 'loss', label: 'Lose' },
+    { value: 'win', label: 'You win' },
+    { value: 'loss', label: 'You lose' },
     { value: 'draw', label: 'Draw' },
+    { value: 'intentional_draw', label: 'Intentional draw' },
+    { value: 'intentional_draw_win', label: 'Intentional draw (you win)' },
+    { value: 'intentional_draw_loss', label: 'Intentional draw (you lose)' },
   ] as const
 
   const openUpdateMatchupsModal = (deckId: number) => {
@@ -379,9 +382,10 @@ export default function EventDetail() {
       .then((res) => {
         const ourMatchups = (res.matchups || []).map((m) => {
           const raw = (m.result || '').trim().toLowerCase()
-          const isID = raw === 'intentional_draw'
           let result: string = 'draw'
-          if (!isID && raw) {
+          if (raw === 'intentional_draw' || raw === 'intentional_draw_win' || raw === 'intentional_draw_loss') {
+            result = raw
+          } else if (raw) {
             if (raw === 'win' || raw === '2-1' || raw === '1-0' || raw === '2-0') result = 'win'
             else if (raw === 'loss' || raw === '1-2' || raw === '0-1' || raw === '0-2') result = 'loss'
             else if (raw === 'draw' || raw === '1-1' || raw === '0-0') result = 'draw'
@@ -389,7 +393,7 @@ export default function EventDetail() {
           return {
             opponent_player: (m.opponent_player ?? '').trim(),
             result,
-            intentional_draw: isID,
+            intentional_draw: ['intentional_draw', 'intentional_draw_win', 'intentional_draw_loss'].includes(raw),
           }
         })
         const reportedAgainstMe = (res.opponent_reported_matchups || []).map((m) => ({
@@ -434,7 +438,7 @@ export default function EventDetail() {
         .filter((m) => (m.opponent_player || '').trim())
         .map((m) => ({
           opponent_player: m.opponent_player.trim(),
-          result: m.intentional_draw && (m.result || 'draw') === 'draw' ? 'intentional_draw' : (m.result || 'draw'),
+          result: m.result || 'draw',
         })),
     }
     setSavingMatchups(true)
@@ -526,15 +530,24 @@ export default function EventDetail() {
       .catch((e) => toast.error(reportError(e)))
       .finally(() => setLoadingDiscrepancies(false))
   }
-  const fixMatchupResult = (matchupId: number, result: string) => {
-    setFixingMatchupId(matchupId)
-    patchMatchup(matchupId, { result })
+  const pairKey = (d: { matchup_a: { id: number }; matchup_b: { id: number } }) => `${d.matchup_a.id}-${d.matchup_b.id}`
+  const fixMatchupPair = (
+    d: { matchup_a: { id: number }; matchup_b: { id: number } },
+    resultA: string,
+    resultB: string
+  ) => {
+    const key = pairKey(d)
+    setFixingPairKey(key)
+    Promise.all([
+      patchMatchup(d.matchup_a.id, { result: resultA }),
+      patchMatchup(d.matchup_b.id, { result: resultB }),
+    ])
       .then(() => {
         loadDiscrepancies()
         toast.success('Matchup updated')
       })
       .catch((e) => toast.error(reportError(e)))
-      .finally(() => setFixingMatchupId(null))
+      .finally(() => setFixingPairKey(null))
   }
 
   const handleDeleteDeckClick = (deckId: number) => setConfirmDeleteDeckId(deckId)
@@ -769,19 +782,27 @@ export default function EventDetail() {
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>No discrepancies found.</p>
               ) : (
                 <ul style={{ paddingLeft: '1.25rem' }}>
-                  {discrepancies.map((d, i) => (
-                    <li key={i} style={{ marginBottom: '0.75rem' }}>
-                      Deck {d.deck_id_a} vs {d.deck_id_b}: reported &quot;{d.result_a}&quot; vs &quot;{d.result_b}&quot;.
-                      {' '}
-                      <button type="button" className="btn" style={{ fontSize: '0.875rem', padding: '0.2rem 0.4rem' }} onClick={() => fixMatchupResult(d.matchup_a.id, 'loss')} disabled={fixingMatchupId === d.matchup_a.id}>Set A loss</button>
-                      {' '}
-                      <button type="button" className="btn" style={{ fontSize: '0.875rem', padding: '0.2rem 0.4rem' }} onClick={() => fixMatchupResult(d.matchup_a.id, 'win')} disabled={fixingMatchupId === d.matchup_a.id}>Set A win</button>
-                      {' '}
-                      <button type="button" className="btn" style={{ fontSize: '0.875rem', padding: '0.2rem 0.4rem' }} onClick={() => fixMatchupResult(d.matchup_b.id, 'loss')} disabled={fixingMatchupId === d.matchup_b.id}>Set B loss</button>
-                      {' '}
-                      <button type="button" className="btn" style={{ fontSize: '0.875rem', padding: '0.2rem 0.4rem' }} onClick={() => fixMatchupResult(d.matchup_b.id, 'win')} disabled={fixingMatchupId === d.matchup_b.id}>Set B win</button>
-                    </li>
-                  ))}
+                  {discrepancies.map((d, i) => {
+                    const key = pairKey(d)
+                    const fixing = fixingPairKey === key
+                    return (
+                      <li key={i} style={{ marginBottom: '0.75rem' }}>
+                        {d.player_a} vs {d.player_b}: reported &quot;{d.result_a}&quot; vs &quot;{d.result_b}&quot;.
+                        {' '}
+                        <button type="button" className="btn" style={{ fontSize: '0.875rem', padding: '0.2rem 0.4rem' }} onClick={() => fixMatchupPair(d, 'win', 'loss')} disabled={fixing}>{d.player_a} wins</button>
+                        {' '}
+                        <button type="button" className="btn" style={{ fontSize: '0.875rem', padding: '0.2rem 0.4rem' }} onClick={() => fixMatchupPair(d, 'loss', 'win')} disabled={fixing}>{d.player_b} wins</button>
+                        {' '}
+                        <button type="button" className="btn" style={{ fontSize: '0.875rem', padding: '0.2rem 0.4rem' }} onClick={() => fixMatchupPair(d, 'draw', 'draw')} disabled={fixing}>Draw</button>
+                        {' '}
+                        <button type="button" className="btn" style={{ fontSize: '0.875rem', padding: '0.2rem 0.4rem' }} onClick={() => fixMatchupPair(d, 'intentional_draw', 'intentional_draw')} disabled={fixing}>Intentional draw</button>
+                        {' '}
+                        <button type="button" className="btn" style={{ fontSize: '0.875rem', padding: '0.2rem 0.4rem' }} onClick={() => fixMatchupPair(d, 'intentional_draw_win', 'intentional_draw_loss')} disabled={fixing}>Intentional draw ({d.player_a} wins)</button>
+                        {' '}
+                        <button type="button" className="btn" style={{ fontSize: '0.875rem', padding: '0.2rem 0.4rem' }} onClick={() => fixMatchupPair(d, 'intentional_draw_loss', 'intentional_draw_win')} disabled={fixing}>Intentional draw ({d.player_b} wins)</button>
+                      </li>
+                    )
+                  })}
                 </ul>
               )}
             </div>
@@ -1206,7 +1227,7 @@ export default function EventDetail() {
               Update matchups {decks.find((d) => d.deck_id === matchupsDeckId) ? `— ${cellStr(decks.find((d) => d.deck_id === matchupsDeckId)?.name) || 'Unnamed'}` : ''}
             </h2>
             <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
-              Result: Win / Lose / Draw, or check Intentional draw. Opponent name must match a player in this event.
+              Result is for <strong>this deck (you)</strong> vs the selected opponent. Use &quot;Intentional draw&quot; for agreed draws; use &quot;Intentional draw (you win/lose)&quot; when the result is ID but tiebreakers assign a win or loss. Opponent name must match a player in this event.
             </p>
             {loadingMatchups ? (
               <p>Loading…</p>
@@ -1231,23 +1252,14 @@ export default function EventDetail() {
                         value={m.result || 'draw'}
                         onChange={(e) => updateMatchupRow(i, 'result', e.target.value)}
                         disabled={savingMatchups}
-                        style={{ minWidth: 90 }}
-                        aria-label="Result"
-                        title={m.intentional_draw ? 'Intentional draw (Win/Lose still recorded if selected)' : undefined}
+                        style={{ minWidth: 200 }}
+                        aria-label="Result (you vs this opponent)"
+                        title="Result for you vs this opponent"
                       >
                         {MATCHUP_RESULT_OPTIONS.map((opt) => (
                           <option key={opt.value} value={opt.value}>{opt.label}</option>
                         ))}
                       </select>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.875rem' }}>
-                        <input
-                          type="checkbox"
-                          checked={m.intentional_draw}
-                          onChange={(e) => updateMatchupRow(i, 'intentional_draw', e.target.checked)}
-                          disabled={savingMatchups}
-                        />
-                        Intentional draw
-                      </label>
                       <button type="button" className="btn" style={{ padding: '0.2rem 0.5rem' }} onClick={() => removeMatchupRow(i)} disabled={savingMatchups}>
                         Remove
                       </button>
