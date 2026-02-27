@@ -1275,7 +1275,7 @@ def get_upload_link_info(token: str):
                         {
                             "opponent_player": m.get("opponent_player", ""),
                             "result": m.get("result", "1-1"),
-                            "intentional_draw": (m.get("result") or "").strip() == "intentional_draw",
+                            "intentional_draw": _is_intentional_draw_result(m.get("result") or ""),
                         }
                         for m in matchup_rows
                     ]
@@ -1300,12 +1300,16 @@ def get_upload_link_info(token: str):
                             inv_result = "loss"
                         elif res == "loss":
                             inv_result = "win"
+                        elif res == "intentional_draw_win":
+                            inv_result = "intentional_draw_loss"
+                        elif res == "intentional_draw_loss":
+                            inv_result = "intentional_draw_win"
                         else:
-                            inv_result = "draw"
+                            inv_result = "draw" if res == "intentional_draw" else "draw"
                         inverted.append({
                             "opponent_player": (r.get("reporting_player") or "").strip(),
                             "result": inv_result,
-                            "intentional_draw": res == "intentional_draw",
+                            "intentional_draw": _is_intentional_draw_result(res),
                         })
                     deck_out["opponent_reported_matchups"] = inverted
                 out["deck"] = deck_out
@@ -1669,12 +1673,16 @@ def get_deck_matchups(deck_id: int):
                     inv_result = "loss"
                 elif res == "loss":
                     inv_result = "win"
+                elif res == "intentional_draw_win":
+                    inv_result = "intentional_draw_loss"
+                elif res == "intentional_draw_loss":
+                    inv_result = "intentional_draw_win"
                 else:
-                    inv_result = "draw"
+                    inv_result = "draw" if res == "intentional_draw" else "draw"
                 opponent_reported_matchups.append({
                     "opponent_player": (r.get("reporting_player") or "").strip(),
                     "result": inv_result,
-                    "intentional_draw": res == "intentional_draw",
+                    "intentional_draw": _is_intentional_draw_result(res),
                 })
     return {"matchups": rows, "opponent_reported_matchups": opponent_reported_matchups}
 
@@ -2348,6 +2356,10 @@ def _matchup_result_to_canonical(result: str) -> str:
     r = (result or "").strip().lower()
     if r in ("intentional_draw", "id"):
         return "intentional_draw"
+    if r == "intentional_draw_win":
+        return "win"
+    if r == "intentional_draw_loss":
+        return "loss"
     if r in ("2-1", "1-0"):
         return "win"
     if r in ("1-2", "0-1"):
@@ -2357,6 +2369,12 @@ def _matchup_result_to_canonical(result: str) -> str:
     if r in ("win", "loss", "draw"):
         return r
     return "draw"
+
+
+def _is_intentional_draw_result(result: str) -> bool:
+    """True if result is any intentional-draw variant (stored as distinct state; used as win/loss/draw in calcs)."""
+    r = (result or "").strip().lower()
+    return r in ("intentional_draw", "intentional_draw_win", "intentional_draw_loss")
 
 
 def _matchup_result_consistent(result_a: str, result_b: str) -> bool:
@@ -2460,15 +2478,19 @@ def get_matchups_summary(
         filtered.append(r)
 
     def to_effective_wld(row):
-        raw = (row.get("result") or "loss").strip()
-        if raw.lower() == "intentional_draw":
+        raw = (row.get("result") or "loss").strip().lower()
+        if raw == "intentional_draw":
             return (0, 0, 1)
-        canonical = _matchup_result_to_canonical(raw)
+        if raw == "intentional_draw_win":
+            return (1, 0, 0)
+        if raw == "intentional_draw_loss":
+            return (0, 1, 0)
+        canonical = _matchup_result_to_canonical(row.get("result") or "loss")
         if canonical == "win":
             return (1, 0, 0)
         if canonical == "loss":
             return (0, 1, 0)
-        return (0, 0, 1)  # draw or intentional_draw
+        return (0, 0, 1)  # draw
 
     def add_to_agg(arch: str, opp: str, w: int, l: int, d: int, is_intentional_draw: bool, matches: int):
         for (a, o), (aw, al, ad) in [((arch, opp), (w, l, d)), ((opp, arch), (l, w, d))]:
@@ -2510,21 +2532,21 @@ def get_matchups_summary(
             arch = (row.get("archetype") or "(unknown)").strip()
             opp = (row.get("opponent_archetype") or "(unknown)").strip()
             w, l, d = to_effective_wld(row)
-            is_id = (row.get("result") or "").strip().lower() == "intentional_draw"
+            is_id = _is_intentional_draw_result(row.get("result") or "")
             add_to_agg(arch, opp, w, l, d, is_id, matches=1)
         for i in range(n_paired, len(from_ab)):
             row = from_ab[i]
             arch = (row.get("archetype") or "(unknown)").strip()
             opp = (row.get("opponent_archetype") or "(unknown)").strip()
             w, l, d = to_effective_wld(row)
-            is_id = (row.get("result") or "").strip().lower() == "intentional_draw"
+            is_id = _is_intentional_draw_result(row.get("result") or "")
             add_to_agg(arch, opp, w, l, d, is_id, matches=1)
         for i in range(n_paired, len(from_ba)):
             row = from_ba[i]
             arch = (row.get("archetype") or "(unknown)").strip()
             opp = (row.get("opponent_archetype") or "(unknown)").strip()
             w, l, d = to_effective_wld(row)
-            is_id = (row.get("result") or "").strip().lower() == "intentional_draw"
+            is_id = _is_intentional_draw_result(row.get("result") or "")
             add_to_agg(arch, opp, w, l, d, is_id, matches=1)
 
     for r in unpaired_rows:
@@ -2537,7 +2559,7 @@ def get_matchups_summary(
         agg[key]["wins"] += w
         agg[key]["losses"] += l
         agg[key]["draws"] += d
-        if (r.get("result") or "").strip().lower() == "intentional_draw":
+        if _is_intentional_draw_result(r.get("result") or ""):
             agg[key]["intentional_draws"] += 1
         agg[key]["matches"] += 1
 
@@ -2582,6 +2604,38 @@ def get_matchups_summary(
     }
 
 
+@app.get("/api/events/event-ids-with-discrepancies", dependencies=[Depends(require_admin), Depends(require_database)])
+def get_event_ids_with_discrepancies():
+    """Return event_ids that have at least one matchup discrepancy (admin)."""
+    with _db.session_scope() as session:
+        rows = _db.list_all_matchups_with_event_id(session)
+    by_event: dict[str, list[dict]] = {}
+    for r in rows:
+        eid = (r.get("event_id") or "").strip()
+        if not eid:
+            continue
+        by_event.setdefault(eid, []).append(r)
+    event_ids_with_discrepancies: list[str] = []
+    for eid, event_rows in by_event.items():
+        by_pair: dict[tuple[int, int], list[dict]] = {}
+        for r in event_rows:
+            key = tuple(sorted([r["deck_id"], r["opponent_deck_id"]]))
+            by_pair.setdefault(key, []).append(r)
+        for (deck_a, deck_b), matchups in by_pair.items():
+            if len(matchups) != 2:
+                continue
+            from_a = next((m for m in matchups if m["deck_id"] == deck_a), None)
+            from_b = next((m for m in matchups if m["deck_id"] == deck_b), None)
+            if from_a is None or from_b is None:
+                continue
+            r1 = from_a.get("result") or ""
+            r2 = from_b.get("result") or ""
+            if not _matchup_result_consistent(r1, r2):
+                event_ids_with_discrepancies.append(eid)
+                break
+    return {"event_ids": event_ids_with_discrepancies}
+
+
 @app.get("/api/events/{event_id}/matchup-discrepancies", dependencies=[Depends(require_admin), Depends(require_database)])
 def get_matchup_discrepancies(event_id: str):
     """List matchup pairs where both players reported and results disagree (admin)."""
@@ -2600,18 +2654,33 @@ def get_matchup_discrepancies(event_id: str):
         for (deck_a, deck_b), matchups in by_pair.items():
             if len(matchups) != 2:
                 continue
-            m1, m2 = matchups
-            r1 = m1["result"]
-            r2 = m2["result"]
+            from_a = next((m for m in matchups if m["deck_id"] == deck_a), None)
+            from_b = next((m for m in matchups if m["deck_id"] == deck_b), None)
+            if from_a is None or from_b is None:
+                continue
+            r1 = from_a["result"]
+            r2 = from_b["result"]
             if not _matchup_result_consistent(r1, r2):
                 discrepancies.append({
                     "deck_id_a": deck_a,
                     "deck_id_b": deck_b,
-                    "matchup_a": m1,
-                    "matchup_b": m2,
+                    "matchup_a": from_a,
+                    "matchup_b": from_b,
                     "result_a": r1,
                     "result_b": r2,
                 })
+        deck_ids = set()
+        for d in discrepancies:
+            deck_ids.add(d["deck_id_a"])
+            deck_ids.add(d["deck_id_b"])
+        player_by_deck = {}
+        if deck_ids:
+            rows = session.query(_db.DeckRow).filter(_db.DeckRow.deck_id.in_(deck_ids)).all()
+            for r in rows:
+                player_by_deck[r.deck_id] = (r.player or "").strip() or "(unknown)"
+        for d in discrepancies:
+            d["player_a"] = player_by_deck.get(d["deck_id_a"], "(unknown)")
+            d["player_b"] = player_by_deck.get(d["deck_id_b"], "(unknown)")
         return {"discrepancies": discrepancies}
 
 

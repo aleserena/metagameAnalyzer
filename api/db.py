@@ -680,6 +680,20 @@ def list_matchups_for_event(session: Session, event_id: str) -> list[dict]:
     ]
 
 
+def list_all_matchups_with_event_id(session: Session) -> list[dict]:
+    """All matchups with event_id (via deck). Returns list of { deck_id, opponent_deck_id, result, event_id }."""
+    rows = (
+        session.query(MatchupRow.deck_id, MatchupRow.opponent_deck_id, MatchupRow.result, DeckRow.event_id)
+        .join(DeckRow, MatchupRow.deck_id == DeckRow.deck_id)
+        .filter(MatchupRow.opponent_deck_id.isnot(None))
+        .all()
+    )
+    return [
+        {"deck_id": r.deck_id, "opponent_deck_id": r.opponent_deck_id, "result": r.result or "", "event_id": r.event_id or ""}
+        for r in rows
+    ]
+
+
 def list_matchups_reported_against_player(session: Session, event_id: str, opponent_player: str) -> list[dict]:
     """Matchups in this event where the given player was the opponent (others reported a result vs them).
     Returns list of { reporting_player, result }."""

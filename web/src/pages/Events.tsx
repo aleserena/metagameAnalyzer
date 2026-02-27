@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { getEvents, createEvent } from '../api'
+import { getEvents, createEvent, getEventIdsWithDiscrepancies } from '../api'
 import type { EventWithOrigin } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import { useFetch } from '../hooks/useFetch'
@@ -49,8 +49,17 @@ export default function Events() {
   const [filterName, setFilterName] = useState('')
   const [filterDateIso, setFilterDateIso] = useState('') // YYYY-MM-DD for date picker
   const [filterFormat, setFilterFormat] = useState('')
+  const [filterWithDiscrepanciesOnly, setFilterWithDiscrepanciesOnly] = useState(false)
   const [sortBy, setSortBy] = useState<SortKey>('date')
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
+  const { data: discrepancyData } = useFetch<{ event_ids: string[] }>(
+    () => (user === 'admin' ? getEventIdsWithDiscrepancies() : Promise.resolve({ event_ids: [] })),
+    [user]
+  )
+  const eventIdsWithDiscrepancies = useMemo(
+    () => new Set((discrepancyData?.event_ids ?? []).map((id) => String(id))),
+    [discrepancyData]
+  )
 
   useEffect(() => {
     if (error) toast.error(reportError(new Error(error)))
@@ -102,6 +111,9 @@ export default function Events() {
     if (filterFormat) {
       list = list.filter((e) => cellStr(e.format_id) === filterFormat)
     }
+    if (user === 'admin' && filterWithDiscrepanciesOnly) {
+      list = list.filter((e) => eventIdsWithDiscrepancies.has(String(e.event_id)))
+    }
     const dir = sortOrder === 'asc' ? 1 : -1
     return [...list].sort((a, b) => {
       const va = normalizeForSort(a, sortBy)
@@ -111,7 +123,7 @@ export default function Events() {
         : String(va).localeCompare(String(vb), undefined, { numeric: true })
       return dir * cmp
     })
-  }, [events, filterName, filterDateIso, filterFormat, sortBy, sortOrder])
+  }, [events, filterName, filterDateIso, filterFormat, filterWithDiscrepanciesOnly, eventIdsWithDiscrepancies, user, sortBy, sortOrder])
 
   const formatOptions = useMemo(() => {
     const set = new Set<string>()
@@ -122,11 +134,12 @@ export default function Events() {
     return [...set].sort()
   }, [events])
 
-  const hasFilters = Boolean(filterName.trim() || filterDateIso || filterFormat)
+  const hasFilters = Boolean(filterName.trim() || filterDateIso || filterFormat || (user === 'admin' && filterWithDiscrepanciesOnly))
   const clearFilters = () => {
     setFilterName('')
     setFilterDateIso('')
     setFilterFormat('')
+    setFilterWithDiscrepanciesOnly(false)
   }
 
   const handleSort = (key: SortKey) => {
@@ -268,6 +281,16 @@ export default function Events() {
                 ))}
               </select>
             </label>
+            {user === 'admin' && (
+              <label className="events-filters-item" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={filterWithDiscrepanciesOnly}
+                  onChange={(e) => setFilterWithDiscrepanciesOnly(e.target.checked)}
+                />
+                <span className="label">With discrepancies only</span>
+              </label>
+            )}
             {hasFilters && (
               <button type="button" className="btn" onClick={clearFilters}>
                 Clear filters
@@ -284,6 +307,11 @@ export default function Events() {
             <table>
               <thead>
                 <tr>
+                  {user === 'admin' && (
+                    <th scope="col" style={{ width: 28, textAlign: 'center' }} title="Has matchup discrepancies">
+                      ⚠
+                    </th>
+                  )}
                   <th
                     scope="col"
                     className="sortable"
@@ -349,6 +377,11 @@ export default function Events() {
               <tbody>
                 {filteredAndSorted.map((e) => (
                 <tr key={String(e.event_id)}>
+                  {user === 'admin' && (
+                    <td style={{ textAlign: 'center' }} title={eventIdsWithDiscrepancies.has(String(e.event_id)) ? 'Has matchup discrepancies' : ''}>
+                      {eventIdsWithDiscrepancies.has(String(e.event_id)) ? '⚠' : '—'}
+                    </td>
+                  )}
                   <td>
                     <Link to={`/events/${encodeURIComponent(String(e.event_id))}`} style={{ color: 'var(--accent)', fontWeight: 500 }}>
                       {(typeof e.event_name === 'string' && e.event_name.trim()) ? e.event_name : 'Unnamed'}
