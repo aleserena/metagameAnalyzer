@@ -845,6 +845,44 @@ export default function EventDetail() {
               </button>
             </p>
           )}
+          <h3 style={{ marginTop: '1.5rem', marginBottom: '0.5rem' }}>Event edit link</h3>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '0.75rem' }}>
+            One-time link to this event page to add, update, and delete decks and edit event details. Cannot delete the event or generate new links.
+          </p>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              if (!eventId) return
+              setGeneratingEventEditLink(true)
+              createEventEditLink(eventId)
+                .then((res) => {
+                  if (res.links.length > 0) {
+                    const token = res.links[0].token
+                    const base = typeof window !== 'undefined' ? window.location.origin : ''
+                    const url = `${base}/events/${eventId}?token=${token}`
+                    setGeneratedEventEditLink({ url })
+                    window.navigator.clipboard.writeText(url).then(
+                      () => toast.success('Event edit link copied to clipboard'),
+                      () => toast.success('Event edit link generated')
+                    )
+                  }
+                })
+                .catch((e) => toast.error(reportError(e)))
+                .finally(() => setGeneratingEventEditLink(false))
+            }}
+            disabled={generatingEventEditLink}
+          >
+            {generatingEventEditLink ? 'Generating…' : 'Generate event edit link'}
+          </button>
+          {generatedEventEditLink && (
+            <p style={{ marginTop: '0.75rem', fontSize: '0.9rem' }}>
+              <code style={{ wordBreak: 'break-all' }}>{generatedEventEditLink.url}</code>{' '}
+              <button type="button" className="btn" style={{ flexShrink: 0 }} onClick={() => copyLink(generatedEventEditLink!.url)}>
+                Copy
+              </button>
+            </p>
+          )}
         </section>
       )}
 
