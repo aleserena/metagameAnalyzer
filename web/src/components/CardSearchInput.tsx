@@ -47,6 +47,34 @@ export default function CardSearchInput({
     })
   }, [open])
 
+  // Keep dropdown aligned with input when page or scrollable parent scrolls
+  useEffect(() => {
+    if (!open) return
+    let rafId: number
+    let lastTop = 0
+    let lastLeft = 0
+    let lastWidth = 0
+    const update = () => {
+      if (!containerRef.current) {
+        rafId = requestAnimationFrame(update)
+        return
+      }
+      const rect = containerRef.current.getBoundingClientRect()
+      const top = rect.bottom + 2
+      const left = rect.left
+      const width = rect.width
+      if (top !== lastTop || left !== lastLeft || width !== lastWidth) {
+        lastTop = top
+        lastLeft = left
+        lastWidth = width
+        setDropdownPosition({ top, left, width })
+      }
+      rafId = requestAnimationFrame(update)
+    }
+    rafId = requestAnimationFrame(update)
+    return () => cancelAnimationFrame(rafId)
+  }, [open])
+
   const fetchOptions = useCallback(async (q: string) => {
     if (q.length < MIN_QUERY_LEN) {
       setOptions([])

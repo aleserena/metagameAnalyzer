@@ -283,13 +283,16 @@ export default function DeckCompare() {
               >
                 {compareData.map((d) => {
                   const a = analyses[d.deck_id]!
-                  const curveEntries = Object.entries(a.mana_curve).map(([cmc, count]) => ({ cmc: Number(cmc), count }))
-                  const maxCmc = Math.max(0, ...curveEntries.map((x) => x.cmc))
-                  const allCmc = Array.from({ length: maxCmc + 1 }, (_, i) => i)
-                  const data = allCmc.map((cmc) => ({
-                    cmc,
-                    count: a.mana_curve[cmc] ?? 0,
-                  }))
+                  const curve = a.mana_curve || {}
+                  const perm = a.mana_curve_permanent ?? {}
+                  const nonPerm = a.mana_curve_non_permanent ?? {}
+                  const hasSplit = Object.keys(perm).length > 0 || Object.keys(nonPerm).length > 0
+                  const maxCmc = Math.max(0, ...Object.keys(curve).map(Number), ...Object.keys(perm).map(Number), ...Object.keys(nonPerm).map(Number))
+                  const data = Array.from({ length: maxCmc + 1 }, (_, cmc) => {
+                    const p = hasSplit ? (perm[cmc] ?? 0) : (curve[cmc] ?? 0)
+                    const n = hasSplit ? (nonPerm[cmc] ?? 0) : 0
+                    return { cmc, permanent: p, non_permanent: n, count: p + n }
+                  })
                   return (
                     <div key={d.deck_id} className="chart-container chart-container--flex">
                       <div style={{ marginBottom: '1.25rem' }}>
@@ -310,7 +313,8 @@ export default function DeckCompare() {
                             }}
                             labelStyle={{ color: 'var(--text)', fontWeight: 600 }}
                           />
-                          <Bar dataKey="count" fill="#1d9bf0" name="Cards" />
+                          <Bar dataKey="permanent" stackId="curve" fill="#22c55e" name="Permanents" />
+                          <Bar dataKey="non_permanent" stackId="curve" fill="#ef4444" name="Non-permanents" />
                           <Line type="monotone" dataKey="count" stroke="#c2410c" strokeWidth={2} dot={{ r: 4, fill: '#c2410c' }} name="" />
                         </ComposedChart>
                       </ResponsiveContainer>

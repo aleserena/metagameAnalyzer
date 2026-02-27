@@ -18,6 +18,8 @@ export interface Deck {
   commanders: string[]
   archetype: string | null
   duplicate_info?: DeckDuplicateInfo
+  /** True if this player has an email stored (admin event view only). */
+  has_email?: boolean
 }
 
 export interface MetagameSummary {
@@ -140,6 +142,8 @@ export interface PlayerStats {
 /** Average deck analysis for an archetype (subset of deck analysis fields). */
 export interface ArchetypeAverageAnalysis {
   mana_curve: Record<string, number>
+  mana_curve_permanent?: Record<string, number>
+  mana_curve_non_permanent?: Record<string, number>
   color_distribution: Record<string, number>
   lands_distribution: { lands: number; nonlands: number }
   type_distribution: Record<string, number>

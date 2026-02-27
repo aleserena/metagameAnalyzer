@@ -14,7 +14,7 @@ import {
   Cell,
   Legend,
 } from 'recharts'
-import { getArchetypeDetail, getCardLookup, getDecks } from '../api'
+import { getArchetypeDetail, getCardLookup, getDecks, getMatchupsSummary } from '../api'
 import type { CardLookupResult } from '../api'
 import type { ArchetypeDetail as ArchetypeDetailType, Deck } from '../types'
 import CardHover from '../components/CardHover'
@@ -69,6 +69,7 @@ export default function ArchetypeDetail() {
   const [topCardsPage, setTopCardsPage] = useState(0)
   const [topDecks, setTopDecks] = useState<Deck[]>([])
   const [ignoreLands, setIgnoreLands] = useState(false)
+  const [matchupRows, setMatchupRows] = useState<Awaited<ReturnType<typeof getMatchupsSummary>>['list']>([])
 
   const navigate = useNavigate()
   const eventIdsParam = searchParams.get('event_ids') ?? undefined
@@ -92,6 +93,13 @@ export default function ArchetypeDetail() {
       })
       .finally(() => setLoading(false))
   }, [archetypeName, eventIdsParam, ignoreLands])
+
+  useEffect(() => {
+    if (!archetypeName) return
+    getMatchupsSummary({ archetype: [decodeURIComponent(archetypeName)] })
+      .then((res) => setMatchupRows(res.list))
+      .catch(() => setMatchupRows([]))
+  }, [archetypeName])
 
   useEffect(() => {
     const topMain = detail?.top_cards_main ?? []
@@ -270,6 +278,39 @@ export default function ArchetypeDetail() {
         </div>
       )}
 
+      {matchupRows.length > 0 && (
+        <div style={{ marginBottom: '1.5rem' }}>
+          <h3 style={{ margin: '0 0 0.75rem' }}>Matchup performance</h3>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '0.5rem' }}>
+            From event feedback. <Link to="/matchups">View full matchups</Link>
+          </p>
+          <div className="table-wrap-outer">
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Opponent archetype</th>
+                    <th scope="col">Record</th>
+                    <th scope="col">Win rate</th>
+                    <th scope="col">Matches</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {matchupRows.map((row, i) => (
+                    <tr key={i}>
+                      <td>{row.opponent_archetype}</td>
+                      <td>{row.wins}–{row.losses}–{row.draws}</td>
+                      <td>{(row.win_rate * 100).toFixed(1)}%</td>
+                      <td>{row.matches}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
       <h3 style={{ margin: '0 0 0.75rem' }}>Average deck composition</h3>
       <div className="deck-analysis-grid">
         {hasCurve && (
@@ -277,7 +318,18 @@ export default function ArchetypeDetail() {
             <h4 style={{ margin: '0 0 0.75rem', fontSize: '0.95rem' }}>Mana Curve</h4>
             <ResponsiveContainer width="100%" height={180}>
               <ComposedChart
-                data={Object.entries(a.mana_curve).map(([cmc, count]) => ({ cmc: Number(cmc), count }))}
+                data={(() => {
+                  const curve = a.mana_curve || {}
+                  const perm = a.mana_curve_permanent ?? {}
+                  const nonPerm = a.mana_curve_non_permanent ?? {}
+                  const hasSplit = Object.keys(perm).length > 0 || Object.keys(nonPerm).length > 0
+                  const maxCmc = Math.max(0, ...Object.keys(curve).map(Number), ...Object.keys(perm).map(Number), ...Object.keys(nonPerm).map(Number))
+                  return Array.from({ length: maxCmc + 1 }, (_, cmc) => {
+                    const p = hasSplit ? (perm[String(cmc)] ?? 0) : (curve[String(cmc)] ?? 0)
+                    const n = hasSplit ? (nonPerm[String(cmc)] ?? 0) : 0
+                    return { cmc, permanent: p, non_permanent: n, count: p + n }
+                  })
+                })()}
                 margin={{ top: 10, right: 16, left: 36, bottom: 24 }}
               >
                 <XAxis dataKey="cmc" />
@@ -291,7 +343,8 @@ export default function ArchetypeDetail() {
                   }}
                   labelStyle={{ color: 'var(--text)', fontWeight: 600 }}
                 />
-                <Bar dataKey="count" fill="#1d9bf0" name="Cards (avg)" />
+                <Bar dataKey="permanent" stackId="curve" fill="#22c55e" name="Permanents (avg)" />
+                <Bar dataKey="non_permanent" stackId="curve" fill="#ef4444" name="Non-permanents (avg)" />
                 <Line type="monotone" dataKey="count" stroke="#c2410c" strokeWidth={2} dot={{ r: 4, fill: '#c2410c' }} name="" />
               </ComposedChart>
             </ResponsiveContainer>

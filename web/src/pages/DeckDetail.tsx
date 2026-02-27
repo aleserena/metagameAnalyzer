@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useParams, useNavigate, Link } from 'react-router-dom'
+import { useParams, useNavigate, Link, useBlocker } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts'
-import { getDeck, getMetagame, getDeckAnalysis, getDateRange, getSimilarDecks, updateDeck, deleteDeck, getCardLookup, importDeckFromMoxfield } from '../api'
+import { getDeck, getMetagame, getDeckAnalysis, getDateRange, getSimilarDecks, updateDeck, deleteDeck, getCardLookup, importDeckFromMoxfield, createEventUploadLinks } from '../api'
 import { parseMoxfieldDeckList, formatMoxfieldDeckList } from '../lib/deckListParser'
 import { useAuth } from '../contexts/AuthContext'
 import type { Deck, MetagameReport, SimilarDeck } from '../types'
@@ -145,6 +145,35 @@ function DeckEditSection({
   const [commander2, setCommander2] = useState('')
 
   const isEDH = (deck?.format_id || '').toUpperCase() === 'EDH' || (deck?.format_id || '').toLowerCase() === 'cedh'
+
+  const originalDeckListText = useMemo(
+    () => (deck ? formatMoxfieldDeckList(deck.commanders || [], deck.mainboard || [], deck.sideboard || []) : ''),
+    [deck]
+  )
+
+  const hasUnsavedEdits = useMemo(() => {
+    if (!editing || !deck) return false
+    return (
+      name !== (deck.name || '') ||
+      player !== (deck.player || '') ||
+      rank !== (deck.rank || '') ||
+      archetype !== (deck.archetype || '') ||
+      commander1 !== (deck.commanders?.[0] ?? '') ||
+      commander2 !== (deck.commanders?.[1] ?? '') ||
+      deckListText !== originalDeckListText
+    )
+  }, [editing, deck, name, player, rank, archetype, commander1, commander2, deckListText, originalDeckListText])
+
+  const blocker = useBlocker(hasUnsavedEdits)
+
+  useEffect(() => {
+    if (!hasUnsavedEdits) return
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [hasUnsavedEdits])
 
   useEffect(() => {
     if (deck) {
@@ -426,6 +455,51 @@ function DeckEditSection({
       ) : (
         <button type="button" className="btn" onClick={startEdit}>Edit deck</button>
       )}
+
+      {blocker.state === 'blocked' && hasUnsavedEdits && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="deck-unsaved-changes-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '1rem',
+          }}
+          onClick={(e) => e.target === e.currentTarget && blocker.reset()}
+        >
+          <div
+            className="card"
+            style={{
+              maxWidth: 400,
+              width: '100%',
+              padding: '1.5rem',
+              borderRadius: 12,
+              background: 'var(--bg-card)',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="deck-unsaved-changes-title" style={{ marginTop: 0, marginBottom: '0.75rem' }}>Unsaved changes</h2>
+            <p style={{ color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
+              You have unsaved changes. Do you want to leave this page? Your changes will be lost.
+            </p>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button type="button" className="btn btn-primary" onClick={() => blocker.proceed()}>
+                Leave
+              </button>
+              <button type="button" className="btn" onClick={() => blocker.reset()}>
+                Stay
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -542,6 +616,7 @@ export default function DeckDetail() {
   const [similarDecksSameEventOnly, setSimilarDecksSameEventOnly] = useState(true)
   const [compareSelectedIds, setCompareSelectedIds] = useState<Set<number>>(new Set())
   const [deleting, setDeleting] = useState(false)
+  const [generatingUpdateLink, setGeneratingUpdateLink] = useState(false)
   const [commanderLookup, setCommanderLookup] = useState<Record<string, CardLookupResult> | null>(null)
   const [sampleHand, setSampleHand] = useState<string[]>([])
   const [handLookup, setHandLookup] = useState<Record<string, CardLookupResult>>({})
@@ -797,8 +872,8 @@ export default function DeckDetail() {
           <div>
             <div className="label">Event</div>
             <div>
-              <Link to={`/decks?event_ids=${encodeURIComponent(String(deck.event_id))}`} style={{ color: 'var(--accent)' }}>
-                {deck.event_name}
+              <Link to={deck.event_id ? `/events/${encodeURIComponent(String(deck.event_id))}` : '/events'} style={{ color: 'var(--accent)' }}>
+                {deck.event_name || 'Unnamed'}
               </Link>
             </div>
           </div>
@@ -835,6 +910,36 @@ export default function DeckDetail() {
       />
 
       {user === 'admin' && deck && (
+        <>
+        <div className="card" style={{ marginBottom: '1.5rem' }}>
+          <h3 style={{ margin: '0 0 0.75rem' }}>Update link</h3>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '0.75rem' }}>
+            Create a one-time link so the player can update this deck (name, rank, deck list) without logging in.
+          </p>
+          <button
+            type="button"
+            className="btn"
+            disabled={generatingUpdateLink || !deck.event_id}
+            onClick={() => {
+              if (!deck.event_id) return
+              setGeneratingUpdateLink(true)
+              createEventUploadLinks(deck.event_id, { deck_id: deck.deck_id })
+                .then((res) => {
+                  if (res.links.length > 0) {
+                    const url = res.links[0].url || `${typeof window !== 'undefined' ? window.location.origin : ''}/upload/${res.links[0].token}`
+                    window.navigator.clipboard.writeText(url).then(
+                      () => toast.success('Update link copied to clipboard'),
+                      () => toast.success('Update link generated')
+                    )
+                  }
+                })
+                .catch((e) => toast.error(e?.message || 'Failed to create link'))
+                .finally(() => setGeneratingUpdateLink(false))
+            }}
+          >
+            {generatingUpdateLink ? 'Generating…' : 'Copy update link'}
+          </button>
+        </div>
         <div className="card" style={{ marginBottom: '1.5rem' }}>
           <h3 style={{ margin: '0 0 0.75rem' }}>Danger zone</h3>
           <button
@@ -857,6 +962,7 @@ export default function DeckDetail() {
             {deleting ? 'Deleting…' : 'Delete deck'}
           </button>
         </div>
+        </>
       )}
 
       {analysis && (
@@ -867,7 +973,18 @@ export default function DeckDetail() {
               <h4 style={{ margin: '0 0 0.75rem', fontSize: '0.95rem' }}>Mana Curve</h4>
               <ResponsiveContainer width="100%" height={180}>
                 <ComposedChart
-                  data={Object.entries(analysis.mana_curve).map(([cmc, count]) => ({ cmc: Number(cmc), count }))}
+                  data={(() => {
+                    const curve = analysis.mana_curve || {}
+                    const perm = analysis.mana_curve_permanent ?? {}
+                    const nonPerm = analysis.mana_curve_non_permanent ?? {}
+                    const hasSplit = Object.keys(perm).length > 0 || Object.keys(nonPerm).length > 0
+                    const maxCmc = Math.max(0, ...Object.keys(curve).map(Number), ...Object.keys(perm).map(Number), ...Object.keys(nonPerm).map(Number))
+                    return Array.from({ length: maxCmc + 1 }, (_, cmc) => {
+                      const p = hasSplit ? (perm[cmc] ?? 0) : (curve[cmc] ?? 0)
+                      const n = hasSplit ? (nonPerm[cmc] ?? 0) : 0
+                      return { cmc, permanent: p, non_permanent: n, count: p + n }
+                    })
+                  })()}
                   margin={{ top: 10, right: 16, left: 36, bottom: 24 }}
                 >
                   <XAxis dataKey="cmc" />
@@ -881,7 +998,8 @@ export default function DeckDetail() {
                     }}
                     labelStyle={{ color: 'var(--text)', fontWeight: 600 }}
                   />
-                  <Bar dataKey="count" fill="#1d9bf0" name="Cards" />
+                  <Bar dataKey="permanent" stackId="curve" fill="#22c55e" name="Permanents" />
+                  <Bar dataKey="non_permanent" stackId="curve" fill="#ef4444" name="Non-permanents" />
                   <Line type="monotone" dataKey="count" stroke="#c2410c" strokeWidth={2} dot={{ r: 4, fill: '#c2410c' }} name="" />
                 </ComposedChart>
               </ResponsiveContainer>

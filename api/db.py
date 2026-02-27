@@ -83,6 +83,25 @@ class SettingsRow(Base):
 LINK_TYPE_DECK_UPLOAD = "deck_upload"
 LINK_TYPE_DECK_UPDATE = "deck_update"
 LINK_TYPE_EVENT_EDIT = "event_edit"
+LINK_TYPE_FEEDBACK = "feedback"
+
+
+class PlayerEmailRow(Base):
+    __tablename__ = "player_emails"
+    player = Column(Text, primary_key=True)
+    email = Column(Text, nullable=False)
+
+
+class MatchupRow(Base):
+    __tablename__ = "matchups"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    deck_id = Column(Integer, nullable=False)
+    opponent_player = Column(String(512), nullable=False)
+    opponent_deck_id = Column(Integer, nullable=True)
+    opponent_archetype = Column(String(512), nullable=True)
+    result = Column(String(32), nullable=False)  # win | loss | draw | intentional_draw
+    result_note = Column(String(512), nullable=True)
+    round = Column(Integer, nullable=True)
 
 
 class EventUploadLinkRow(Base):
@@ -90,7 +109,7 @@ class EventUploadLinkRow(Base):
     token = Column(String(64), primary_key=True)
     event_id = Column(String(32), nullable=False)
     deck_id = Column(Integer, nullable=True)  # when set, link is for updating this deck (one-time)
-    link_type = Column(String(32), nullable=False, default=LINK_TYPE_DECK_UPLOAD)  # deck_upload | deck_update | event_edit
+    link_type = Column(String(32), nullable=False, default=LINK_TYPE_DECK_UPLOAD)  # deck_upload | deck_update | event_edit | feedback
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     used_at = Column(DateTime, nullable=True)
     expires_at = Column(DateTime, nullable=True)
@@ -436,7 +455,7 @@ def create_upload_link(
     deck_id: int | None = None,
     link_type: str = LINK_TYPE_DECK_UPLOAD,
 ) -> EventUploadLinkRow:
-    """Insert a one-time upload link. Token from secrets.token_urlsafe(32). If deck_id is set, link_type becomes deck_update. link_type: deck_upload | deck_update | event_edit."""
+    """Insert a one-time upload link. Token from secrets.token_urlsafe(32). If deck_id is set and link_type is deck_upload, becomes deck_update. link_type: deck_upload | deck_update | event_edit | feedback."""
     eid = _event_id_str(event_id)
     if deck_id is not None and link_type == LINK_TYPE_DECK_UPLOAD:
         link_type = LINK_TYPE_DECK_UPDATE
@@ -490,6 +509,26 @@ def delete_upload_link(session: Session, token: str) -> bool:
     return True
 
 
+def invalidate_upload_links_for_slot(
+    session: Session,
+    event_id: str,
+    link_type: str,
+    deck_id: int | None = None,
+) -> int:
+    """Delete existing one-time links for the same slot (event_id + link_type + optional deck_id). Returns count deleted.
+    Use before creating a new link so the old one becomes invalid."""
+    eid = _event_id_str(event_id)
+    q = session.query(EventUploadLinkRow).filter(
+        EventUploadLinkRow.event_id == eid,
+        EventUploadLinkRow.link_type == link_type,
+    )
+    if deck_id is not None:
+        q = q.filter(EventUploadLinkRow.deck_id == deck_id)
+    count = q.count()
+    q.delete()
+    return count
+
+
 def delete_all_upload_links(session: Session, used_only: bool = False) -> int:
     """Delete upload links. If used_only=True, only delete links that have been used. Returns count deleted."""
     q = session.query(EventUploadLinkRow)
@@ -498,6 +537,169 @@ def delete_all_upload_links(session: Session, used_only: bool = False) -> int:
     count = q.count()
     q.delete()
     return count
+
+
+# --- Repository helpers: player_emails ---
+
+
+def set_player_email(session: Session, player: str, email: str) -> None:
+    """Upsert player email. Empty email deletes the row."""
+    player = (player or "").strip()
+    if not player:
+        return
+    row = session.query(PlayerEmailRow).filter(PlayerEmailRow.player == player).first()
+    if not email or not email.strip():
+        if row:
+            session.delete(row)
+        return
+    email = email.strip()
+    if row:
+        row.email = email
+    else:
+        session.add(PlayerEmailRow(player=player, email=email))
+
+
+def get_player_email(session: Session, player: str) -> str | None:
+    row = session.query(PlayerEmailRow).filter(PlayerEmailRow.player == player).first()
+    return row.email if row else None
+
+
+def get_emails_for_players(session: Session, players: list[str]) -> dict[str, str]:
+    """Return { canonical_player: email } for players that have an email stored."""
+    if not players:
+        return {}
+    rows = session.query(PlayerEmailRow).filter(PlayerEmailRow.player.in_(players)).all()
+    return {r.player: r.email for r in rows}
+
+
+def has_emails_for_players(session: Session, players: list[str]) -> dict[str, bool]:
+    """Return { player: True } for each player that has an email (for has_email in UI)."""
+    emails = get_emails_for_players(session, players)
+    return {p: True for p in emails}
+
+
+# --- Repository helpers: matchups ---
+
+
+def get_deck_by_event_and_player(session: Session, event_id: str, player: str) -> DeckRow | None:
+    """One deck per player per event: return the deck for this event and canonical player."""
+    eid = _event_id_str(event_id)
+    return (
+        session.query(DeckRow)
+        .filter(DeckRow.event_id == eid, DeckRow.player == player)
+        .first()
+    )
+
+
+def list_matchups_by_deck(session: Session, deck_id: int) -> list[dict]:
+    rows = (
+        session.query(MatchupRow)
+        .filter(MatchupRow.deck_id == deck_id)
+        .order_by(MatchupRow.round, MatchupRow.id)
+        .all()
+    )
+    return [
+        {
+            "id": r.id,
+            "deck_id": r.deck_id,
+            "opponent_player": r.opponent_player,
+            "opponent_deck_id": r.opponent_deck_id,
+            "opponent_archetype": r.opponent_archetype,
+            "result": r.result,
+            "result_note": r.result_note or "",
+            "round": r.round,
+        }
+        for r in rows
+    ]
+
+
+def upsert_matchups_for_deck(
+    session: Session,
+    deck_id: int,
+    matchups: list[dict],
+) -> None:
+    """Replace all matchups for this deck with the given list. Each item: opponent_player, result, result_note?, round?."""
+    session.query(MatchupRow).filter(MatchupRow.deck_id == deck_id).delete()
+    for m in matchups:
+        row = MatchupRow(
+            deck_id=deck_id,
+            opponent_player=(m.get("opponent_player") or "").strip(),
+            opponent_deck_id=m.get("opponent_deck_id"),
+            opponent_archetype=m.get("opponent_archetype"),
+            result=(m.get("result") or "loss").strip(),
+            result_note=(m.get("result_note") or "").strip() or None,
+            round=m.get("round"),
+        )
+        session.add(row)
+
+
+def get_matchup(session: Session, matchup_id: int) -> MatchupRow | None:
+    return session.query(MatchupRow).filter(MatchupRow.id == matchup_id).first()
+
+
+def update_matchup(
+    session: Session,
+    matchup_id: int,
+    result: str | None = None,
+    result_note: str | None = None,
+    round: int | None = None,
+) -> bool:
+    row = get_matchup(session, matchup_id)
+    if not row:
+        return False
+    if result is not None:
+        row.result = result
+    if result_note is not None:
+        row.result_note = result_note or None
+    if round is not None:
+        row.round = round
+    return True
+
+
+def list_matchups_for_event(session: Session, event_id: str) -> list[dict]:
+    """All matchups for decks in this event (join matchups -> decks on event_id)."""
+    eid = _event_id_str(event_id)
+    deck_ids = [r.deck_id for r in session.query(DeckRow.deck_id).filter(DeckRow.event_id == eid).all()]
+    if not deck_ids:
+        return []
+    rows = (
+        session.query(MatchupRow)
+        .filter(MatchupRow.deck_id.in_(deck_ids), MatchupRow.opponent_deck_id.isnot(None))
+        .all()
+    )
+    return [
+        {
+            "id": r.id,
+            "deck_id": r.deck_id,
+            "opponent_deck_id": r.opponent_deck_id,
+            "result": r.result,
+            "result_note": r.result_note,
+            "round": r.round,
+        }
+        for r in rows
+    ]
+
+
+def list_matchups_reported_against_player(session: Session, event_id: str, opponent_player: str) -> list[dict]:
+    """Matchups in this event where the given player was the opponent (others reported a result vs them).
+    Returns list of { reporting_player, result }."""
+    eid = _event_id_str(event_id)
+    opp = (opponent_player or "").strip()
+    if not opp:
+        return []
+    deck_ids = [r.deck_id for r in session.query(DeckRow.deck_id).filter(DeckRow.event_id == eid).all()]
+    if not deck_ids:
+        return []
+    rows = (
+        session.query(MatchupRow, DeckRow)
+        .join(DeckRow, MatchupRow.deck_id == DeckRow.deck_id)
+        .filter(DeckRow.event_id == eid, MatchupRow.opponent_player == opp)
+        .all()
+    )
+    return [
+        {"reporting_player": (d.player or "").strip(), "result": (m.result or "").strip()}
+        for m, d in rows
+    ]
 
 
 # --- Repository helpers: player_aliases ---
@@ -534,9 +736,51 @@ def get_setting(session: Session, key: str) -> dict | list | None:
     return row.value
 
 
-def set_setting(session: Session, key: str, value: dict | list) -> None:
+def set_setting(session: Session, key: str, value: dict | list | int) -> None:
     row = session.query(SettingsRow).filter(SettingsRow.key == key).first()
     if row:
         row.value = value
     else:
         session.add(SettingsRow(key=key, value=value))
+
+
+MATCHUPS_MIN_MATCHES_KEY = "matchups_min_matches"
+
+
+def get_matchups_min_matches(session: Session) -> int:
+    """Return the minimum number of matches to show an archetype pair (default 0)."""
+    v = get_setting(session, MATCHUPS_MIN_MATCHES_KEY)
+    if v is None:
+        return 0
+    if isinstance(v, list) and len(v) > 0 and isinstance(v[0], int):
+        return max(0, v[0])
+    if isinstance(v, int):
+        return max(0, v)
+    return 0
+
+
+def set_matchups_min_matches(session: Session, value: int) -> None:
+    set_setting(session, MATCHUPS_MIN_MATCHES_KEY, max(0, value))
+
+
+def list_matchups_with_deck_info(session: Session) -> list[dict]:
+    """All matchups with their deck's archetype, format_id, date, event_id (for summary aggregation)."""
+    rows = (
+        session.query(MatchupRow, DeckRow)
+        .join(DeckRow, MatchupRow.deck_id == DeckRow.deck_id)
+        .all()
+    )
+    return [
+        {
+            "deck_id": m.deck_id,
+            "opponent_deck_id": m.opponent_deck_id,
+            "archetype": (d.archetype or "").strip() or "(unknown)",
+            "format_id": d.format_id or "",
+            "event_id": d.event_id,
+            "date": d.date or "",
+            "opponent_archetype": (m.opponent_archetype or "").strip() or "(unknown)",
+            "result": m.result or "loss",
+            "result_note": m.result_note or "",
+        }
+        for m, d in rows
+    ]

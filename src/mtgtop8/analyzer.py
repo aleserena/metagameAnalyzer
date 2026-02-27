@@ -326,9 +326,19 @@ def _card_color_group(meta: dict) -> str:
     return colors[0] if colors[0] in _COLOR_LABELS else "C"
 
 
+def _is_permanent(type_line: str) -> bool:
+    """True if card is a permanent (Creature, Artifact, Enchantment, Planeswalker); False for Instant/Sorcery."""
+    t = (type_line or "").upper()
+    if "INSTANT" in t or "SORCERY" in t:
+        return False
+    return True
+
+
 def deck_analysis(deck: Deck, card_metadata: dict[str, dict]) -> dict[str, Any]:
     """Per-deck analysis: mana curve, color distribution, lands distribution, type distribution."""
     mana_curve: dict[int, int] = {}
+    mana_curve_permanent: dict[int, int] = {}
+    mana_curve_non_permanent: dict[int, int] = {}
     color_counts: dict[str, int] = {"W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0}
     lands = 0
     nonlands = 0
@@ -371,6 +381,10 @@ def deck_analysis(deck: Deck, card_metadata: dict[str, dict]) -> dict[str, Any]:
             if cmc is not None:
                 cmc_int = int(cmc) if isinstance(cmc, (int, float)) else 0
                 mana_curve[cmc_int] = mana_curve.get(cmc_int, 0) + qty
+                if _is_permanent(type_line):
+                    mana_curve_permanent[cmc_int] = mana_curve_permanent.get(cmc_int, 0) + qty
+                else:
+                    mana_curve_non_permanent[cmc_int] = mana_curve_non_permanent.get(cmc_int, 0) + qty
 
         colors = meta.get("color_identity") or meta.get("colors") or []
         for c in colors:
@@ -428,6 +442,8 @@ def deck_analysis(deck: Deck, card_metadata: dict[str, dict]) -> dict[str, Any]:
 
     return {
         "mana_curve": dict(sorted(mana_curve.items())),
+        "mana_curve_permanent": dict(sorted(mana_curve_permanent.items())),
+        "mana_curve_non_permanent": dict(sorted(mana_curve_non_permanent.items())),
         "color_distribution": color_pct,
         "lands_distribution": {"lands": lands, "nonlands": nonlands},
         "type_distribution": type_distribution,
@@ -448,6 +464,8 @@ def archetype_aggregate_analysis(
     if not decks:
         return {
             "mana_curve": {},
+            "mana_curve_permanent": {},
+            "mana_curve_non_permanent": {},
             "color_distribution": {},
             "lands_distribution": {"lands": 0, "nonlands": 0},
             "type_distribution": {},
@@ -462,6 +480,18 @@ def archetype_aggregate_analysis(
             c = int(cmc) if isinstance(cmc, str) else cmc
             mana_curve_agg[c] = mana_curve_agg.get(c, 0) + count
     mana_curve = {c: round(mana_curve_agg[c] / n, 1) for c in sorted(mana_curve_agg.keys())}
+
+    mana_curve_permanent_agg: dict[int, float] = {}
+    mana_curve_non_permanent_agg: dict[int, float] = {}
+    for a in analyses:
+        for cmc, count in a.get("mana_curve_permanent", {}).items():
+            c = int(cmc) if isinstance(cmc, str) else cmc
+            mana_curve_permanent_agg[c] = mana_curve_permanent_agg.get(c, 0) + count
+        for cmc, count in a.get("mana_curve_non_permanent", {}).items():
+            c = int(cmc) if isinstance(cmc, str) else cmc
+            mana_curve_non_permanent_agg[c] = mana_curve_non_permanent_agg.get(c, 0) + count
+    mana_curve_permanent = {c: round(mana_curve_permanent_agg[c] / n, 1) for c in sorted(mana_curve_permanent_agg.keys())}
+    mana_curve_non_permanent = {c: round(mana_curve_non_permanent_agg[c] / n, 1) for c in sorted(mana_curve_non_permanent_agg.keys())}
 
     # Average color_distribution (already per-deck percentages)
     color_keys = ["W", "U", "B", "R", "G", "C"]
@@ -488,6 +518,8 @@ def archetype_aggregate_analysis(
 
     return {
         "mana_curve": mana_curve,
+        "mana_curve_permanent": mana_curve_permanent,
+        "mana_curve_non_permanent": mana_curve_non_permanent,
         "color_distribution": color_distribution,
         "lands_distribution": lands_distribution,
         "type_distribution": type_distribution,

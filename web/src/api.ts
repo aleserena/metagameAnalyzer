@@ -1,5 +1,6 @@
 import type { Deck, MetagameReport, Event, PlayerStats, SimilarDeck, ArchetypeDetail } from './types'
 import { getToken } from './contexts/AuthContext'
+import { fetchWithTimeout } from './utils'
 
 const API_BASE = '/api'
 const EVENT_EDIT_TOKEN_KEY = 'event_edit_token'
@@ -35,7 +36,7 @@ async function fetchWithAuth(
   if (!(options.body instanceof FormData)) {
     headers['Content-Type'] = 'application/json'
   }
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetchWithTimeout(`${API_BASE}${path}`, {
     ...options,
     headers: { ...headers, ...(options.headers as Record<string, string>) },
   })
@@ -54,7 +55,7 @@ async function fetchWithAuth(
 }
 
 async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetchWithTimeout(`${API_BASE}${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -86,7 +87,7 @@ export async function submitFeedback(body: {
   captcha_b: number
   captcha_answer: number
 }): Promise<{ url: string; number?: number }> {
-  const res = await fetch(`${API_BASE}/feedback`, {
+  const res = await fetchWithTimeout(`${API_BASE}/feedback`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -203,6 +204,8 @@ export interface CardMeta {
 
 export interface DeckAnalysis {
   mana_curve: Record<number, number>
+  mana_curve_permanent?: Record<number, number>
+  mana_curve_non_permanent?: Record<number, number>
   color_distribution: Record<string, number>
   lands_distribution: { lands: number; nonlands: number }
   type_distribution?: Record<string, number>
@@ -268,18 +271,105 @@ export async function addDeckToEvent(
 
 export async function createEventUploadLinks(
   eventId: number | string,
-  options?: { count?: number; expires_in_days?: number; deck_id?: number; type?: 'event_edit' }
+  options?: { count?: number; expires_in_days?: number; deck_id?: number; type?: 'event_edit' | 'feedback' }
 ): Promise<{
   links: Array<{ token: string; url: string; expires_at: string | null; deck_id?: number }>
 }> {
   return fetchApi(`/events/${encodeURIComponent(String(eventId))}/upload-links`, {
     method: 'POST',
     body: JSON.stringify({
-      count: options?.deck_id != null ? undefined : (options?.count ?? 1),
+      count: options?.deck_id != null && options?.type !== 'feedback' ? undefined : (options?.count ?? 1),
       expires_in_days: options?.expires_in_days ?? undefined,
       deck_id: options?.deck_id ?? undefined,
       type: options?.type ?? undefined,
     }),
+  })
+}
+
+export async function putPlayerEmail(player: string, email: string): Promise<{ ok: boolean }> {
+  return fetchApi('/player-emails', { method: 'PUT', body: JSON.stringify({ player, email }) })
+}
+
+export async function sendMissingDeckLinks(eventId: string): Promise<{ sent: number; failed: string[] }> {
+  return fetchApi(`/events/${encodeURIComponent(eventId)}/send-missing-deck-links`, { method: 'POST' })
+}
+
+/** Email one-time deck upload links for all of this player's missing decks. Requires player to have email set. */
+export async function sendPlayerMissingDeckLinks(playerName: string): Promise<{ sent: number; message?: string }> {
+  return fetchApi(`/players/${encodeURIComponent(playerName)}/send-missing-deck-links`, { method: 'POST' })
+}
+
+export async function sendFeedbackLinks(eventId: string): Promise<{ sent: number }> {
+  return fetchApi(`/events/${encodeURIComponent(eventId)}/send-feedback-links`, { method: 'POST' })
+}
+
+/** Send one feedback link by email to a single player for this event. Invalidates any previous feedback link for that player's deck. */
+export async function sendFeedbackLinkToPlayer(eventId: string, player: string): Promise<{ sent: number }> {
+  return fetchApi(`/events/${encodeURIComponent(eventId)}/send-feedback-link-to-player`, {
+    method: 'POST',
+    body: JSON.stringify({ player }),
+  })
+}
+
+export async function getMatchupDiscrepancies(eventId: string): Promise<{
+  discrepancies: Array<{
+    deck_id_a: number
+    deck_id_b: number
+    matchup_a: { id: number; result: string; result_note?: string; round?: number }
+    matchup_b: { id: number; result: string; result_note?: string; round?: number }
+    result_a: string
+    result_b: string
+  }>
+}> {
+  return fetchApi(`/events/${encodeURIComponent(eventId)}/matchup-discrepancies`)
+}
+
+export async function patchMatchup(
+  matchupId: number,
+  body: { result?: string; result_note?: string; round?: number }
+): Promise<{ ok: boolean }> {
+  return fetchApi(`/matchups/${matchupId}`, { method: 'PATCH', body: JSON.stringify(body) })
+}
+
+export async function getMatchupsSummary(params?: {
+  format_id?: string
+  event_ids?: string
+  from_date?: string
+  to_date?: string
+  archetype?: string[]
+}): Promise<{
+  list: Array<{
+    archetype: string
+    opponent_archetype: string
+    wins: number
+    losses: number
+    draws: number
+    intentional_draws: number
+    matches: number
+    win_rate: number
+  }>
+  archetypes: string[]
+  matrix: (number | null)[][]
+  min_matches: number
+}> {
+  const search = new URLSearchParams()
+  if (params?.format_id) search.set('format_id', params.format_id)
+  if (params?.event_ids) search.set('event_ids', params.event_ids)
+  if (params?.from_date) search.set('from_date', params.from_date)
+  if (params?.to_date) search.set('to_date', params.to_date)
+  if (params?.archetype?.length) params.archetype.forEach((a) => search.append('archetype', a))
+  const q = search.toString()
+  return fetchApi(`/matchups/summary${q ? `?${q}` : ''}`)
+}
+
+export async function getMatchupsMinMatchesSetting(): Promise<{ value: number }> {
+  return fetchApi('/settings/matchups-min-matches')
+}
+
+export async function putMatchupsMinMatchesSetting(value: number): Promise<{ value: number }> {
+  return fetchApi('/settings/matchups-min-matches', {
+    method: 'PUT',
+    body: JSON.stringify({ value }),
   })
 }
 
@@ -300,7 +390,7 @@ export async function getEventEditLinkInfo(token: string): Promise<{ event_id: s
 
 /** Public API (no auth) for upload link pages. */
 async function fetchApiPublic<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetchWithTimeout(`${API_BASE}${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -326,16 +416,48 @@ export type UploadLinkDeck = {
   commanders: string[]
 }
 
+export type UploadLinkDeckWithArchetype = UploadLinkDeck & { archetype?: string | null }
+
 export async function getUploadLinkInfo(token: string): Promise<{
   event_id: string
   event_name: string
   format_id: string
   date: string
   mode: 'create' | 'update'
+  purpose: 'deck' | 'feedback'
   deck_id?: number
-  deck?: UploadLinkDeck | null
+  deck?: UploadLinkDeckWithArchetype | null
 }> {
   return fetchApiPublic(`/upload/${encodeURIComponent(token)}`)
+}
+
+export async function submitFeedbackWithUploadLink(
+  token: string,
+  body: {
+    archetype: string
+    deck_name?: string
+    rank?: string
+    matchups: Array<{ opponent_player: string; result: string; result_note?: string; round?: number }>
+  }
+): Promise<{ deck_id: number; message: string }> {
+  return fetchApiPublic(`/upload/${encodeURIComponent(token)}/feedback`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export async function submitDecklistWithUploadLink(
+  token: string,
+  body: {
+    mainboard: { qty: number; card: string }[]
+    sideboard?: { qty: number; card: string }[]
+    commanders?: string[]
+  }
+): Promise<{ deck_id: number; message: string }> {
+  return fetchApiPublic(`/upload/${encodeURIComponent(token)}/decklist`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
 }
 
 export async function submitDeckWithUploadLink(
@@ -369,6 +491,29 @@ export async function updateDeck(
   }
 ): Promise<{ deck_id: number; message: string }> {
   return fetchApi(`/decks/${deckId}`, { method: 'PUT', body: JSON.stringify(body) })
+}
+
+export async function getDeckMatchups(deckId: number): Promise<{
+  matchups: Array<{
+    id: number
+    deck_id: number
+    opponent_player: string
+    opponent_deck_id: number | null
+    opponent_archetype: string | null
+    result: string
+    result_note: string
+    round: number | null
+  }>
+  opponent_reported_matchups?: Array<{ opponent_player: string; result: string; intentional_draw?: boolean }>
+}> {
+  return fetchApi(`/decks/${deckId}/matchups`)
+}
+
+export async function updateDeckMatchups(
+  deckId: number,
+  body: { matchups: Array<{ opponent_player: string; result: string }> }
+): Promise<{ deck_id: number; message: string }> {
+  return fetchApi(`/decks/${deckId}/matchups`, { method: 'PUT', body: JSON.stringify(body) })
 }
 
 export async function deleteDeck(deckId: number): Promise<{ deck_id: number; message: string }> {
@@ -450,6 +595,8 @@ export interface PlayerDetail {
   points: number
   deck_count: number
   decks: { deck_id: number; name: string; event_name: string; date: string; rank: string }[]
+  /** True when DB has an email stored for this player (admin only). */
+  has_email?: boolean
 }
 
 export async function getPlayerDetail(playerName: string): Promise<PlayerDetail> {
