@@ -4,12 +4,12 @@
   "scripts": {
     "build": "cd web && npm run build",
     "test": "cd web && npm run test:run",
-    "test:py": "python -m pytest",
+    "test:py": "python3 -m pytest",
     "prepare": "husky",
-    "api": "python -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir api --reload-delay 0.5",
+    "api": "python3 -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir api --reload-delay 0.5",
     "web": "cd web && npx vite --host 0.0.0.0 --port 5173",
-    "db:migrate:staging": "python scripts/run_alembic.py staging upgrade head",
-    "db:migrate:prod": "python scripts/run_alembic.py prod upgrade head"
+    "db:migrate:staging": "python3 scripts/run_alembic.py staging upgrade head",
+    "db:migrate:prod": "python3 scripts/run_alembic.py prod upgrade head"
   },
   "devDependencies": {
     "husky": "^9.1.7"
