@@ -7,6 +7,7 @@ const baseNavItems = [
   { path: '/events', label: 'Events' },
   { path: '/metagame', label: 'Metagame' },
   { path: '/archetypes', label: 'Archetypes' },
+  { path: '/matchups', label: 'Matchups' },
   { path: '/decks', label: 'Decks' },
   { path: '/decks/compare', label: 'Compare' },
   { path: '/players', label: 'Players' },

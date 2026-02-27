@@ -178,6 +178,16 @@ def require_admin(authorization: str | None = Header(None, alias="Authorization"
     return "admin"
 
 
+def optional_admin(authorization: str | None = Header(None, alias="Authorization")):
+    """Dependency: return 'admin' if valid admin token, else None. Does not raise."""
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    token = authorization[7:].strip()
+    if _verify_admin_token(token):
+        return "admin"
+    return None
+
+
 def require_admin_or_event_edit(
     event_id: str,
     authorization: str | None = Header(None, alias="Authorization"),
@@ -438,18 +448,12 @@ def _clear_decks_in_db() -> None:
         logger.exception("Failed to clear decks in DB: %s", e)
 
 
-# Load decks on startup: from DB if available, else from decks.json
-_startup_path = DATA_DIR / "decks.json"
+# Load decks on startup from DB only (PostgreSQL required; no JSON fallback)
 if _database_available():
     try:
         _load_decks_from_db()
     except Exception as e:
         logger.exception("Failed to load decks from DB at startup: %s", e)
-elif _startup_path.exists():
-    try:
-        _load_from_file(str(_startup_path))
-    except Exception as e:
-        logger.exception("Failed to load %s: %s", _startup_path, e)
 
 
 _RANK_ORDER = {"1": 0, "2": 1, "3-4": 2, "5-8": 3, "9-16": 4, "17-32": 5, "33-64": 6, "65-128": 7}
@@ -648,8 +652,9 @@ def list_decks(
     order: str = Query("desc", description="Sort order: asc, desc"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
+    is_admin: str | None = Depends(optional_admin),
 ):
-    """List decks with optional filters and pagination."""
+    """List decks with optional filters and pagination. When admin and event_id, includes has_email per deck."""
     filtered = _decks
     if event_ids:
         ids = [x.strip() for x in event_ids.split(",") if x.strip()]
@@ -698,6 +703,12 @@ def list_decks(
     page = filtered[skip : skip + limit]
     # Normalize player names for display (merge aliases)
     page = [{**d, "player": _normalize_player(d.get("player") or "")} for d in page]
+    if is_admin == "admin" and event_id is not None and _database_available():
+        players = list({d.get("player") or "" for d in page})
+        with _db.session_scope() as session:
+            email_map = _db.get_emails_for_players(session, players)
+        for d in page:
+            d["has_email"] = (d.get("player") or "") in email_map
     return {"decks": page, "total": total, "skip": skip, "limit": limit}
 
 
@@ -1077,19 +1088,25 @@ async def upload_decks_to_event(
 
 @app.post("/api/events/{event_id}/decks/add", dependencies=[Depends(require_admin_or_event_edit), Depends(require_database)])
 def add_blank_deck_to_event(event_id: str):
-    """Add one blank deck to an event (admin-only). Fails if event already has player_count decks."""
+    """Add one blank deck to an event (admin-only). One deck per player per event; placeholder player used if blank."""
     with _db.session_scope() as session:
         ev = _db.get_event(session, event_id)
         if not ev:
             raise HTTPException(status_code=404, detail="Event not found")
+        eid = _db._event_id_str(event_id)
+        existing = session.query(_db.DeckRow).filter(_db.DeckRow.event_id == eid).all()
         player_count = getattr(ev, "player_count", None)
-        if player_count is not None and player_count > 0:
-            existing = session.query(_db.DeckRow).filter(_db.DeckRow.event_id == _db._event_id_str(event_id)).count()
-            if existing >= player_count:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Event allows at most {player_count} deck(s). It already has {existing}.",
-                )
+        if player_count is not None and player_count > 0 and len(existing) >= player_count:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Event allows at most {player_count} deck(s). It already has {len(existing)}.",
+            )
+        existing_players = {(d.player or "").strip() for d in existing}
+        placeholder = "Unnamed"
+        n = 1
+        while placeholder in existing_players:
+            n += 1
+            placeholder = f"Unnamed {n}"
         event_name = event_display_name(ev.name, ev.store or "", ev.location or "")
         deck_id = _db.next_manual_deck_id(session)
         blank = {
@@ -1099,7 +1116,7 @@ def add_blank_deck_to_event(event_id: str):
             "date": ev.date,
             "format_id": ev.format_id,
             "name": "Unnamed",
-            "player": "",
+            "player": placeholder,
             "rank": "",
             "player_count": 0,
             "commanders": [],
@@ -1117,7 +1134,7 @@ class CreateUploadLinksBody(BaseModel):
     count: int = 1
     expires_in_days: int | None = None
     deck_id: int | None = None  # when set, create one link for updating this deck (one-time)
-    type: str | None = None  # "event_edit" = one-time link to edit event + decks (no delete event, no new links)
+    type: str | None = None  # "event_edit" | "feedback" (feedback requires deck_id)
 
 
 class SubmitDeckBody(BaseModel):
@@ -1152,6 +1169,7 @@ def create_upload_links(event_id: str, request: Request, body: CreateUploadLinks
         links = []
         if body.type == "event_edit":
             # One-time link to edit event and decks (no delete event, no new links)
+            _db.invalidate_upload_links_for_slot(session, event_id, _db.LINK_TYPE_EVENT_EDIT)
             token = secrets.token_urlsafe(32)
             _db.create_upload_link(
                 session, token, event_id, expires_at=expires_at, link_type=_db.LINK_TYPE_EVENT_EDIT
@@ -1161,6 +1179,25 @@ def create_upload_links(event_id: str, request: Request, body: CreateUploadLinks
                 "url": f"{base_url}/events/{event_id}?token={token}",
                 "expires_at": expires_at.isoformat() if expires_at else None,
             })
+        elif body.type == "feedback" and body.deck_id is not None:
+            # One-time feedback link for this deck (Event page). Form submits to POST /api/upload/{token}/feedback
+            deck_row = session.query(_db.DeckRow).filter(
+                _db.DeckRow.deck_id == body.deck_id,
+                _db.DeckRow.event_id == _db._event_id_str(event_id),
+            ).first()
+            if not deck_row:
+                raise HTTPException(status_code=404, detail="Deck not found in this event")
+            _db.invalidate_upload_links_for_slot(session, event_id, _db.LINK_TYPE_FEEDBACK, deck_id=body.deck_id)
+            token = secrets.token_urlsafe(32)
+            _db.create_upload_link(
+                session, token, event_id, expires_at=expires_at, deck_id=body.deck_id, link_type=_db.LINK_TYPE_FEEDBACK
+            )
+            links.append({
+                "token": token,
+                "url": f"{base_url}/upload/{token}",
+                "expires_at": expires_at.isoformat() if expires_at else None,
+                "deck_id": body.deck_id,
+            })
         elif body.deck_id is not None:
             # One-time link to update an existing deck
             deck_row = session.query(_db.DeckRow).filter(
@@ -1169,6 +1206,7 @@ def create_upload_links(event_id: str, request: Request, body: CreateUploadLinks
             ).first()
             if not deck_row:
                 raise HTTPException(status_code=404, detail="Deck not found in this event")
+            _db.invalidate_upload_links_for_slot(session, event_id, _db.LINK_TYPE_DECK_UPDATE, deck_id=body.deck_id)
             token = secrets.token_urlsafe(32)
             _db.create_upload_link(session, token, event_id, expires_at=expires_at, deck_id=body.deck_id)
             links.append({
@@ -1207,18 +1245,21 @@ def get_upload_link_info(token: str):
         if not ev:
             raise HTTPException(status_code=404, detail="Event not found")
         event_name = event_display_name(ev.name, ev.store or "", ev.location or "")
+        link_type = getattr(row, "link_type", "deck_upload")
+        purpose = "feedback" if link_type == _db.LINK_TYPE_FEEDBACK else "deck"
         out = {
             "event_id": row.event_id,
             "event_name": event_name,
             "format_id": ev.format_id or "",
             "date": ev.date or "",
             "mode": "update" if getattr(row, "deck_id", None) else "create",
+            "purpose": purpose,
         }
         if getattr(row, "deck_id", None) is not None:
             deck = _get_deck_by_id(row.deck_id)
             if deck:
                 out["deck_id"] = deck["deck_id"]
-                out["deck"] = {
+                deck_out = {
                     "deck_id": deck["deck_id"],
                     "name": deck.get("name", ""),
                     "player": deck.get("player", ""),
@@ -1226,7 +1267,52 @@ def get_upload_link_info(token: str):
                     "mainboard": deck.get("mainboard", []),
                     "sideboard": deck.get("sideboard", []),
                     "commanders": deck.get("commanders", []),
+                    "archetype": deck.get("archetype"),
                 }
+                if purpose == "feedback":
+                    matchup_rows = _db.list_matchups_by_deck(session, row.deck_id)
+                    deck_out["matchups"] = [
+                        {
+                            "opponent_player": m.get("opponent_player", ""),
+                            "result": m.get("result", "1-1"),
+                            "intentional_draw": _is_intentional_draw_result(m.get("result") or ""),
+                        }
+                        for m in matchup_rows
+                    ]
+                    # Other players in this event (for opponent dropdown), excluding this deck's player
+                    current_player = (deck.get("player") or "").strip()
+                    event_players_set = set()
+                    for d in _decks:
+                        if str(d.get("event_id")) != str(row.event_id):
+                            continue
+                        p = (d.get("player") or "").strip()
+                        if p and p != current_player:
+                            event_players_set.add(p)
+                    deck_out["event_players"] = sorted(event_players_set)
+                    # Matchups others reported vs this player (prepopulate: their win = our loss)
+                    reported_against_me = _db.list_matchups_reported_against_player(
+                        session, row.event_id, deck.get("player")
+                    )
+                    inverted = []
+                    for r in reported_against_me:
+                        res = (r.get("result") or "").strip().lower()
+                        if res == "win":
+                            inv_result = "loss"
+                        elif res == "loss":
+                            inv_result = "win"
+                        elif res == "intentional_draw_win":
+                            inv_result = "intentional_draw_loss"
+                        elif res == "intentional_draw_loss":
+                            inv_result = "intentional_draw_win"
+                        else:
+                            inv_result = "draw" if res == "intentional_draw" else "draw"
+                        inverted.append({
+                            "opponent_player": (r.get("reporting_player") or "").strip(),
+                            "result": inv_result,
+                            "intentional_draw": _is_intentional_draw_result(res),
+                        })
+                    deck_out["opponent_reported_matchups"] = inverted
+                out["deck"] = deck_out
             else:
                 out["deck_id"] = row.deck_id
                 out["deck"] = None
@@ -1296,7 +1382,7 @@ def _submit_create_with_upload_link(session, row, ev, event_name: str, body: Sub
         "date": ev.date or "",
         "format_id": ev.format_id or "",
         "name": (body.name or "").strip(),
-        "player": (body.player or "").strip(),
+        "player": _normalize_player((body.player or "").strip()),
         "rank": (body.rank or "").strip(),
         "player_count": 0,
         "commanders": commanders,
@@ -1344,7 +1430,7 @@ def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
             if format_id == "EDH" and not commanders and mainboard:
                 commanders = [mainboard[0]["card"]]
             current["name"] = (body.name or "").strip()
-            current["player"] = (body.player or "").strip()
+            current["player"] = _normalize_player((body.player or "").strip())
             current["rank"] = (body.rank or "").strip()
             current["mainboard"] = mainboard
             current["sideboard"] = sideboard
@@ -1366,9 +1452,123 @@ def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
             )
 
 
+class FeedbackMatchupItem(BaseModel):
+    opponent_player: str
+    result: str  # win | loss | draw | intentional_draw
+    result_note: str | None = None
+    round: int | None = None
+
+
+class FeedbackBody(BaseModel):
+    archetype: str
+    deck_name: str | None = None
+    rank: str | None = None
+    matchups: list[FeedbackMatchupItem] = []
+
+
+@app.post("/api/upload/{token}/feedback", dependencies=[Depends(require_database)])
+def submit_feedback_with_upload_link(token: str, body: FeedbackBody):
+    """Submit event feedback (archetype + matchups) via one-time feedback link. Deck must exist; deck list not required."""
+    if not (body.archetype or "").strip():
+        raise HTTPException(status_code=400, detail="archetype is required")
+    if len(body.matchups or []) > 10:
+        raise HTTPException(status_code=400, detail="Maximum 10 matchups allowed")
+    with _db.session_scope() as session:
+        row = _db.get_upload_link(session, token)
+        if not row:
+            raise HTTPException(status_code=400, detail="Link not found or invalid")
+        if getattr(row, "link_type", "deck_upload") != _db.LINK_TYPE_FEEDBACK:
+            raise HTTPException(status_code=400, detail="Not a feedback link")
+        if getattr(row, "deck_id", None) is None:
+            raise HTTPException(status_code=400, detail="Feedback link has no deck")
+        if row.used_at is not None:
+            raise HTTPException(status_code=400, detail="Link already used")
+        if row.expires_at is not None and row.expires_at < datetime.utcnow():
+            raise HTTPException(status_code=400, detail="Link expired")
+        ev = _db.get_event(session, row.event_id)
+        if not ev:
+            raise HTTPException(status_code=400, detail="Event not found")
+        deck_id = row.deck_id
+        deck_dict = _get_deck_by_id(deck_id)
+        if not deck_dict:
+            raise HTTPException(status_code=400, detail="Deck not found")
+        deck_dict = dict(deck_dict)
+        deck_dict["archetype"] = (body.archetype or "").strip()
+        if body.deck_name is not None:
+            deck_dict["name"] = (body.deck_name or "").strip()
+        if body.rank is not None:
+            deck_dict["rank"] = (body.rank or "").strip()
+        _db.upsert_deck(session, deck_dict, origin=deck_dict.get("origin", _db.ORIGIN_MANUAL))
+        matchup_rows = []
+        for m in body.matchups or []:
+            opp_player = _normalize_player((m.opponent_player or "").strip())
+            if not opp_player or opp_player == "(unknown)":
+                continue
+            opp_deck = _db.get_deck_by_event_and_player(session, row.event_id, opp_player)
+            opp_deck_id = opp_deck.deck_id if opp_deck else None
+            opp_archetype = getattr(opp_deck, "archetype", None) if opp_deck else None
+            matchup_rows.append({
+                "opponent_player": opp_player,
+                "opponent_deck_id": opp_deck_id,
+                "opponent_archetype": opp_archetype,
+                "result": (m.result or "1-1").strip(),
+                "result_note": None,
+                "round": None,
+            })
+        _db.upsert_matchups_for_deck(session, deck_id, matchup_rows)
+        _db.mark_upload_link_used(session, token)
+    _load_decks_from_db()
+    return {"deck_id": deck_id, "message": "Feedback submitted successfully"}
+
+
 class DeckCardUpdate(BaseModel):
     qty: int = 1
     card: str = ""
+
+
+class DeckListBody(BaseModel):
+    """Deck list update via feedback link (mainboard, sideboard, commanders)."""
+    mainboard: list[DeckCardUpdate]
+    sideboard: list[DeckCardUpdate] = []
+    commanders: list[str] = []
+
+
+@app.post("/api/upload/{token}/decklist", dependencies=[Depends(require_database)])
+def submit_decklist_with_upload_link(token: str, body: DeckListBody):
+    """Update deck list (mainboard/sideboard/commanders) via one-time feedback link. Does not mark the link as used."""
+    with _db.session_scope() as session:
+        row = _db.get_upload_link(session, token)
+        if not row:
+            raise HTTPException(status_code=400, detail="Link not found or invalid")
+        if getattr(row, "link_type", "deck_upload") != _db.LINK_TYPE_FEEDBACK:
+            raise HTTPException(status_code=400, detail="Not a feedback link")
+        if getattr(row, "deck_id", None) is None:
+            raise HTTPException(status_code=400, detail="No deck linked")
+        if row.used_at is not None:
+            raise HTTPException(status_code=400, detail="Link already used")
+        deck_id = row.deck_id
+    deck_dict = _get_deck_by_id(deck_id)
+    if not deck_dict:
+        raise HTTPException(status_code=404, detail="Deck not found")
+    mainboard = [{"qty": c.qty, "card": _normalize_card_name(c.card or "")} for c in (body.mainboard or []) if _normalize_card_name(c.card or "")]
+    if not mainboard:
+        raise HTTPException(status_code=400, detail="mainboard must have at least one card")
+    sideboard = [{"qty": c.qty, "card": _normalize_card_name(c.card or "")} for c in (body.sideboard or []) if _normalize_card_name(c.card or "")]
+    commanders = [_normalize_card_name(c) for c in (body.commanders or []) if c and str(c).strip()]
+    current = dict(deck_dict)
+    current["mainboard"] = mainboard
+    current["sideboard"] = sideboard
+    current["commanders"] = commanders if commanders else None
+    if (current.get("format_id") or "").upper() == "EDH" and not current.get("commanders") and current.get("mainboard"):
+        current["commanders"] = [current["mainboard"][0]["card"]]
+    try:
+        with _db.session_scope() as session:
+            _db.upsert_deck(session, current, origin=current.get("origin", _db.ORIGIN_MTGTOP8))
+    except Exception as e:
+        logger.exception("Deck list update failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+    _load_decks_from_db()
+    return {"deck_id": deck_id, "message": "Deck list updated"}
 
 
 class UpdateDeckBody(BaseModel):
@@ -1394,7 +1594,7 @@ def update_deck_endpoint(deck_id: int, body: UpdateDeckBody):
     if body.name is not None:
         current["name"] = body.name
     if body.player is not None:
-        current["player"] = body.player
+        current["player"] = _normalize_player(body.player.strip())
     if body.rank is not None:
         current["rank"] = body.rank
     if body.archetype is not None:
@@ -1442,6 +1642,82 @@ def delete_deck_endpoint(deck_id: int):
     except Exception as e:
         logger.exception("Delete deck failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class AdminMatchupItem(BaseModel):
+    opponent_player: str
+    result: str  # win | loss | draw | intentional_draw
+
+
+class AdminMatchupsBody(BaseModel):
+    matchups: list[AdminMatchupItem] = []
+
+
+@app.get("/api/decks/{deck_id}/matchups", dependencies=[Depends(require_admin_or_event_edit_deck), Depends(require_database)])
+def get_deck_matchups(deck_id: int):
+    """List matchups for a deck (admin or event-edit). Also returns opponent_reported_matchups:
+    matchups others reported vs this deck's player (inverted: their win = our loss), for prepopulating the form."""
+    deck = _get_deck_by_id(deck_id)
+    if not deck:
+        raise HTTPException(status_code=404, detail="Deck not found")
+    event_id = str(deck.get("event_id", ""))
+    current_player = (deck.get("player") or "").strip()
+    with _db.session_scope() as session:
+        rows = _db.list_matchups_by_deck(session, deck_id)
+        opponent_reported_matchups = []
+        if event_id and current_player:
+            reported_against_me = _db.list_matchups_reported_against_player(session, event_id, deck.get("player"))
+            for r in reported_against_me:
+                res = (r.get("result") or "").strip().lower()
+                if res == "win":
+                    inv_result = "loss"
+                elif res == "loss":
+                    inv_result = "win"
+                elif res == "intentional_draw_win":
+                    inv_result = "intentional_draw_loss"
+                elif res == "intentional_draw_loss":
+                    inv_result = "intentional_draw_win"
+                else:
+                    inv_result = "draw" if res == "intentional_draw" else "draw"
+                opponent_reported_matchups.append({
+                    "opponent_player": (r.get("reporting_player") or "").strip(),
+                    "result": inv_result,
+                    "intentional_draw": _is_intentional_draw_result(res),
+                })
+    return {"matchups": rows, "opponent_reported_matchups": opponent_reported_matchups}
+
+
+@app.put("/api/decks/{deck_id}/matchups", dependencies=[Depends(require_admin_or_event_edit_deck), Depends(require_database)])
+def update_deck_matchups(deck_id: int, body: AdminMatchupsBody):
+    """Replace all matchups for a deck (admin or event-edit)."""
+    deck_dict = _get_deck_by_id(deck_id)
+    if not deck_dict:
+        raise HTTPException(status_code=404, detail="Deck not found")
+    if len(body.matchups or []) > 10:
+        raise HTTPException(status_code=400, detail="Maximum 10 matchups allowed")
+    event_id = str(deck_dict.get("event_id", ""))
+    if not event_id:
+        raise HTTPException(status_code=400, detail="Deck has no event")
+    with _db.session_scope() as session:
+        matchup_rows = []
+        for m in body.matchups or []:
+            opp_player = _normalize_player((m.opponent_player or "").strip())
+            if not opp_player or opp_player == "(unknown)":
+                continue
+            opp_deck = _db.get_deck_by_event_and_player(session, event_id, opp_player)
+            opp_deck_id = opp_deck.deck_id if opp_deck else None
+            opp_archetype = getattr(opp_deck, "archetype", None) if opp_deck else None
+            matchup_rows.append({
+                "opponent_player": opp_player,
+                "opponent_deck_id": opp_deck_id,
+                "opponent_archetype": opp_archetype,
+                "result": (m.result or "draw").strip(),
+                "result_note": None,
+                "round": None,
+            })
+        _db.upsert_matchups_for_deck(session, deck_id, matchup_rows)
+    _load_decks_from_db()
+    return {"deck_id": deck_id, "message": "Matchups updated"}
 
 
 def _parse_moxfield_board(obj) -> list[dict]:
@@ -1791,6 +2067,27 @@ def put_rank_weights(body: RankWeightsBody, _: str = Depends(require_admin)):
     return {"weights": _get_rank_weights()}
 
 
+@app.get("/api/settings/matchups-min-matches", dependencies=[Depends(require_admin), Depends(require_database)])
+def get_matchups_min_matches_setting():
+    """Return minimum matches threshold for matchup summary (admin)."""
+    with _db.session_scope() as session:
+        n = _db.get_matchups_min_matches(session)
+    return {"value": n}
+
+
+class MatchupsMinMatchesBody(BaseModel):
+    value: int = 0
+
+
+@app.put("/api/settings/matchups-min-matches", dependencies=[Depends(require_admin), Depends(require_database)])
+def put_matchups_min_matches_setting(body: MatchupsMinMatchesBody):
+    """Set minimum matches threshold for matchup summary (admin)."""
+    n = max(0, body.value)
+    with _db.session_scope() as session:
+        _db.set_matchups_min_matches(session, n)
+    return {"value": n}
+
+
 @app.post("/api/settings/clear-cache")
 def post_clear_scryfall_cache(_: str = Depends(require_admin)):
     """Clear Scryfall card lookup cache (in-memory and .scryfall_cache.json). Admin-only."""
@@ -1798,21 +2095,13 @@ def post_clear_scryfall_cache(_: str = Depends(require_admin)):
     return {"message": "Scryfall cache cleared"}
 
 
-@app.post("/api/settings/clear-decks")
+@app.post("/api/settings/clear-decks", dependencies=[Depends(require_database)])
 def post_clear_decks(_: str = Depends(require_admin)):
-    """Clear all loaded decks (in-memory, decks.json, and DB when used). Admin-only."""
+    """Clear all decks in the database. Admin-only. Requires PostgreSQL."""
     global _decks
     _decks = []
     _invalidate_metagame()
-    if _database_available():
-        _clear_decks_in_db()
-    else:
-        try:
-            DATA_DIR.mkdir(parents=True, exist_ok=True)
-            with open(DATA_DIR / "decks.json", "w", encoding="utf-8") as f:
-                json.dump([], f, indent=2, ensure_ascii=False)
-        except OSError:
-            pass
+    _clear_decks_in_db()
     return {"message": "Decks cleared"}
 
 
@@ -1834,6 +2123,587 @@ def delete_settings_upload_links(
     with _db.session_scope() as session:
         deleted = _db.delete_all_upload_links(session, used_only=used_only)
     return {"deleted": deleted, "message": f"Cleared {deleted} link(s)"}
+
+
+class PlayerEmailBody(BaseModel):
+    player: str
+    email: str
+
+
+@app.put("/api/player-emails", dependencies=[Depends(require_admin), Depends(require_database)])
+def put_player_email(body: PlayerEmailBody):
+    """Set or replace the email for a player (admin-only). Empty email deletes. Response never contains email."""
+    player = (body.player or "").strip()
+    if not player:
+        raise HTTPException(status_code=400, detail="player is required")
+    canonical = _normalize_player(player)
+    with _db.session_scope() as session:
+        _db.set_player_email(session, canonical, body.email or "")
+    return {"ok": True}
+
+
+@app.post("/api/players/{player_name:path}/send-missing-deck-links", dependencies=[Depends(require_admin), Depends(require_database)])
+def send_player_missing_deck_links(player_name: str, request: Request):
+    """Email one-time deck upload links for all of this player's missing (empty) decks. Uses DB-stored email. 503 if email not configured."""
+    try:
+        from api import email as _email
+    except ImportError:
+        raise HTTPException(status_code=503, detail="Email not configured")
+    if not _email.is_email_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Email not configured: set Brevo SMTP (SMTP_HOST, SMTP_USER, SMTP_PASSWORD) or Brevo API (BREVO_API_KEY + SMTP_FROM). See .env.example.",
+        )
+    name = (player_name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Player name required")
+    canonical = _normalize_player(name)
+    players_to_match = [canonical] + [k for k, v in _player_aliases.items() if v == canonical]
+    base_url = _upload_link_base_url(request)
+    with _db.session_scope() as session:
+        addr = _db.get_player_email(session, canonical)
+        if not addr or not addr.strip():
+            raise HTTPException(status_code=400, detail="No email set for this player. Set email on this page first.")
+        decks = session.query(_db.DeckRow).filter(_db.DeckRow.player.in_(players_to_match)).all()
+        missing = []
+        for d in decks:
+            main = getattr(d, "mainboard", None) or []
+            if not (isinstance(main, list) and len(main) > 0):
+                missing.append(d)
+        if not missing:
+            return {"sent": 0, "message": "No missing decks for this player"}
+        links_by_event = {}
+        for deck_row in missing:
+            eid = deck_row.event_id
+            _db.invalidate_upload_links_for_slot(session, eid, _db.LINK_TYPE_DECK_UPDATE, deck_id=deck_row.deck_id)
+            token = secrets.token_urlsafe(32)
+            _db.create_upload_link(
+                session, token, eid, deck_id=deck_row.deck_id, link_type=_db.LINK_TYPE_DECK_UPDATE
+            )
+            url = f"{base_url}/upload/{token}"
+            if eid not in links_by_event:
+                ev = _db.get_event(session, eid)
+                event_name = event_display_name(
+                    ev.name or "", getattr(ev, "store", "") or "", getattr(ev, "location", "") or ""
+                ) if ev else eid
+                links_by_event[eid] = {"event_name": event_name, "links": []}
+            links_by_event[eid]["links"].append(url)
+        body_parts = ["You have missing deck lists. Use the link(s) below (each is one-time):", ""]
+        for eid, info in links_by_event.items():
+            body_parts.append(f"{info['event_name']}:")
+            for url in info["links"]:
+                body_parts.append(url)
+            body_parts.append("")
+        subject = "Deck upload links (missing decks)"
+        body = "\n".join(body_parts).strip()
+        try:
+            _email.send_email(addr, subject, body)
+        except Exception as e:
+            logger.exception("Send player missing-deck email failed for %s", canonical)
+            raise HTTPException(status_code=500, detail="Failed to send email") from e
+        return {"sent": 1}
+
+
+@app.post("/api/events/{event_id}/send-missing-deck-links", dependencies=[Depends(require_admin), Depends(require_database)])
+def send_missing_deck_links(event_id: str, request: Request):
+    """Email one-time deck links to players with missing (empty) decks. Uses DB-stored emails only. 503 if email not configured."""
+    try:
+        from api import email as _email
+    except ImportError:
+        raise HTTPException(status_code=503, detail="Email not configured")
+    if not _email.is_email_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Email not configured: set Brevo SMTP (SMTP_HOST, SMTP_USER, SMTP_PASSWORD) or Brevo API (BREVO_API_KEY + SMTP_FROM). See .env.example.",
+        )
+    base_url = _upload_link_base_url(request)
+    with _db.session_scope() as session:
+        ev = _db.get_event(session, event_id)
+        if not ev:
+            raise HTTPException(status_code=404, detail="Event not found")
+        decks = session.query(_db.DeckRow).filter(_db.DeckRow.event_id == _db._event_id_str(event_id)).all()
+        missing_by_player = {}
+        for d in decks:
+            main = getattr(d, "mainboard", None) or []
+            if not (isinstance(main, list) and len(main) > 0):
+                p = (d.player or "").strip()
+                if p not in missing_by_player:
+                    missing_by_player[p] = []
+                missing_by_player[p].append(d)
+        players = list(missing_by_player.keys())
+        if not players:
+            return {"sent": 0, "failed": []}
+        email_map = _db.get_emails_for_players(session, players)
+        sent = 0
+        failed = []
+        for canonical, addr in email_map.items():
+            deck_list = missing_by_player.get(canonical, [])
+            if not deck_list or not addr:
+                continue
+            links_for_player = []
+            for deck_row in deck_list:
+                _db.invalidate_upload_links_for_slot(session, event_id, _db.LINK_TYPE_DECK_UPDATE, deck_id=deck_row.deck_id)
+                token = secrets.token_urlsafe(32)
+                _db.create_upload_link(
+                    session, token, event_id, deck_id=deck_row.deck_id, link_type=_db.LINK_TYPE_DECK_UPDATE
+                )
+                links_for_player.append(f"{base_url}/upload/{token}")
+            event_name = event_display_name(ev.name or "", getattr(ev, "store", "") or "", getattr(ev, "location", "") or "")
+            subject = f"Deck upload link: {event_name}"
+            body = f"Please submit your deck list for {event_name}.\n\nUse this link (one-time):\n\n" + "\n".join(links_for_player)
+            try:
+                _email.send_email(addr, subject, body)
+                sent += 1
+            except Exception as e:
+                logger.exception("Send missing-deck email failed for %s", canonical)
+                failed.append(canonical)
+        return {"sent": sent, "failed": failed}
+
+
+@app.post("/api/events/{event_id}/send-feedback-links", dependencies=[Depends(require_admin), Depends(require_database)])
+def send_feedback_links(event_id: str, request: Request):
+    """Email one feedback link per deck to each player (DB-stored emails only). 503 if email not configured."""
+    try:
+        from api import email as _email
+    except ImportError:
+        raise HTTPException(status_code=503, detail="Email not configured")
+    if not _email.is_email_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Email not configured: set Brevo SMTP (SMTP_HOST, SMTP_USER, SMTP_PASSWORD) or Brevo API (BREVO_API_KEY + SMTP_FROM). See .env.example.",
+        )
+    base_url = _upload_link_base_url(request)
+    with _db.session_scope() as session:
+        ev = _db.get_event(session, event_id)
+        if not ev:
+            raise HTTPException(status_code=404, detail="Event not found")
+        decks = session.query(_db.DeckRow).filter(_db.DeckRow.event_id == _db._event_id_str(event_id)).all()
+        if not decks:
+            return {"sent": 0}
+        players = list({(d.player or "").strip() for d in decks})
+        email_map = _db.get_emails_for_players(session, players)
+        sent = 0
+        for deck_row in decks:
+            canonical = (deck_row.player or "").strip()
+            addr = email_map.get(canonical)
+            if not addr:
+                continue
+            _db.invalidate_upload_links_for_slot(session, event_id, _db.LINK_TYPE_FEEDBACK, deck_id=deck_row.deck_id)
+            token = secrets.token_urlsafe(32)
+            _db.create_upload_link(
+                session, token, event_id, deck_id=deck_row.deck_id, link_type=_db.LINK_TYPE_FEEDBACK
+            )
+            event_name = event_display_name(ev.name or "", getattr(ev, "store", "") or "", getattr(ev, "location", "") or "")
+            subject = f"Event feedback: {event_name}"
+            body = f"Please submit your match results for {event_name}.\n\nLink (one-time): {base_url}/upload/{token}"
+            try:
+                _email.send_email(addr, subject, body)
+                sent += 1
+            except Exception as e:
+                logger.exception("Send feedback email failed for %s", canonical)
+        return {"sent": sent}
+
+
+class SendFeedbackLinkToPlayerBody(BaseModel):
+    player: str
+
+
+@app.post("/api/events/{event_id}/send-feedback-link-to-player", dependencies=[Depends(require_admin), Depends(require_database)])
+def send_feedback_link_to_player(event_id: str, request: Request, body: SendFeedbackLinkToPlayerBody):
+    """Email one feedback link to a single player for this event. Invalidates any previous feedback link for that player's deck. 503 if email not configured."""
+    try:
+        from api import email as _email
+    except ImportError:
+        raise HTTPException(status_code=503, detail="Email not configured")
+    if not _email.is_email_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Email not configured: set Brevo SMTP (SMTP_HOST, SMTP_USER, SMTP_PASSWORD) or Brevo API (BREVO_API_KEY + SMTP_FROM). See .env.example.",
+        )
+    player = (body.player or "").strip()
+    if not player:
+        raise HTTPException(status_code=400, detail="player is required")
+    canonical = _normalize_player(player)
+    base_url = _upload_link_base_url(request)
+    with _db.session_scope() as session:
+        ev = _db.get_event(session, event_id)
+        if not ev:
+            raise HTTPException(status_code=404, detail="Event not found")
+        deck_row = _db.get_deck_by_event_and_player(session, event_id, canonical)
+        if not deck_row:
+            raise HTTPException(status_code=404, detail="No deck for this player in this event")
+        addr = _db.get_player_email(session, canonical)
+        if not addr or not addr.strip():
+            raise HTTPException(status_code=400, detail="No email set for this player. Set email on the player's page first.")
+        _db.invalidate_upload_links_for_slot(session, event_id, _db.LINK_TYPE_FEEDBACK, deck_id=deck_row.deck_id)
+        token = secrets.token_urlsafe(32)
+        _db.create_upload_link(
+            session, token, event_id, deck_id=deck_row.deck_id, link_type=_db.LINK_TYPE_FEEDBACK
+        )
+        event_name = event_display_name(ev.name or "", getattr(ev, "store", "") or "", getattr(ev, "location", "") or "")
+        subject = f"Event feedback: {event_name}"
+        body_text = f"Please submit your match results for {event_name}.\n\nLink (one-time): {base_url}/upload/{token}"
+        try:
+            _email.send_email(addr, subject, body_text)
+        except Exception as e:
+            logger.exception("Send feedback email failed for %s", canonical)
+            raise HTTPException(status_code=500, detail="Failed to send email") from e
+    return {"sent": 1}
+
+
+def _matchup_result_to_canonical(result: str) -> str:
+    """Map result string to canonical win/loss/draw/intentional_draw for consistency check."""
+    r = (result or "").strip().lower()
+    if r in ("intentional_draw", "id"):
+        return "intentional_draw"
+    if r == "intentional_draw_win":
+        return "win"
+    if r == "intentional_draw_loss":
+        return "loss"
+    if r in ("2-1", "1-0"):
+        return "win"
+    if r in ("1-2", "0-1"):
+        return "loss"
+    if r in ("1-1", "0-0"):
+        return "draw"
+    if r in ("win", "loss", "draw"):
+        return r
+    return "draw"
+
+
+def _is_intentional_draw_result(result: str) -> bool:
+    """True if result is any intentional-draw variant (stored as distinct state; used as win/loss/draw in calcs)."""
+    r = (result or "").strip().lower()
+    return r in ("intentional_draw", "intentional_draw_win", "intentional_draw_loss")
+
+
+def _matchup_result_consistent(result_a: str, result_b: str) -> bool:
+    """True if the pair is consistent: one win + one loss, or both draw/intentional_draw."""
+    a = _matchup_result_to_canonical(result_a)
+    b = _matchup_result_to_canonical(result_b)
+    if a in ("draw", "intentional_draw") and b in ("draw", "intentional_draw"):
+        return True
+    if (a == "win" and b == "loss") or (a == "loss" and b == "win"):
+        return True
+    return False
+
+
+def _parse_deck_date(s: str) -> tuple[int, int, int] | None:
+    """Parse DD/MM/YY or DD/MM/YYYY to (year, month, day) for comparison. Returns None if invalid."""
+    if not s or not s.strip():
+        return None
+    parts = s.strip().split("/")
+    if len(parts) != 3:
+        return None
+    try:
+        day, month, year = int(parts[0]), int(parts[1]), int(parts[2])
+        if year < 100:
+            year += 2000 if year < 50 else 1900
+        if 1 <= month <= 12 and 1 <= day <= 31:
+            return (year, month, day)
+    except (ValueError, IndexError):
+        pass
+    return None
+
+
+def _date_in_range(deck_date_str: str, from_date: str | None, to_date: str | None) -> bool:
+    if not from_date and not to_date:
+        return True
+    parsed = _parse_deck_date(deck_date_str)
+    if not parsed:
+        return True
+    y, m, d = parsed
+    if from_date:
+        f = _parse_deck_date(from_date)
+        if not f:
+            try:
+                from datetime import datetime as _dt
+                _d = _dt.fromisoformat(from_date.replace("Z", "+00:00")[:10])
+                f = (_d.year, _d.month, _d.day)
+            except Exception:
+                f = None
+        if f and (y, m, d) < f:
+            return False
+    if to_date:
+        t = _parse_deck_date(to_date)
+        if not t:
+            try:
+                from datetime import datetime as _dt
+                _d = _dt.fromisoformat(to_date.replace("Z", "+00:00")[:10])
+                t = (_d.year, _d.month, _d.day)
+            except Exception:
+                t = None
+        if t and (y, m, d) > t:
+            return False
+    return True
+
+
+@app.get("/api/matchups/summary", dependencies=[Depends(require_database)])
+def get_matchups_summary(
+    format_id: str | None = Query(None),
+    event_ids: str | None = Query(None),
+    from_date: str | None = Query(None),
+    to_date: str | None = Query(None),
+    archetype: list[str] | None = Query(None, description="Filter by archetype(s); repeated param per name; include matchups where both deck and opponent archetype are in this list"),
+):
+    """Aggregated matchup summary by archetype. Optional filters; respects matchups_min_matches setting."""
+    with _db.session_scope() as session:
+        min_matches = _db.get_matchups_min_matches(session)
+        rows = _db.list_matchups_with_deck_info(session)
+
+    event_id_set = None
+    if event_ids:
+        event_id_set = {x.strip() for x in event_ids.split(",") if x.strip()}
+
+    archetype_set = None
+    if archetype:
+        archetype_set = {x.strip() for x in archetype if (x or "").strip()}
+
+    filtered = []
+    for r in rows:
+        if format_id and (r.get("format_id") or "").strip().upper() != format_id.strip().upper():
+            continue
+        if event_id_set is not None and (r.get("event_id") or "").strip() not in event_id_set:
+            continue
+        if not _date_in_range(r.get("date") or "", from_date, to_date):
+            continue
+        if archetype_set is not None:
+            arch = (r.get("archetype") or "").strip()
+            opp = (r.get("opponent_archetype") or "").strip()
+            if arch not in archetype_set:
+                continue
+            # When multiple archetypes selected: only matchups between those archetypes. When single: show that archetype vs all.
+            if len(archetype_set) > 1 and opp not in archetype_set:
+                continue
+        filtered.append(r)
+
+    def to_effective_wld(row):
+        raw = (row.get("result") or "loss").strip().lower()
+        if raw == "intentional_draw":
+            return (0, 0, 1)
+        if raw == "intentional_draw_win":
+            return (1, 0, 0)
+        if raw == "intentional_draw_loss":
+            return (0, 1, 0)
+        canonical = _matchup_result_to_canonical(row.get("result") or "loss")
+        if canonical == "win":
+            return (1, 0, 0)
+        if canonical == "loss":
+            return (0, 1, 0)
+        return (0, 0, 1)  # draw
+
+    def add_to_agg(arch: str, opp: str, w: int, l: int, d: int, is_intentional_draw: bool, matches: int):
+        for (a, o), (aw, al, ad) in [((arch, opp), (w, l, d)), ((opp, arch), (l, w, d))]:
+            key = (a, o)
+            if key not in agg:
+                agg[key] = {"wins": 0, "losses": 0, "draws": 0, "intentional_draws": 0, "matches": 0}
+            agg[key]["wins"] += aw
+            agg[key]["losses"] += al
+            agg[key]["draws"] += ad
+            if is_intentional_draw:
+                agg[key]["intentional_draws"] += 1
+            agg[key]["matches"] += matches
+
+    agg = {}
+    # Rows we can pair by (deck_id, opponent_deck_id) for consistent A vs B / B vs A
+    paired_rows = [r for r in filtered if r.get("opponent_deck_id") is not None]
+    unpaired_rows = [r for r in filtered if r.get("opponent_deck_id") is None]
+
+    by_match: dict[tuple[int, int], list[dict]] = {}
+    for r in paired_rows:
+        key = tuple(sorted([r["deck_id"], r["opponent_deck_id"]]))
+        by_match.setdefault(key, []).append(r)
+
+    for match_key, match_rows in by_match.items():
+        d_a, d_b = match_key
+        from_ab = [r for r in match_rows if (r["deck_id"], r["opponent_deck_id"]) == (d_a, d_b)]
+        from_ba = [r for r in match_rows if (r["deck_id"], r["opponent_deck_id"]) == (d_b, d_a)]
+        from_ab.sort(key=lambda x: (x.get("round") or 0, x.get("deck_id")))
+        from_ba.sort(key=lambda x: (x.get("round") or 0, x.get("deck_id")))
+        n_paired = min(len(from_ab), len(from_ba))
+        for i in range(n_paired):
+            ra, rb = from_ab[i], from_ba[i]
+            c1 = _matchup_result_to_canonical((ra.get("result") or "").strip())
+            c2 = _matchup_result_to_canonical((rb.get("result") or "").strip())
+            if (c1 == "win" and c2 == "loss") or (c1 == "loss" and c2 == "win") or (c1 in ("draw", "intentional_draw") and c2 in ("draw", "intentional_draw")):
+                row = ra
+            else:
+                row = ra
+            arch = (row.get("archetype") or "(unknown)").strip()
+            opp = (row.get("opponent_archetype") or "(unknown)").strip()
+            w, l, d = to_effective_wld(row)
+            is_id = _is_intentional_draw_result(row.get("result") or "")
+            add_to_agg(arch, opp, w, l, d, is_id, matches=1)
+        for i in range(n_paired, len(from_ab)):
+            row = from_ab[i]
+            arch = (row.get("archetype") or "(unknown)").strip()
+            opp = (row.get("opponent_archetype") or "(unknown)").strip()
+            w, l, d = to_effective_wld(row)
+            is_id = _is_intentional_draw_result(row.get("result") or "")
+            add_to_agg(arch, opp, w, l, d, is_id, matches=1)
+        for i in range(n_paired, len(from_ba)):
+            row = from_ba[i]
+            arch = (row.get("archetype") or "(unknown)").strip()
+            opp = (row.get("opponent_archetype") or "(unknown)").strip()
+            w, l, d = to_effective_wld(row)
+            is_id = _is_intentional_draw_result(row.get("result") or "")
+            add_to_agg(arch, opp, w, l, d, is_id, matches=1)
+
+    for r in unpaired_rows:
+        arch = (r.get("archetype") or "(unknown)").strip()
+        opp = (r.get("opponent_archetype") or "(unknown)").strip()
+        w, l, d = to_effective_wld(r)
+        key = (arch, opp)
+        if key not in agg:
+            agg[key] = {"wins": 0, "losses": 0, "draws": 0, "intentional_draws": 0, "matches": 0}
+        agg[key]["wins"] += w
+        agg[key]["losses"] += l
+        agg[key]["draws"] += d
+        if _is_intentional_draw_result(r.get("result") or ""):
+            agg[key]["intentional_draws"] += 1
+        agg[key]["matches"] += 1
+
+    list_out = []
+    for (arch, opp), v in agg.items():
+        if v["matches"] < min_matches:
+            continue
+        wr = (v["wins"] + 0.5 * v["draws"]) / v["matches"] if v["matches"] else 0
+        list_out.append({
+            "archetype": arch,
+            "opponent_archetype": opp,
+            "wins": v["wins"],
+            "losses": v["losses"],
+            "draws": v["draws"],
+            "intentional_draws": v["intentional_draws"],
+            "matches": v["matches"],
+            "win_rate": round(wr, 4),
+        })
+
+    archetypes_sorted = sorted({r["archetype"] for r in list_out} | {r["opponent_archetype"] for r in list_out})
+    matrix = []
+    for i, a in enumerate(archetypes_sorted):
+        row = []
+        for j, b in enumerate(archetypes_sorted):
+            if i == j:
+                row.append(None)
+                continue
+            key = (a, b)
+            v = agg.get(key, {"matches": 0, "wins": 0, "draws": 0})
+            if v["matches"] < min_matches:
+                row.append(None)
+                continue
+            wr = (v["wins"] + 0.5 * v["draws"]) / v["matches"] if v["matches"] else None
+            row.append(round(wr, 4) if wr is not None else None)
+        matrix.append(row)
+
+    return {
+        "list": list_out,
+        "archetypes": archetypes_sorted,
+        "matrix": matrix,
+        "min_matches": min_matches,
+    }
+
+
+@app.get("/api/events/event-ids-with-discrepancies", dependencies=[Depends(require_admin), Depends(require_database)])
+def get_event_ids_with_discrepancies():
+    """Return event_ids that have at least one matchup discrepancy (admin)."""
+    with _db.session_scope() as session:
+        rows = _db.list_all_matchups_with_event_id(session)
+    by_event: dict[str, list[dict]] = {}
+    for r in rows:
+        eid = (r.get("event_id") or "").strip()
+        if not eid:
+            continue
+        by_event.setdefault(eid, []).append(r)
+    event_ids_with_discrepancies: list[str] = []
+    for eid, event_rows in by_event.items():
+        by_pair: dict[tuple[int, int], list[dict]] = {}
+        for r in event_rows:
+            key = tuple(sorted([r["deck_id"], r["opponent_deck_id"]]))
+            by_pair.setdefault(key, []).append(r)
+        for (deck_a, deck_b), matchups in by_pair.items():
+            if len(matchups) != 2:
+                continue
+            from_a = next((m for m in matchups if m["deck_id"] == deck_a), None)
+            from_b = next((m for m in matchups if m["deck_id"] == deck_b), None)
+            if from_a is None or from_b is None:
+                continue
+            r1 = from_a.get("result") or ""
+            r2 = from_b.get("result") or ""
+            if not _matchup_result_consistent(r1, r2):
+                event_ids_with_discrepancies.append(eid)
+                break
+    return {"event_ids": event_ids_with_discrepancies}
+
+
+@app.get("/api/events/{event_id}/matchup-discrepancies", dependencies=[Depends(require_admin), Depends(require_database)])
+def get_matchup_discrepancies(event_id: str):
+    """List matchup pairs where both players reported and results disagree (admin)."""
+    with _db.session_scope() as session:
+        ev = _db.get_event(session, event_id)
+        if not ev:
+            raise HTTPException(status_code=404, detail="Event not found")
+        rows = _db.list_matchups_for_event(session, event_id)
+        by_pair = {}
+        for r in rows:
+            key = tuple(sorted([r["deck_id"], r["opponent_deck_id"]]))
+            if key not in by_pair:
+                by_pair[key] = []
+            by_pair[key].append(r)
+        discrepancies = []
+        for (deck_a, deck_b), matchups in by_pair.items():
+            if len(matchups) != 2:
+                continue
+            from_a = next((m for m in matchups if m["deck_id"] == deck_a), None)
+            from_b = next((m for m in matchups if m["deck_id"] == deck_b), None)
+            if from_a is None or from_b is None:
+                continue
+            r1 = from_a["result"]
+            r2 = from_b["result"]
+            if not _matchup_result_consistent(r1, r2):
+                discrepancies.append({
+                    "deck_id_a": deck_a,
+                    "deck_id_b": deck_b,
+                    "matchup_a": from_a,
+                    "matchup_b": from_b,
+                    "result_a": r1,
+                    "result_b": r2,
+                })
+        deck_ids = set()
+        for d in discrepancies:
+            deck_ids.add(d["deck_id_a"])
+            deck_ids.add(d["deck_id_b"])
+        player_by_deck = {}
+        if deck_ids:
+            rows = session.query(_db.DeckRow).filter(_db.DeckRow.deck_id.in_(deck_ids)).all()
+            for r in rows:
+                player_by_deck[r.deck_id] = (r.player or "").strip() or "(unknown)"
+        for d in discrepancies:
+            d["player_a"] = player_by_deck.get(d["deck_id_a"], "(unknown)")
+            d["player_b"] = player_by_deck.get(d["deck_id_b"], "(unknown)")
+        return {"discrepancies": discrepancies}
+
+
+class PatchMatchupBody(BaseModel):
+    result: str | None = None
+    result_note: str | None = None
+    round: int | None = None
+
+
+@app.patch("/api/matchups/{matchup_id}", dependencies=[Depends(require_admin), Depends(require_database)])
+def patch_matchup(matchup_id: int, body: PatchMatchupBody):
+    """Update a matchup result (admin fix for discrepancies or one-sided reports)."""
+    with _db.session_scope() as session:
+        ok = _db.update_matchup(
+            session,
+            matchup_id,
+            result=body.result,
+            result_note=body.result_note,
+            round=body.round,
+        )
+    if not ok:
+        raise HTTPException(status_code=404, detail="Matchup not found")
+    return {"ok": True}
 
 
 @app.get("/api/player-aliases")
@@ -1933,7 +2803,7 @@ def get_player_detail(player_name: str):
         for d in player_decks
     ]
     deck_summaries.sort(key=lambda x: _deck_sort_key(x))
-    return {
+    out = {
         "player": canonical,
         "wins": stat["wins"],
         "top2": stat["top2"],
@@ -1943,6 +2813,11 @@ def get_player_detail(player_name: str):
         "deck_count": stat["deck_count"],
         "decks": deck_summaries,
     }
+    if _database_available():
+        with _db.session_scope() as session:
+            email = _db.get_player_email(session, canonical)
+            out["has_email"] = bool(email and email.strip())
+    return out
 
 
 class NewEventBody(BaseModel):
@@ -1958,13 +2833,13 @@ class LoadBody(BaseModel):
     new_event: NewEventBody | None = None  # create this event and attach decks (DB only)
 
 
-@app.post("/api/load")
+@app.post("/api/load", dependencies=[Depends(require_database)])
 async def load_decks(
     body: LoadBody | None = None,
     file: UploadFile | None = File(None),
     _: str = Depends(require_admin),
 ):
-    """Load decks from JSON. Body: { "decks": [...] } or { "path": "decks.json" }, or upload file."""
+    """Load decks from JSON into the database. Body: { "decks": [...] } or { "path": "decks.json" }, or upload file. Requires PostgreSQL."""
     global _decks
     if file:
         content = await file.read()
@@ -2027,13 +2902,6 @@ async def load_decks(
                         d["deck_id"] = next_id + i
                     _decks[i] = d
         _persist_decks_to_db(_decks, origin=_db.ORIGIN_MANUAL if (body and (body.event_id is not None or body.new_event)) else _db.ORIGIN_MTGTOP8)
-    else:
-        try:
-            DATA_DIR.mkdir(parents=True, exist_ok=True)
-            with open(DATA_DIR / "decks.json", "w", encoding="utf-8") as f:
-                json.dump(_decks, f, indent=2, ensure_ascii=False)
-        except OSError:
-            pass
     return {"loaded": len(_decks), "message": f"Loaded {len(_decks)} decks"}
 
 

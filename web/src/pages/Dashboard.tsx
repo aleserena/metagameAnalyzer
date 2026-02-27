@@ -19,20 +19,25 @@ export default function Dashboard() {
   const [lastEventDate, setLastEventDate] = useState<string | null>(null)
 
   useEffect(() => {
-    getEvents().then((r) => setEvents(r.events))
-    getDateRange().then((r) => {
-      setMaxDate(r.max_date)
-      setLastEventDate(r.last_event_date)
-    })
+    getEvents()
+      .then((r) => setEvents(r.events))
+      .catch((e) => toast.error(reportError(e)))
+    getDateRange()
+      .then((r) => {
+        setMaxDate(r.max_date)
+        setLastEventDate(r.last_event_date)
+      })
+      .catch((e) => toast.error(reportError(e)))
   }, [])
 
   useEffect(() => {
     setLoading(true)
+    setError(null)
     const eventIdsParam = eventIds.length ? eventIds.map(String).join(',') : undefined
     getMetagame(false, ignoreLands, undefined, undefined, undefined, eventIdsParam)
       .then(setMetagame)
       .catch((e) => {
-        setError(e.message)
+        setError(e instanceof Error ? e.message : String(e))
         toast.error(reportError(e))
       })
       .finally(() => setLoading(false))
@@ -70,11 +75,14 @@ export default function Dashboard() {
     return (
       <div>
         <h1 className="page-title">Dashboard</h1>
-        <div className="chart-container" style={{ textAlign: 'center', padding: '2rem' }}>
-          <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{error}</p>
+        <div className="chart-container" style={{ textAlign: 'center', padding: '2rem', maxWidth: 420, margin: '0 auto' }}>
+          <p style={{ color: 'var(--text-muted)', marginBottom: '0.75rem' }}>{error}</p>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1.25rem' }}>
+            If you just ran <code style={{ background: 'var(--bg)', padding: '0.15rem 0.4rem', borderRadius: 4 }}>npm run dev</code>, wait a few seconds for the API to start, then click Try again or refresh.
+          </p>
           <button
             type="button"
-            className="btn"
+            className="btn btn-primary"
             onClick={() => {
               setError(null)
               setLoading(true)
@@ -82,7 +90,7 @@ export default function Dashboard() {
               getMetagame(false, ignoreLands, undefined, undefined, undefined, eventIdsParam)
                 .then(setMetagame)
                 .catch((e) => {
-                  setError(e.message)
+                  setError(e instanceof Error ? e.message : String(e))
                   toast.error(reportError(e))
                 })
                 .finally(() => setLoading(false))
@@ -149,10 +157,10 @@ export default function Dashboard() {
             <div className="value">{events.length}</div>
             <div className="label">Events</div>
           </Link>
-          <div className="stat-card">
+          <Link to="/players" className="stat-card" style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}>
             <div className="value">{summary.unique_players}</div>
             <div className="label">Unique Players</div>
-          </div>
+          </Link>
           <Link to="/archetypes" className="stat-card" style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}>
             <div className="value">{summary.unique_archetypes}</div>
             <div className="label">Archetypes</div>
@@ -263,7 +271,7 @@ export default function Dashboard() {
           <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
             {recentEvents.map((e) => (
               <li key={`${e.event_id}-${e.date}`} style={{ padding: '0.5rem 0', borderBottom: '1px solid var(--border)' }}>
-                <Link to={`/decks?event_ids=${encodeURIComponent(String(e.event_id))}`} style={{ color: 'var(--accent)' }}>
+                <Link to={`/events/${encodeURIComponent(String(e.event_id))}`} style={{ color: 'var(--accent)' }}>
                   {(typeof e.event_name === 'string' && e.event_name.trim()) ? e.event_name : 'Unnamed'}
                 </Link>
                 <div style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: '0.15rem' }}>

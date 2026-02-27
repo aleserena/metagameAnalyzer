@@ -11,6 +11,7 @@ import DeckDetail from './pages/DeckDetail'
 import DeckCompare from './pages/DeckCompare'
 import Archetypes from './pages/Archetypes'
 import ArchetypeDetail from './pages/ArchetypeDetail'
+import Matchups from './pages/Matchups'
 import Players from './pages/Players'
 import PlayerDetail from './pages/PlayerDetail'
 import Scrape from './pages/Scrape'
@@ -37,6 +38,7 @@ const router = createBrowserRouter(
         { path: 'metagame', element: <Metagame /> },
         { path: 'archetypes', element: <Archetypes /> },
         { path: 'archetypes/:archetypeName', element: <ArchetypeDetail /> },
+        { path: 'matchups', element: <Matchups /> },
         { path: 'decks', element: <Decks /> },
         { path: 'decks/compare', element: <DeckCompare /> },
         { path: 'decks/:deckId', element: <DeckDetail /> },

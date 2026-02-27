@@ -9,6 +9,8 @@ import {
   putIgnoreLandsCards,
   getRankWeights,
   putRankWeights,
+  getMatchupsMinMatchesSetting,
+  putMatchupsMinMatchesSetting,
   clearScryfallCache,
   clearDecks,
   getUploadLinks,
@@ -45,6 +47,9 @@ export default function Settings() {
   const [uploadLinks, setUploadLinks] = useState<UploadLinkRow[]>([])
   const [loadingUploadLinks, setLoadingUploadLinks] = useState(true)
   const [clearingLinks, setClearingLinks] = useState<'used' | 'all' | null>(null)
+  const [matchupsMinMatches, setMatchupsMinMatches] = useState(0)
+  const [loadingMatchupsMin, setLoadingMatchupsMin] = useState(true)
+  const [savingMatchupsMin, setSavingMatchupsMin] = useState(false)
 
   useEffect(() => {
     getPlayerAliases()
@@ -78,6 +83,24 @@ export default function Settings() {
   useEffect(() => {
     loadUploadLinks()
   }, [])
+
+  useEffect(() => {
+    getMatchupsMinMatchesSetting()
+      .then((r) => setMatchupsMinMatches(r.value))
+      .catch(() => setMatchupsMinMatches(0))
+      .finally(() => setLoadingMatchupsMin(false))
+  }, [])
+
+  const handleSaveMatchupsMinMatches = () => {
+    setSavingMatchupsMin(true)
+    putMatchupsMinMatchesSetting(matchupsMinMatches)
+      .then((r) => {
+        setMatchupsMinMatches(r.value)
+        toast.success('Minimum matches saved')
+      })
+      .catch((e) => toast.error(reportError(e)))
+      .finally(() => setSavingMatchupsMin(false))
+  }
 
   const handleAddAlias = () => {
     if (!newAlias.trim() || !newCanonical.trim()) return
@@ -286,6 +309,35 @@ export default function Settings() {
               disabled={savingRankWeights}
             >
               {savingRankWeights ? 'Saving...' : 'Save'}
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div className="chart-container" style={{ maxWidth: 600, marginBottom: '2rem' }}>
+        <h2 style={{ margin: '0 0 1rem', fontSize: '1.25rem' }}>Matchups: minimum matches</h2>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1rem' }}>
+          On the Matchups page, only archetype pairs with at least this many reported matches are shown.
+        </p>
+        {loadingMatchupsMin ? (
+          <p style={{ color: 'var(--text-muted)' }}>Loading...</p>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <input
+              type="number"
+              min={0}
+              value={matchupsMinMatches}
+              onChange={(e) => setMatchupsMinMatches(Math.max(0, parseInt(e.target.value, 10) || 0))}
+              style={{ width: 72, padding: '0.35rem 0.5rem' }}
+            />
+            <button
+              type="button"
+              className="btn"
+              style={{ padding: '0.35rem 0.75rem' }}
+              onClick={handleSaveMatchupsMinMatches}
+              disabled={savingMatchupsMin}
+            >
+              {savingMatchupsMin ? 'Saving...' : 'Save'}
             </button>
           </div>
         )}

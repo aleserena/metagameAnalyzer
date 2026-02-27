@@ -51,7 +51,7 @@ export default function Layout() {
         {' · '}
         <Link to="/feedback">Feedback</Link>
         {' · '}
-        <Link to="/login">Admin login</Link>
+        <Link to="/login" state={{ from: location }}>Admin login</Link>
       </footer>
       <Toaster
         position="top-right"

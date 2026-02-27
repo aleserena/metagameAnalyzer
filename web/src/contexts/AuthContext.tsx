@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react'
+import { fetchWithTimeout, REQUEST_TIMEOUT_LOAD_MS } from '../utils'
 
 const STORAGE_KEY = 'admin_token'
 const API_BASE = '/api'
@@ -29,8 +30,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoading(false)
       return
     }
-    fetch(`${API_BASE}/auth/me`, {
+    fetchWithTimeout(`${API_BASE}/auth/me`, {
       headers: { Authorization: `Bearer ${token}` },
+      timeoutMs: REQUEST_TIMEOUT_LOAD_MS,
     })
       .then((res) => {
         if (res.ok) {
@@ -51,7 +53,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = useCallback(
     async (password: string) => {
-      const res = await fetch(`${API_BASE}/auth/login`, {
+      const res = await fetchWithTimeout(`${API_BASE}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password }),

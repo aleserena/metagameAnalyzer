@@ -66,7 +66,7 @@ If `ADMIN_PASSWORD` is not set, admin login is disabled and those tabs are hidde
 
 ### Database and Railway
 
-With a PostgreSQL database (e.g. on [Railway](https://railway.app)), the API persists decks, events, and player aliases in the database instead of JSON files.
+**PostgreSQL is required.** The app no longer supports JSON-only or in-memory storage. Use a PostgreSQL database (e.g. on [Railway](https://railway.app)); the API persists decks, events, and all data in the database.
 
 #### How to connect the database and run migrations
 
@@ -92,11 +92,23 @@ With a PostgreSQL database (e.g. on [Railway](https://railway.app)), the API per
 4. **Start the API**  
    As usual: `python -m uvicorn api.main:app --reload --port 8000`. The API will connect to the database and load decks/aliases from it.
 
-- **Without `DATABASE_URL`**: Decks load from/save to `decks.json`; aliases use `player_aliases.json`. Behaviour is unchanged from before.
-- **With `DATABASE_URL`**: Decks and events are stored in PostgreSQL. Scrapes upsert by deck ID (no duplicates on re-scrape). Manual events and deck uploads use separate ID ranges from MTGTop8.
-- **Data tab** (admin): Create events, upload decks to an event, edit/delete events, delete decks. Requires database.
+- Decks and events are stored in PostgreSQL. Scrapes upsert by deck ID (no duplicates on re-scrape). Manual events and deck uploads use separate ID ranges from MTGTop8.
+- **Data tab** (admin): Create events, upload decks to an event, edit/delete events, delete decks.
 
 If you use the Railway DB from your machine, avoid destructive operations (e.g. “Clear decks”) unless you mean to change that shared database.
+
+#### Email setup (Brevo)
+
+To send **missing-deck links** and **event feedback links** by email (admin-only, from the Event detail page), configure [Brevo](https://www.brevo.com) (ex-Sendinblue).
+
+1. **Create a Brevo account** at [brevo.com](https://www.brevo.com) and log in.
+2. **Get credentials:** In Brevo → **Settings → SMTP & API** you can use either:
+   - **SMTP:** Note the server (`smtp-relay.brevo.com`), port (587), and create an SMTP key. Set `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, and `SMTP_FROM` (verified sender) in `.env`.
+   - **API:** Copy an API key and set `BREVO_API_KEY` and `SMTP_FROM` in `.env`.
+3. **Documented in `.env.example`:** See the "Email (Brevo)" section for all variables. If none are set, "Email missing deck links" and "Email event feedback links" return 503.
+4. **Optional (deliverability):** In Brevo, add and verify your domain and the suggested SPF/DKIM DNS records so messages are less likely to land in spam.
+
+For local testing without sending to real addresses, you can point the same SMTP vars to [Mailtrap](https://mailtrap.io) or use a test Brevo sender.
 
 #### Development: dev / staging / prod databases
 

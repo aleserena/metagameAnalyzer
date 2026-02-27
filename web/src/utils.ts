@@ -1,5 +1,34 @@
 const GENERIC_ERROR_MESSAGE = 'There was an issue with the application, please refresh the page'
 
+/** Default request timeout (ms). Used by API and auth fetches. */
+export const REQUEST_TIMEOUT_MS = 30_000
+
+/** Longer timeout for initial page load (backend may be cold-starting). */
+export const REQUEST_TIMEOUT_LOAD_MS = 60_000
+
+/**
+ * fetch with a timeout. Aborts the request after timeoutMs and throws a clear Error.
+ * Use for all API requests so the UI never hangs indefinitely.
+ */
+export async function fetchWithTimeout(
+  url: string,
+  options: RequestInit & { timeoutMs?: number } = {}
+): Promise<Response> {
+  const { timeoutMs = REQUEST_TIMEOUT_MS, ...fetchOptions } = options
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(url, { ...fetchOptions, signal: controller.signal })
+  } catch (e) {
+    if (e instanceof Error && e.name === 'AbortError') {
+      throw new Error('Request timed out. Check your connection or try again.', { cause: e })
+    }
+    throw e
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
 const GENERIC_ERROR_PHRASES = new Set([
   '',
   'error',
