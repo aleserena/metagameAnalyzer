@@ -11,13 +11,14 @@ export default function Login() {
   const { login, user } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
-  const from = (location.state as { from?: { pathname: string; search?: string } } | null)?.from
+  const from = (location.state as { from?: { pathname: string; search?: string; hash?: string } } | null)?.from
+  const redirectTo = from ? `${from.pathname}${from.search ?? ''}${from.hash ?? ''}` : '/'
 
   useEffect(() => {
     if (user === 'admin') {
-      navigate(from ?? '/', { replace: true })
+      navigate(redirectTo, { replace: true })
     }
-  }, [user, navigate, from])
+  }, [user, navigate, redirectTo])
 
   if (user === 'admin') return null
 
@@ -28,7 +29,7 @@ export default function Login() {
     try {
       await login(password)
       toast.success('Signed in successfully')
-      navigate(from ?? '/', { replace: true })
+      navigate(redirectTo, { replace: true })
     } catch (e) {
       const msg = reportError(e)
       setErrorMessage(msg)

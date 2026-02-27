@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useParams, Link, useNavigate, useBlocker, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { getEvent, getDecks, updateEvent, addDeckToEvent, deleteEvent, createEventUploadLinks, createEventEditLink, getEventEditLinkInfo, updateDeck, deleteDeck, setEventEditToken, clearEventEditToken } from '../api'
+import { getEvent, getDecks, updateEvent, addDeckToEvent, deleteEvent, createEventEditLink, getEventEditLinkInfo, updateDeck, deleteDeck, setEventEditToken, clearEventEditToken, sendMissingDeckLinks, sendFeedbackLinks, sendFeedbackLinkToPlayer, getMatchupDiscrepancies, patchMatchup, getDeckMatchups, updateDeckMatchups } from '../api'
 import type { EventWithOrigin } from '../api'
 import type { Deck } from '../types'
 import { useAuth } from '../contexts/AuthContext'
@@ -64,9 +64,6 @@ export default function EventDetail() {
   const [addDecksCount, setAddDecksCount] = useState(1)
   const [addingDecks, setAddingDecks] = useState(false)
   const [deleting, setDeleting] = useState(false)
-  const [generatingLinks, setGeneratingLinks] = useState(false)
-  const [generatedLinks, setGeneratedLinks] = useState<Array<{ token: string; url: string; expires_at: string | null; deck_id?: number }>>([])
-  const [generatingUpdateLinkFor, setGeneratingUpdateLinkFor] = useState<number | null>(null)
   const [editingDeckId, setEditingDeckId] = useState<number | null>(null)
   const [editDeckName, setEditDeckName] = useState('')
   const [editDeckPlayer, setEditDeckPlayer] = useState('')
@@ -82,6 +79,16 @@ export default function EventDetail() {
   const [uploadingDeck, setUploadingDeck] = useState(false)
   const [confirmDeleteEvent, setConfirmDeleteEvent] = useState(false)
   const [confirmDeleteDeckId, setConfirmDeleteDeckId] = useState<number | null>(null)
+  const [sendingMissingLinks, setSendingMissingLinks] = useState(false)
+  const [sendingFeedbackLinks, setSendingFeedbackLinks] = useState(false)
+  const [sendingFeedbackLinkForPlayer, setSendingFeedbackLinkForPlayer] = useState<string | null>(null)
+  const [discrepancies, setDiscrepancies] = useState<Awaited<ReturnType<typeof getMatchupDiscrepancies>>['discrepancies'] | null>(null)
+  const [loadingDiscrepancies, setLoadingDiscrepancies] = useState(false)
+  const [fixingMatchupId, setFixingMatchupId] = useState<number | null>(null)
+  const [matchupsDeckId, setMatchupsDeckId] = useState<number | null>(null)
+  const [matchupsList, setMatchupsList] = useState<Array<{ opponent_player: string; result: string; intentional_draw: boolean }>>([])
+  const [loadingMatchups, setLoadingMatchups] = useState(false)
+  const [savingMatchups, setSavingMatchups] = useState(false)
 
   const canEditEvent = user === 'admin' || eventEditMode
   const canDeleteEvent = user === 'admin'
@@ -100,13 +107,47 @@ export default function EventDetail() {
           setEventEditTokenError('This link is for a different event.')
         }
       })
-      .catch(() => setEventEditTokenError('Link invalid or already used.'))
-  }, [urlToken, eventId])
+      .catch(() => {
+        toast.error('Link invalid or already used.')
+        navigate('/', { replace: true })
+      })
+  }, [urlToken, eventId, navigate])
 
   const isUpdateModalOpen = editingDeckId != null
   const isUploadDeckModalOpen = uploadDeckForDeckId != null
   const isConfirmModalOpen = confirmDeleteEvent || confirmDeleteDeckId != null
-  useBlocker(isUpdateModalOpen || isUploadDeckModalOpen || isConfirmModalOpen)
+
+  const eventEditDirty = useMemo(() => {
+    if (!editing || !event) return false
+    if (
+      editName !== (event.event_name || '') ||
+      editStore !== (event.store ?? '') ||
+      editLocation !== (event.location ?? '') ||
+      editDate !== (event.date || '') ||
+      editFormatId !== (event.format_id || '') ||
+      editPlayerCount !== (event.player_count ?? 0)
+    ) return true
+    return decks.some((d) => {
+      const current = bulkDeckEdits[d.deck_id] ?? defaultDeckEdit(d)
+      const def = defaultDeckEdit(d)
+      return current.name !== def.name || current.player !== def.player || current.rank !== def.rank || current.archetype !== def.archetype
+    })
+  }, [editing, event, editName, editStore, editLocation, editDate, editFormatId, editPlayerCount, decks, bulkDeckEdits])
+
+  const deckBeingEdited = editingDeckId != null ? decks.find((d) => d.deck_id === editingDeckId) : null
+  const deckModalDirty = useMemo(() => {
+    if (!deckBeingEdited || editingDeckId == null) return false
+    const d = deckBeingEdited
+    return (
+      editDeckName !== (d.name ?? '') ||
+      editDeckPlayer !== (d.player ?? '') ||
+      editDeckRank !== (d.rank ?? '') ||
+      editDeckArchetype !== (d.archetype ?? (d.commanders?.length ? d.commanders[0] ?? '' : ''))
+    )
+  }, [deckBeingEdited, editingDeckId, editDeckName, editDeckPlayer, editDeckRank, editDeckArchetype])
+
+  const hasUnsavedEdits = eventEditDirty || deckModalDirty
+  const blocker = useBlocker(hasUnsavedEdits || isUpdateModalOpen || isUploadDeckModalOpen || isConfirmModalOpen)
 
   useEffect(() => {
     if (!isUpdateModalOpen && !isUploadDeckModalOpen && !isConfirmModalOpen) return
@@ -116,6 +157,15 @@ export default function EventDetail() {
     window.addEventListener('beforeunload', handler)
     return () => window.removeEventListener('beforeunload', handler)
   }, [isUpdateModalOpen, isUploadDeckModalOpen, isConfirmModalOpen])
+
+  useEffect(() => {
+    if (!hasUnsavedEdits) return
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [hasUnsavedEdits])
 
   useEffect(() => {
     if (!isUpdateModalOpen && !isUploadDeckModalOpen && !isConfirmModalOpen) return
@@ -233,49 +283,11 @@ export default function EventDetail() {
       .finally(() => setDeleting(false))
   }
 
-  const handleGenerateUploadLink = () => {
-    if (!eventId) return
-    setGeneratingLinks(true)
-    createEventUploadLinks(eventId, { count: 1 })
-      .then((res) => {
-        const base = typeof window !== 'undefined' ? window.location.origin : ''
-        const linksWithUrls = res.links.map((l) => ({ ...l, url: `${base}/upload/${l.token}` }))
-        setGeneratedLinks((prev) => [...linksWithUrls, ...prev])
-        if (linksWithUrls.length > 0) {
-          const url = linksWithUrls[0].url
-          window.navigator.clipboard.writeText(url).then(
-            () => toast.success('Link copied to clipboard'),
-            () => toast.success('Upload link generated')
-          )
-        }
-      })
-      .catch((e) => toast.error(reportError(e)))
-      .finally(() => setGeneratingLinks(false))
-  }
-
   const copyLink = (url: string) => {
     window.navigator.clipboard.writeText(url).then(
       () => toast.success('Copied to clipboard'),
       () => { /* ignore */ }
     )
-  }
-
-  const handleGenerateUpdateLink = (deckId: number) => {
-    if (!eventId) return
-    setGeneratingUpdateLinkFor(deckId)
-    createEventUploadLinks(eventId, { deck_id: deckId })
-      .then((res) => {
-        if (res.links.length > 0) {
-          const base = typeof window !== 'undefined' ? window.location.origin : ''
-          const url = `${base}/upload/${res.links[0].token}`
-          window.navigator.clipboard.writeText(url).then(
-            () => toast.success('Update link copied to clipboard'),
-            () => toast.success('Update link generated')
-          )
-        }
-      })
-      .catch((e) => toast.error(reportError(e)))
-      .finally(() => setGeneratingUpdateLinkFor(null))
   }
 
   const openUpdateDeck = (deck: Deck) => {
@@ -351,6 +363,178 @@ export default function EventDetail() {
       })
       .catch((e) => toast.error(reportError(e)))
       .finally(() => setUploadingDeck(false))
+  }
+
+  const MATCHUP_RESULT_OPTIONS = [
+    { value: 'win', label: 'Win' },
+    { value: 'loss', label: 'Lose' },
+    { value: 'draw', label: 'Draw' },
+  ] as const
+
+  const openUpdateMatchupsModal = (deckId: number) => {
+    setMatchupsDeckId(deckId)
+    setMatchupsList([])
+    setLoadingMatchups(true)
+    getDeckMatchups(deckId)
+      .then((res) => {
+        const ourMatchups = (res.matchups || []).map((m) => {
+          const raw = (m.result || '').trim().toLowerCase()
+          const isID = raw === 'intentional_draw'
+          let result: string = 'draw'
+          if (!isID && raw) {
+            if (raw === 'win' || raw === '2-1' || raw === '1-0' || raw === '2-0') result = 'win'
+            else if (raw === 'loss' || raw === '1-2' || raw === '0-1' || raw === '0-2') result = 'loss'
+            else if (raw === 'draw' || raw === '1-1' || raw === '0-0') result = 'draw'
+          }
+          return {
+            opponent_player: (m.opponent_player ?? '').trim(),
+            result,
+            intentional_draw: isID,
+          }
+        })
+        const reportedAgainstMe = (res.opponent_reported_matchups || []).map((m) => ({
+          opponent_player: (m.opponent_player ?? '').trim(),
+          result: (m.result || 'draw').toLowerCase(),
+          intentional_draw: Boolean(m.intentional_draw),
+        }))
+        const byOpponent = new Map<string, { opponent_player: string; result: string; intentional_draw: boolean }>()
+        for (const m of reportedAgainstMe) {
+          if (m.opponent_player) byOpponent.set(m.opponent_player, m)
+        }
+        for (const m of ourMatchups) {
+          if (m.opponent_player) byOpponent.set(m.opponent_player, m)
+        }
+        const merged = Array.from(byOpponent.values())
+        setMatchupsList(merged.length > 0 ? merged : [{ opponent_player: '', result: 'draw', intentional_draw: false }])
+      })
+      .catch((e) => {
+        toast.error(reportError(e))
+        setMatchupsDeckId(null)
+      })
+      .finally(() => setLoadingMatchups(false))
+  }
+
+  const closeUpdateMatchupsModal = () => {
+    setMatchupsDeckId(null)
+    setMatchupsList([])
+  }
+
+  const addMatchupRow = () =>
+    setMatchupsList((prev) =>
+      prev.length >= 10 ? prev : [...prev, { opponent_player: '', result: 'draw', intentional_draw: false }]
+    )
+  const updateMatchupRow = (i: number, field: 'opponent_player' | 'result' | 'intentional_draw', value: string | boolean) =>
+    setMatchupsList((prev) => prev.map((m, j) => (j === i ? { ...m, [field]: value } : m)))
+  const removeMatchupRow = (i: number) => setMatchupsList((prev) => prev.filter((_, j) => j !== i))
+
+  const handleSaveMatchups = () => {
+    if (matchupsDeckId == null) return
+    const payload = {
+      matchups: matchupsList
+        .filter((m) => (m.opponent_player || '').trim())
+        .map((m) => ({
+          opponent_player: m.opponent_player.trim(),
+          result: m.intentional_draw && (m.result || 'draw') === 'draw' ? 'intentional_draw' : (m.result || 'draw'),
+        })),
+    }
+    setSavingMatchups(true)
+    updateDeckMatchups(matchupsDeckId, payload)
+      .then(() => {
+        refetch()
+        closeUpdateMatchupsModal()
+        toast.success('Matchups updated')
+      })
+      .catch((e) => toast.error(reportError(e)))
+      .finally(() => setSavingMatchups(false))
+  }
+
+  useEffect(() => {
+    if (matchupsDeckId != null) {
+      const prev = document.body.style.overflow
+      document.body.style.overflow = 'hidden'
+      return () => {
+        document.body.style.overflow = prev
+      }
+    }
+  }, [matchupsDeckId])
+
+  const matchupsOpponentOptions = useMemo(() => {
+    if (matchupsDeckId == null) return []
+    return [...new Set(decks.filter((d) => d.deck_id !== matchupsDeckId).map((d) => (d.player || '').trim()).filter(Boolean))]
+  }, [matchupsDeckId, decks])
+
+  const missingDecksCount = decks.filter((d) => !(d.mainboard && d.mainboard.length)).length
+  const handleSendMissingDeckLinks = () => {
+    if (!eventId) return
+    setSendingMissingLinks(true)
+    sendMissingDeckLinks(eventId)
+      .then((res) => {
+        refetch()
+        toast.success(`Sent ${res.sent} email(s).${res.failed?.length ? ` Failed: ${res.failed.length}` : ''}`)
+      })
+      .catch((e) => {
+        if (String(e?.message || e).includes('503') || String(e?.message || e).toLowerCase().includes('not configured')) {
+          toast.error('Email not configured. Set Brevo SMTP or BREVO_API_KEY in .env.')
+        } else {
+          toast.error(reportError(e))
+        }
+      })
+      .finally(() => setSendingMissingLinks(false))
+  }
+  const handleSendFeedbackLinks = () => {
+    if (!eventId) return
+    setSendingFeedbackLinks(true)
+    sendFeedbackLinks(eventId)
+      .then((res) => {
+        refetch()
+        toast.success(`Sent ${res.sent} email(s).`)
+      })
+      .catch((e) => {
+        if (String(e?.message || e).includes('503') || String(e?.message || e).toLowerCase().includes('not configured')) {
+          toast.error('Email not configured. Set Brevo SMTP or BREVO_API_KEY in .env.')
+        } else {
+          toast.error(reportError(e))
+        }
+      })
+      .finally(() => setSendingFeedbackLinks(false))
+  }
+
+  const handleSendFeedbackLinkToPlayer = (player: string) => {
+    if (!eventId) return
+    setSendingFeedbackLinkForPlayer(player)
+    sendFeedbackLinkToPlayer(eventId, player)
+      .then(() => {
+        toast.success(`Feedback link sent to ${player}.`)
+      })
+      .catch((e) => {
+        if (String(e?.message || e).includes('503') || String(e?.message || e).toLowerCase().includes('not configured')) {
+          toast.error('Email not configured. Set Brevo SMTP or BREVO_API_KEY in .env.')
+        } else if (String(e?.message || e).toLowerCase().includes('no email')) {
+          toast.error(`No email set for ${player}. Set email on the player's page first.`)
+        } else {
+          toast.error(reportError(e))
+        }
+      })
+      .finally(() => setSendingFeedbackLinkForPlayer(null))
+  }
+
+  const loadDiscrepancies = () => {
+    if (!eventId) return
+    setLoadingDiscrepancies(true)
+    getMatchupDiscrepancies(eventId)
+      .then((res) => setDiscrepancies(res.discrepancies))
+      .catch((e) => toast.error(reportError(e)))
+      .finally(() => setLoadingDiscrepancies(false))
+  }
+  const fixMatchupResult = (matchupId: number, result: string) => {
+    setFixingMatchupId(matchupId)
+    patchMatchup(matchupId, { result })
+      .then(() => {
+        loadDiscrepancies()
+        toast.success('Matchup updated')
+      })
+      .catch((e) => toast.error(reportError(e)))
+      .finally(() => setFixingMatchupId(null))
   }
 
   const handleDeleteDeckClick = (deckId: number) => setConfirmDeleteDeckId(deckId)
@@ -507,28 +691,100 @@ export default function EventDetail() {
       {showUploadLinksSection && (
         <section className="card" style={{ marginBottom: '1.5rem' }}>
           <h2 style={{ marginTop: 0 }}>Upload links</h2>
-          <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>
-            Generate a one-time link so a player can upload their deck to this event. Each link can be used only once.
+          <h3 style={{ marginTop: 0, marginBottom: '0.5rem' }}>Event edit link</h3>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '0.75rem' }}>
+            One-time link to this event page to add, update, and delete decks and edit event details. Cannot delete the event or generate new links.
           </p>
           <button
             type="button"
             className="btn"
-            onClick={handleGenerateUploadLink}
-            disabled={generatingLinks}
+            onClick={() => {
+              if (!eventId) return
+              setGeneratingEventEditLink(true)
+              createEventEditLink(eventId)
+                .then((res) => {
+                  if (res.links.length > 0) {
+                    const token = res.links[0].token
+                    const base = typeof window !== 'undefined' ? window.location.origin : ''
+                    const url = `${base}/events/${eventId}?token=${token}`
+                    setGeneratedEventEditLink({ url })
+                    window.navigator.clipboard.writeText(url).then(
+                      () => toast.success('Event edit link copied to clipboard'),
+                      () => toast.success('Event edit link generated')
+                    )
+                  }
+                })
+                .catch((e) => toast.error(reportError(e)))
+                .finally(() => setGeneratingEventEditLink(false))
+            }}
+            disabled={generatingEventEditLink}
           >
-            {generatingLinks ? 'Generating…' : 'Generate deck upload link'}
+            {generatingEventEditLink ? 'Generating…' : 'Generate event edit link'}
           </button>
-          {generatedLinks.length > 0 && (
-            <ul style={{ marginTop: '1rem', paddingLeft: '1.25rem' }}>
-              {generatedLinks.map((link) => (
-                <li key={link.token} style={{ marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                  <code style={{ fontSize: '0.875rem', wordBreak: 'break-all' }}>{link.url}</code>
-                  <button type="button" className="btn" style={{ flexShrink: 0 }} onClick={() => copyLink(link.url)}>
-                    Copy
-                  </button>
-                </li>
-              ))}
-            </ul>
+          {generatedEventEditLink && (
+            <p style={{ marginTop: '0.75rem', fontSize: '0.9rem' }}>
+              <code style={{ wordBreak: 'break-all' }}>{generatedEventEditLink.url}</code>{' '}
+              <button type="button" className="btn" style={{ flexShrink: 0 }} onClick={() => copyLink(generatedEventEditLink!.url)}>
+                Copy
+              </button>
+            </p>
+          )}
+          <h3 style={{ marginTop: '1.5rem', marginBottom: '0.5rem' }}>Email links</h3>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '0.75rem' }}>
+            Send one-time links by email to players (using emails set on each player&apos;s page).
+          </p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <button
+              type="button"
+              className="btn"
+              onClick={handleSendMissingDeckLinks}
+              disabled={sendingMissingLinks || missingDecksCount === 0}
+            >
+              {sendingMissingLinks ? 'Sending…' : `Email missing deck links${missingDecksCount > 0 ? ` (${missingDecksCount} missing)` : ''}`}
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={handleSendFeedbackLinks}
+              disabled={sendingFeedbackLinks || decks.length === 0}
+            >
+              {sendingFeedbackLinks ? 'Sending…' : 'Email event feedback links'}
+            </button>
+          </div>
+        </section>
+      )}
+
+      {showUploadLinksSection && (
+        <section className="card" style={{ marginBottom: '1.5rem' }}>
+          <h2 style={{ marginTop: 0 }}>Matchup discrepancies</h2>
+          <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>
+            Pairs where both players reported the same match but results disagree (e.g. one win / one loss = consistent; both win = discrepancy).
+          </p>
+          <button type="button" className="btn" onClick={loadDiscrepancies} disabled={loadingDiscrepancies}>
+            {loadingDiscrepancies ? 'Loading…' : 'View discrepancies'}
+          </button>
+          {discrepancies !== null && (
+            <div style={{ marginTop: '1rem' }}>
+              {discrepancies.length === 0 ? (
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>No discrepancies found.</p>
+              ) : (
+                <ul style={{ paddingLeft: '1.25rem' }}>
+                  {discrepancies.map((d, i) => (
+                    <li key={i} style={{ marginBottom: '0.75rem' }}>
+                      Deck {d.deck_id_a} vs {d.deck_id_b}: reported &quot;{d.result_a}&quot; vs &quot;{d.result_b}&quot;.
+                      {' '}
+                      <button type="button" className="btn" style={{ fontSize: '0.875rem', padding: '0.2rem 0.4rem' }} onClick={() => fixMatchupResult(d.matchup_a.id, 'loss')} disabled={fixingMatchupId === d.matchup_a.id}>Set A loss</button>
+                      {' '}
+                      <button type="button" className="btn" style={{ fontSize: '0.875rem', padding: '0.2rem 0.4rem' }} onClick={() => fixMatchupResult(d.matchup_a.id, 'win')} disabled={fixingMatchupId === d.matchup_a.id}>Set A win</button>
+                      {' '}
+                      <button type="button" className="btn" style={{ fontSize: '0.875rem', padding: '0.2rem 0.4rem' }} onClick={() => fixMatchupResult(d.matchup_b.id, 'loss')} disabled={fixingMatchupId === d.matchup_b.id}>Set B loss</button>
+                      {' '}
+                      <button type="button" className="btn" style={{ fontSize: '0.875rem', padding: '0.2rem 0.4rem' }} onClick={() => fixMatchupResult(d.matchup_b.id, 'win')} disabled={fixingMatchupId === d.matchup_b.id}>Set B win</button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           )}
           <h3 style={{ marginTop: '1.5rem', marginBottom: '0.5rem' }}>Event edit link</h3>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '0.75rem' }}>
@@ -652,11 +908,44 @@ export default function EventDetail() {
                       ) : (
                         <>
                           <td>
-                            <Link to={`/decks/${d.deck_id}`} style={{ color: 'var(--accent)' }}>{cellStr(d.name) || 'Unnamed'}</Link>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                              <Link to={`/decks/${d.deck_id}`} style={{ color: 'var(--accent)' }}>{cellStr(d.name) || 'Unnamed'}</Link>
+                              {!(d.mainboard && d.mainboard.length) && (
+                                <span
+                                  style={{
+                                    marginLeft: 6,
+                                    fontSize: '0.7rem',
+                                    padding: '0.1rem 0.35rem',
+                                    background: 'rgba(220, 53, 69, 0.2)',
+                                    borderRadius: 4,
+                                    color: 'var(--danger, #dc3545)',
+                                  }}
+                                  title="No cards in mainboard"
+                                >
+                                  empty
+                                </span>
+                              )}
+                            </span>
                           </td>
-                          <td>{cellStr(d.player)}</td>
+                          <td>
+                            {cellStr(d.player) ? (
+                              <Link to={`/players/${encodeURIComponent(cellStr(d.player))}`} style={{ color: 'var(--accent)' }}>
+                                {cellStr(d.player)}
+                              </Link>
+                            ) : (
+                              '—'
+                            )}
+                          </td>
                           <td>{cellStr(d.rank) || '—'}</td>
-                          <td>{cellStr(d.archetype)}</td>
+                          <td>
+                            {cellStr(d.archetype) ? (
+                              <Link to={`/archetypes/${encodeURIComponent(cellStr(d.archetype))}`} style={{ color: 'var(--accent)' }}>
+                                {cellStr(d.archetype)}
+                              </Link>
+                            ) : (
+                              '—'
+                            )}
+                          </td>
                           {canEditEvent && (
                             <td>
                               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
@@ -686,15 +975,24 @@ export default function EventDetail() {
                                 >
                                   {uploadingDeck && uploadDeckForDeckId === d.deck_id ? 'Uploading…' : 'Upload deck'}
                                 </button>
+                                <button
+                                  type="button"
+                                  className="btn"
+                                  style={{ fontSize: '0.875rem', padding: '0.25rem 0.5rem' }}
+                                  disabled={loadingMatchups || savingMatchups}
+                                  onClick={() => openUpdateMatchupsModal(d.deck_id)}
+                                >
+                                  Update matchups
+                                </button>
                                 {showUploadLinksSection && (
                                   <button
                                     type="button"
                                     className="btn"
                                     style={{ fontSize: '0.875rem', padding: '0.25rem 0.5rem' }}
-                                    disabled={generatingUpdateLinkFor === d.deck_id}
-                                    onClick={() => handleGenerateUpdateLink(d.deck_id)}
+                                    disabled={sendingFeedbackLinkForPlayer !== null}
+                                    onClick={() => handleSendFeedbackLinkToPlayer(cellStr(d.player))}
                                   >
-                                    {generatingUpdateLinkFor === d.deck_id ? '…' : 'Update link'}
+                                    {sendingFeedbackLinkForPlayer === cellStr(d.player) ? 'Sending…' : 'Send feedback link'}
                                   </button>
                                 )}
                               </div>
@@ -872,6 +1170,107 @@ export default function EventDetail() {
         </div>
       )}
 
+      {matchupsDeckId != null && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="update-matchups-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '1rem',
+          }}
+          onClick={(e) => e.target === e.currentTarget && !savingMatchups && closeUpdateMatchupsModal()}
+        >
+          <div
+            className="card"
+            style={{
+              maxWidth: 520,
+              width: '100%',
+              maxHeight: '90vh',
+              overflow: 'auto',
+              margin: '1.5rem',
+              padding: '1.5rem',
+              borderRadius: 12,
+              background: 'var(--bg-card)',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="update-matchups-title" style={{ marginTop: 0, marginBottom: '1rem' }}>
+              Update matchups {decks.find((d) => d.deck_id === matchupsDeckId) ? `— ${cellStr(decks.find((d) => d.deck_id === matchupsDeckId)?.name) || 'Unnamed'}` : ''}
+            </h2>
+            <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+              Result: Win / Lose / Draw, or check Intentional draw. Opponent name must match a player in this event.
+            </p>
+            {loadingMatchups ? (
+              <p>Loading…</p>
+            ) : (
+              <>
+                <div style={{ marginBottom: '1rem' }}>
+                  {matchupsList.map((m, i) => (
+                    <div key={i} style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center', marginBottom: '0.5rem' }}>
+                      <select
+                        value={m.opponent_player}
+                        onChange={(e) => updateMatchupRow(i, 'opponent_player', e.target.value)}
+                        style={{ minWidth: 140 }}
+                        disabled={savingMatchups}
+                        aria-label="Opponent"
+                      >
+                        <option value="">Select opponent</option>
+                        {matchupsOpponentOptions.map((name) => (
+                          <option key={name} value={name}>{name}</option>
+                        ))}
+                      </select>
+                      <select
+                        value={m.result || 'draw'}
+                        onChange={(e) => updateMatchupRow(i, 'result', e.target.value)}
+                        disabled={savingMatchups}
+                        style={{ minWidth: 90 }}
+                        aria-label="Result"
+                        title={m.intentional_draw ? 'Intentional draw (Win/Lose still recorded if selected)' : undefined}
+                      >
+                        {MATCHUP_RESULT_OPTIONS.map((opt) => (
+                          <option key={opt.value} value={opt.value}>{opt.label}</option>
+                        ))}
+                      </select>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.875rem' }}>
+                        <input
+                          type="checkbox"
+                          checked={m.intentional_draw}
+                          onChange={(e) => updateMatchupRow(i, 'intentional_draw', e.target.checked)}
+                          disabled={savingMatchups}
+                        />
+                        Intentional draw
+                      </label>
+                      <button type="button" className="btn" style={{ padding: '0.2rem 0.5rem' }} onClick={() => removeMatchupRow(i)} disabled={savingMatchups}>
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                  <button type="button" className="btn" style={{ marginTop: '0.35rem' }} onClick={addMatchupRow} disabled={savingMatchups || matchupsList.length >= 10}>
+                    Add matchup
+                  </button>
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button type="button" className="btn btn-primary" onClick={handleSaveMatchups} disabled={savingMatchups}>
+                    {savingMatchups ? 'Saving…' : 'Save'}
+                  </button>
+                  <button type="button" className="btn" onClick={closeUpdateMatchupsModal} disabled={savingMatchups}>
+                    Cancel
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {confirmDeleteEvent && (
         <div
           role="dialog"
@@ -961,6 +1360,52 @@ export default function EventDetail() {
           </div>
         </div>
       )}
+
+      {blocker.state === 'blocked' && hasUnsavedEdits && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="unsaved-changes-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '1rem',
+          }}
+          onClick={(e) => e.target === e.currentTarget && blocker.reset()}
+        >
+          <div
+            className="card"
+            style={{
+              maxWidth: 400,
+              width: '100%',
+              padding: '1.5rem',
+              borderRadius: 12,
+              background: 'var(--bg-card)',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="unsaved-changes-title" style={{ marginTop: 0, marginBottom: '0.75rem' }}>Unsaved changes</h2>
+            <p style={{ color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
+              You have unsaved changes. Do you want to leave this page? Your changes will be lost.
+            </p>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button type="button" className="btn btn-primary" onClick={() => blocker.proceed()}>
+                Leave
+              </button>
+              <button type="button" className="btn" onClick={() => blocker.reset()}>
+                Stay
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       </div>
     </>
   )

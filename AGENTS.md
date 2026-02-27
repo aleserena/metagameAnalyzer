@@ -8,10 +8,12 @@ MTG Top 8 Metagame Analyzer — full-stack app with a **Python/FastAPI** backend
 
 ### Running services
 
-- **Both (backend + frontend):** `npm run dev` — runs API (port 8000) and Vite (port 5173) in parallel.
-- **Backend only:** `npm run api` or `python3 -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload`
-- **Frontend only:** `npm run web` or `cd web && npx vite --host 0.0.0.0 --port 5173`
-- The Vite dev server proxies `/api` requests to `localhost:8000` (configured in `web/vite.config.ts`).
+Run backend and frontend in **two separate terminals** (the combined `npm run dev` approach had issues; running separately is reliable):
+
+- **Terminal 1 — Backend:** `npm run api` or `python3 -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload`
+- **Terminal 2 — Frontend:** `npm run web` or `cd web && npx vite --host 0.0.0.0 --port 5173`
+
+Start the API first, then the frontend. The Vite dev server proxies `/api` to `http://127.0.0.1:8000` (see `web/vite.config.ts`).
 
 ### Lint / Test / Build
 

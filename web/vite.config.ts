@@ -7,10 +7,13 @@ export default defineConfig({
     proxy: {
       '/api': 'http://localhost:8000',
     },
+    watch: {
+      usePolling: true,
+    },
   },
   test: {
     globals: true,
     environment: 'jsdom',
     setupFiles: ['./src/test-setup.ts'],
   },
-})
+} as import('vite').UserConfigExport)
