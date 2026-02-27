@@ -17,6 +17,7 @@ export default function Players() {
   const [sortDesc, setSortDesc] = useState(true)
   const [dateFrom, setDateFrom] = useState<string | null>(null)
   const [dateTo, setDateTo] = useState<string | null>(null)
+  const [nameFilter, setNameFilter] = useState('')
 
   const { data, loading, error, refetch } = useFetch<{ players: PlayerStats[] }>(
     () => getPlayers(dateFrom, dateTo).then((r) => ({ players: r.players })),
@@ -53,6 +54,15 @@ export default function Players() {
     return sortDesc ? -cmp : cmp
   })
 
+  // Position in leaderboard (1-based) for current date range and sort; unchanged when filtering by name
+  const positionByPlayer = new Map<string, number>()
+  sorted.forEach((p, i) => positionByPlayer.set(p.player, i + 1))
+
+  const nameFilterLower = nameFilter.trim().toLowerCase()
+  const filtered = nameFilterLower
+    ? sorted.filter((p) => p.player.toLowerCase().includes(nameFilterLower))
+    : sorted
+
   if (loading) {
     return (
       <div>
@@ -65,6 +75,7 @@ export default function Players() {
           <table>
             <thead>
               <tr>
+                <th><Skeleton width={56} height={14} /></th>
                 <th><Skeleton width={100} height={14} /></th>
                 <th><Skeleton width={60} height={14} /></th>
                 <th><Skeleton width={50} height={14} /></th>
@@ -77,6 +88,7 @@ export default function Players() {
             <tbody>
               {Array.from({ length: 10 }).map((_, i) => (
                 <tr key={i}>
+                  <td><Skeleton width={32} height={16} /></td>
                   <td><Skeleton width="70%" height={16} /></td>
                   <td><Skeleton width={40} height={16} /></td>
                   <td><Skeleton width={30} height={16} /></td>
@@ -138,11 +150,24 @@ export default function Players() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
         <h1 className="page-title" style={{ margin: 0 }}>Player Leaderboard</h1>
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-          <span style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Date range:</span>
-          <button type="button" className="btn" style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }} onClick={() => setPreset('all')}>
-            All time
-          </button>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <label htmlFor="players-name-filter" style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Filter by name:</label>
+            <input
+              id="players-name-filter"
+              type="text"
+              value={nameFilter}
+              onChange={(e) => setNameFilter(e.target.value)}
+              placeholder="Search player..."
+              style={{ width: 160, padding: '0.25rem 0.5rem', fontSize: '0.875rem' }}
+              aria-label="Filter by player name"
+            />
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <span style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Date range:</span>
+            <button type="button" className="btn" style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }} onClick={() => setPreset('all')}>
+              All time
+            </button>
           <button type="button" className="btn" style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }} onClick={() => setPreset('thisYear')}>
             This year
           </button>
@@ -161,6 +186,7 @@ export default function Players() {
           <button type="button" className="btn" style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }} onClick={() => setPreset('lastEvent')}>
             Last event
           </button>
+          </div>
         </div>
       </div>
 
@@ -169,6 +195,7 @@ export default function Players() {
         <table>
           <thead>
             <tr>
+              <th>Position</th>
               <th style={{ cursor: 'pointer' }} onClick={() => handleSort('player')}>
                 Player {sortBy === 'player' && (sortDesc ? '↓' : '↑')}
               </th>
@@ -193,21 +220,30 @@ export default function Players() {
             </tr>
           </thead>
           <tbody>
-            {sorted.map((p) => (
-              <tr key={p.player}>
-                <td>
-                  <Link to={`/players/${encodeURIComponent(p.player)}`} className="nav-link" style={{ padding: 0 }}>
-                    {p.player}
-                  </Link>
+            {filtered.length === 0 ? (
+              <tr>
+                <td colSpan={8} style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '1.5rem' }}>
+                  No players match the filter.
                 </td>
-                <td>{p.wins}</td>
-                <td>{p.top2}</td>
-                <td>{p.top4}</td>
-                <td>{p.top8}</td>
-                <td>{p.points.toFixed(1)}</td>
-                <td>{p.deck_count}</td>
               </tr>
-            ))}
+            ) : (
+              filtered.map((p) => (
+                <tr key={p.player}>
+                  <td>{positionByPlayer.get(p.player) ?? '—'}</td>
+                  <td>
+                    <Link to={`/players/${encodeURIComponent(p.player)}`} className="nav-link" style={{ padding: 0 }}>
+                      {p.player}
+                    </Link>
+                  </td>
+                  <td>{p.wins}</td>
+                  <td>{p.top2}</td>
+                  <td>{p.top4}</td>
+                  <td>{p.top8}</td>
+                  <td>{p.points.toFixed(1)}</td>
+                  <td>{p.deck_count}</td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
         </div>
