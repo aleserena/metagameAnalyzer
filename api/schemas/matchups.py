@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 
 class MatchupItem(BaseModel):
     opponent_player: str
-    result: str  # win | loss | draw | intentional_draw
+    result: str  # win | loss | draw | intentional_draw | bye | drop
     result_note: str | None = None
     round: int | None = None
 

@@ -23,6 +23,7 @@ import {
   updateDeckMatchups,
   createEventUploadLinks,
   exportEvent,
+  getPlayers,
 } from '../api'
 import type { EventWithOrigin } from '../api'
 import type { Deck } from '../types'
@@ -36,7 +37,7 @@ import PageError from '../components/PageError'
 import PageSkeleton from '../components/PageSkeleton'
 import CardSearchInput from '../components/CardSearchInput'
 import { parseMoxfieldDeckList, formatMoxfieldDeckList } from '../lib/deckListParser'
-import { matchupItemToRow } from '../lib/matchups'
+import { isBye, isDrop, matchupItemToRow } from '../lib/matchups'
 import { reportError, ddMmYyToIso, isoToDdMmYy } from '../utils'
 
 /** Coerce value for display; avoid [object Object]. */
@@ -123,6 +124,25 @@ export default function EventDetail() {
   const canEditEvent = user === 'admin' || eventEditMode
   const canDeleteEvent = user === 'admin'
   const showUploadLinksSection = user === 'admin'
+
+  const { data: playersData } = useFetch<{ players: { player: string }[] }>(
+    () => (canEditEvent && eventId ? getPlayers() : Promise.resolve({ players: [] })),
+    [canEditEvent, eventId ?? '']
+  )
+
+  const playerOptionsForEditDeck = useMemo(() => {
+    if (editingDeckId == null || !decks.length) return []
+    const otherPlayersInEvent = new Set(
+      decks.filter((d) => d.deck_id !== editingDeckId).map((d) => (d.player || '').trim()).filter(Boolean)
+    )
+    const currentPlayer = (decks.find((d) => d.deck_id === editingDeckId)?.player ?? '').trim()
+    const allNames = (playersData?.players ?? []).map((p) => (p.player || '').trim()).filter(Boolean)
+    const suggested = [
+      ...(currentPlayer ? [currentPlayer] : []),
+      ...allNames.filter((name) => !otherPlayersInEvent.has(name)),
+    ]
+    return [...new Set(suggested)].sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }))
+  }, [editingDeckId, decks, playersData?.players])
 
   useEffect(() => {
     if (user !== 'admin' || !eventId || !data?.decks.length) return
@@ -477,9 +497,9 @@ export default function EventDetail() {
     if (matchupsDeckId == null) return
     const payload = {
       matchups: matchupsList
-        .filter((m) => (m.opponent_player || '').trim())
+        .filter((m) => (m.opponent_player || '').trim() || isBye(m.result) || isDrop(m.result))
         .map((m) => ({
-          opponent_player: m.opponent_player.trim(),
+          opponent_player: isBye(m.result) || isDrop(m.result) ? '' : (m.opponent_player || '').trim(),
           result: m.result || 'draw',
         })),
     }
@@ -497,7 +517,8 @@ export default function EventDetail() {
 
   const matchupsOpponentOptions = useMemo(() => {
     if (matchupsDeckId == null) return []
-    return [...new Set(decks.filter((d) => d.deck_id !== matchupsDeckId).map((d) => (d.player || '').trim()).filter(Boolean))]
+    const players = [...new Set(decks.filter((d) => d.deck_id !== matchupsDeckId).map((d) => (d.player || '').trim()).filter(Boolean))]
+    return [...players, 'Bye', '(drop)']
   }, [matchupsDeckId, decks])
 
   const missingMatchupsByDeckId = useMemo(() => {
@@ -1097,13 +1118,18 @@ export default function EventDetail() {
       )}
 
       {canEditEvent && editingDeckId != null && (
-        <Modal title="Update deck" onClose={closeUpdateDeck} size={420}>
+        <Modal
+          title={`Update deck — ${cellStr(decks.find((d) => d.deck_id === editingDeckId)?.player) || 'Unnamed'}`}
+          onClose={closeUpdateDeck}
+          size={420}
+        >
           <UpdateDeckForm
             name={editDeckName}
             player={editDeckPlayer}
             rank={editDeckRank}
             archetype={editDeckArchetype}
             isEDH={isEDH}
+            playerOptions={playerOptionsForEditDeck}
             onNameChange={setEditDeckName}
             onPlayerChange={setEditDeckPlayer}
             onRankChange={setEditDeckRank}
@@ -1117,7 +1143,7 @@ export default function EventDetail() {
 
       {canEditEvent && uploadDeckForDeckId != null && (
         <Modal
-          title={`Update deck ${decks.find((x) => x.deck_id === uploadDeckForDeckId) ? `— ${cellStr(decks.find((x) => x.deck_id === uploadDeckForDeckId)?.name) || 'Unnamed'}` : ''}`}
+          title={`Update deck — ${cellStr(decks.find((x) => x.deck_id === uploadDeckForDeckId)?.player) || 'Unnamed'}`}
           onClose={closeUploadDeckModal}
           size={520}
         >
@@ -1133,7 +1159,7 @@ export default function EventDetail() {
 
       {matchupsDeckId != null && (
         <Modal
-          title={`Update matchups ${decks.find((d) => d.deck_id === matchupsDeckId) ? `— ${cellStr(decks.find((d) => d.deck_id === matchupsDeckId)?.name) || 'Unnamed'}` : ''}`}
+          title={`Update matchups — ${cellStr(decks.find((d) => d.deck_id === matchupsDeckId)?.player) || 'Unnamed'}`}
           onClose={() => !savingMatchups && closeUpdateMatchupsModal()}
           closeOnOverlayClick={!savingMatchups}
           size={520}

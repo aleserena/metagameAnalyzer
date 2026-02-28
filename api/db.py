@@ -814,6 +814,7 @@ def _swiss_rounds_for_players(n: int) -> int:
 
 def list_missing_matchups_for_event(session: Session, event_id: str) -> list[dict]:
     """Decks in this event that have fewer matchups than expected (expected = Swiss rounds for player count).
+    Byes count as a round. Decks with any result=drop are exempt from validation.
     Returns list of { deck_id, player, matchup_count, expected_count }."""
     eid = _event_id_str(event_id)
     decks = (
@@ -825,8 +826,21 @@ def list_missing_matchups_for_event(session: Session, event_id: str) -> list[dic
     expected = _swiss_rounds_for_players(n)
     if n == 0:
         return []
+    event_deck_ids = [d.deck_id for d in decks]
+    # Deck IDs in this event that have at least one matchup with result=drop (exempt from expected count)
+    dropped_deck_ids = set()
+    if event_deck_ids:
+        rows = (
+            session.query(MatchupRow.deck_id)
+            .filter(MatchupRow.deck_id.in_(event_deck_ids), MatchupRow.result == "drop")
+            .distinct()
+            .all()
+        )
+        dropped_deck_ids = {r[0] for r in rows}
     result = []
     for (deck_id, player) in decks:
+        if deck_id in dropped_deck_ids:
+            continue
         count = (
             session.query(func.count(MatchupRow.id))
             .filter(MatchupRow.deck_id == deck_id)

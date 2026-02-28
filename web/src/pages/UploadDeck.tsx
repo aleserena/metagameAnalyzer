@@ -4,7 +4,7 @@ import { Toaster } from 'react-hot-toast'
 import toast from 'react-hot-toast'
 import { getUploadLinkInfo, submitDeckWithUploadLink, submitFeedbackWithUploadLink, submitDecklistWithUploadLink } from '../api'
 import { parseMoxfieldDeckList, formatMoxfieldDeckList } from '../lib/deckListParser'
-import { MATCHUP_RESULT_OPTIONS, matchupItemToRow } from '../lib/matchups'
+import { isBye, isDrop, MATCHUP_RESULT_OPTIONS, matchupItemToRow } from '../lib/matchups'
 import { reportError } from '../utils'
 import CardSearchInput from '../components/CardSearchInput'
 import Modal from '../components/Modal'
@@ -110,9 +110,9 @@ export default function UploadDeck() {
           deck_name: feedbackDeckName.trim() || undefined,
           rank: feedbackRank.trim() || undefined,
           matchups: matchups
-            .filter((m) => (m.opponent_player || '').trim())
+            .filter((m) => (m.opponent_player || '').trim() || isBye(m.result) || isDrop(m.result))
             .map((m) => ({
-              opponent_player: m.opponent_player.trim(),
+              opponent_player: isBye(m.result) || isDrop(m.result) ? '' : (m.opponent_player || '').trim(),
               result: m.result || 'draw',
             })),
         }
@@ -312,7 +312,7 @@ export default function UploadDeck() {
                       aria-label="Opponent"
                     >
                       <option value="">Select opponent</option>
-                      {((info?.deck as { event_players?: string[] })?.event_players ?? []).map((name) => (
+                      {[...((info?.deck as { event_players?: string[] })?.event_players ?? []), 'Bye', '(drop)'].map((name) => (
                         <option key={name} value={name}>{name}</option>
                       ))}
                     </select>

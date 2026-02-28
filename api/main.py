@@ -1883,8 +1883,9 @@ def get_upload_link_info(token: str):
                             event_players_set.add(p)
                     deck_out["event_players"] = sorted(event_players_set)
                     # Matchups others reported vs this player (prepopulate: their win = our loss)
+                    current_player_norm = _normalize_player((deck.get("player") or "").strip())
                     reported_against_me = _db.list_matchups_reported_against_player(
-                        session, row.event_id, deck.get("player")
+                        session, row.event_id, current_player_norm
                     )
                     inverted = []
                     for r in reported_against_me:
@@ -1899,11 +1900,14 @@ def get_upload_link_info(token: str):
                             inv_result = "intentional_draw_win"
                         else:
                             inv_result = "draw" if res == "intentional_draw" else "draw"
-                        inverted.append({
-                            "opponent_player": (r.get("reporting_player") or "").strip(),
-                            "result": inv_result,
-                            "intentional_draw": _is_intentional_draw_result(res),
-                        })
+                        # Use normalized name so it matches opponent dropdown (event_players / deck list)
+                        reporting_player = _normalize_player((r.get("reporting_player") or "").strip())
+                        if reporting_player and reporting_player != "(unknown)":
+                            inverted.append({
+                                "opponent_player": reporting_player,
+                                "result": inv_result,
+                                "intentional_draw": _is_intentional_draw_result(res),
+                            })
                     deck_out["opponent_reported_matchups"] = inverted
                 out["deck"] = deck_out
             else:
@@ -2059,6 +2063,18 @@ def submit_feedback_with_upload_link(token: str, body: EventFeedbackBody):
         _db.upsert_deck(session, deck_dict, origin=deck_dict.get("origin", _db.ORIGIN_MANUAL))
         matchup_rows = []
         for m in body.matchups or []:
+            result_raw = (m.result or "1-1").strip().lower()
+            if result_raw in ("bye", "drop"):
+                opponent_player = "Bye" if result_raw == "bye" else "(drop)"
+                matchup_rows.append({
+                    "opponent_player": opponent_player,
+                    "opponent_deck_id": None,
+                    "opponent_archetype": None,
+                    "result": result_raw,
+                    "result_note": None,
+                    "round": None,
+                })
+                continue
             opp_player = _normalize_player((m.opponent_player or "").strip())
             if not opp_player or opp_player == "(unknown)":
                 continue
@@ -2149,6 +2165,21 @@ def update_deck_endpoint(deck_id: int, body: UpdateDeckBody):
     # EDH: if no commander present, use first mainboard card as commander
     if (current.get("format_id") or "").upper() == "EDH" and not current.get("commanders") and current.get("mainboard"):
         current["commanders"] = [current["mainboard"][0]["card"]]
+    # No duplicate player per event: another deck in same event cannot have the same player
+    event_id = current.get("event_id")
+    if event_id and (body.player is not None or current.get("player")):
+        new_player = _normalize_player((current.get("player") or "").strip())
+        if new_player and new_player != "(unknown)":
+            with _db.session_scope() as session:
+                event_decks = _db.get_decks_by_event(session, event_id)
+                for d in event_decks:
+                    if d.get("deck_id") != deck_id:
+                        other_player = _normalize_player((d.get("player") or "").strip())
+                        if other_player == new_player:
+                            raise HTTPException(
+                                status_code=400,
+                                detail="Player already in this event. Each player can only have one deck per event.",
+                            )
     try:
         with _db.session_scope() as session:
             _db.upsert_deck(session, current, origin=current.get("origin", _db.ORIGIN_MTGTOP8))
@@ -2189,7 +2220,9 @@ def get_deck_matchups(deck_id: int):
         rows = _db.list_matchups_by_deck(session, deck_id)
         opponent_reported_matchups = []
         if event_id and current_player:
-            reported_against_me = _db.list_matchups_reported_against_player(session, event_id, deck.get("player"))
+            # Use normalized current player so we match MatchupRow.opponent_player (stored normalized)
+            current_player_norm = _normalize_player(current_player)
+            reported_against_me = _db.list_matchups_reported_against_player(session, event_id, current_player_norm)
             for r in reported_against_me:
                 res = (r.get("result") or "").strip().lower()
                 if res == "win":
@@ -2202,11 +2235,14 @@ def get_deck_matchups(deck_id: int):
                     inv_result = "intentional_draw_win"
                 else:
                     inv_result = "draw" if res == "intentional_draw" else "draw"
-                opponent_reported_matchups.append({
-                    "opponent_player": (r.get("reporting_player") or "").strip(),
-                    "result": inv_result,
-                    "intentional_draw": _is_intentional_draw_result(res),
-                })
+                # Use normalized name so it matches opponent dropdown (deck list uses normalized player)
+                reporting_player = _normalize_player((r.get("reporting_player") or "").strip())
+                if reporting_player and reporting_player != "(unknown)":
+                    opponent_reported_matchups.append({
+                        "opponent_player": reporting_player,
+                        "result": inv_result,
+                        "intentional_draw": _is_intentional_draw_result(res),
+                    })
     return {"matchups": rows, "opponent_reported_matchups": opponent_reported_matchups}
 
 
@@ -2224,6 +2260,19 @@ def update_deck_matchups(deck_id: int, body: AdminMatchupsBody):
     with _db.session_scope() as session:
         matchup_rows = []
         for m in body.matchups or []:
+            result_raw = (m.result or "draw").strip().lower()
+            if result_raw in ("bye", "drop"):
+                # Bye and drop don't require an opponent; count as a round for validation
+                opponent_player = "Bye" if result_raw == "bye" else "(drop)"
+                matchup_rows.append({
+                    "opponent_player": opponent_player,
+                    "opponent_deck_id": None,
+                    "opponent_archetype": None,
+                    "result": result_raw,
+                    "result_note": None,
+                    "round": None,
+                })
+                continue
             opp_player = _normalize_player((m.opponent_player or "").strip())
             if not opp_player or opp_player == "(unknown)":
                 continue
@@ -2851,8 +2900,10 @@ def send_feedback_link_to_player(event_id: str, request: Request, body: SendFeed
 
 
 def _matchup_result_to_canonical(result: str) -> str:
-    """Map result string to canonical win/loss/draw/intentional_draw for consistency check."""
+    """Map result string to canonical win/loss/draw/intentional_draw/bye/drop for consistency check."""
     r = (result or "").strip().lower()
+    if r in ("bye", "drop"):
+        return r
     if r in ("intentional_draw", "id"):
         return "intentional_draw"
     if r == "intentional_draw_win":
@@ -2877,9 +2928,11 @@ def _is_intentional_draw_result(result: str) -> bool:
 
 
 def _matchup_result_consistent(result_a: str, result_b: str) -> bool:
-    """True if the pair is consistent: one win + one loss, or both draw/intentional_draw."""
+    """True if the pair is consistent: one win + one loss, or both draw/intentional_draw. Bye/drop have no pair."""
     a = _matchup_result_to_canonical(result_a)
     b = _matchup_result_to_canonical(result_b)
+    if a in ("bye", "drop") or b in ("bye", "drop"):
+        return True
     if a in ("draw", "intentional_draw") and b in ("draw", "intentional_draw"):
         return True
     if (a == "win" and b == "loss") or (a == "loss" and b == "win"):
@@ -2980,6 +3033,9 @@ def get_matchups_summary(
             # When multiple archetypes selected: only matchups between those archetypes. When single: show that archetype vs all.
             if len(archetype_set) > 1 and opp not in archetype_set:
                 continue
+        # Bye and drop count as rounds for validation but are not used in matchup calculations
+        if (r.get("result") or "").strip().lower() in ("bye", "drop"):
+            continue
         filtered.append(r)
 
     def to_effective_wld(row):
