@@ -106,7 +106,10 @@ from src.mtgtop8.analyzer import (
 from src.mtgtop8.card_lookup import autocomplete_cards, clear_cache as clear_scryfall_cache, lookup_cards
 from src.mtgtop8.config import FORMATS
 from src.mtgtop8.models import Deck
-from src.mtgtop8.normalize import normalize_card_name as _normalize_card_name
+from src.mtgtop8.normalize import (
+    canonical_card_name_for_compare as _canonical_card_key,
+    normalize_card_name as _normalize_card_name,
+)
 from src.mtgtop8.scraper import event_display_name, parse_event_display, scrape
 from src.mtgtop8.storage import load_json, save_json
 
@@ -1075,10 +1078,52 @@ def _event_row_to_merge_dict(row) -> dict:
     }
 
 
+def _normalize_board_for_compare(board: list) -> list[tuple[str, int]]:
+    """Normalize mainboard/sideboard to comparable (canonical_card, total_qty) list.
+    Double-faced cards are keyed by front face so 'Norman Osborn' and 'Norman Osborn // Green Goblin' match."""
+    if not board or not isinstance(board, list):
+        return []
+    by_canonical: dict[str, int] = {}
+    for entry in board:
+        if isinstance(entry, dict):
+            card = (entry.get("card") or "").strip()
+            qty = int(entry.get("qty", 1)) if entry.get("qty") is not None else 1
+            if card:
+                key = _canonical_card_key(card)
+                by_canonical[key] = by_canonical.get(key, 0) + qty
+    out = sorted(by_canonical.items(), key=lambda x: (x[0].lower(), x[1]))
+    return out
+
+
+def _boards_content_equal(board_a: list, board_b: list) -> bool:
+    """True if both boards have the same cards and quantities (order ignored)."""
+    return _normalize_board_for_compare(board_a) == _normalize_board_for_compare(board_b)
+
+
+def _format_commanders_archetype(deck: dict) -> str:
+    """Display archetype only for EDH merge conflict (commanders not shown)."""
+    arch = (deck.get("archetype") or "").strip()
+    if arch:
+        return arch
+    cmd = deck.get("commanders") or []
+    if cmd:
+        return ", ".join(cmd)  # fallback if no archetype
+    return "—"
+
+
 def _deck_merge_conflicts(deck_keep: dict, deck_remove: dict) -> list[MergeConflictItem]:
-    """Compare two deck dicts on DECK_MERGE_FIELDS. Only add conflict when both have data and values differ (prefer non-empty)."""
+    """Compare two deck dicts on DECK_MERGE_FIELDS. Only add conflict when both have data and values differ (prefer non-empty).
+    For EDH, commanders and archetype are a single combined field."""
     conflicts = []
+    format_keep = (deck_keep.get("format_id") or "").strip().upper()
+    format_remove = (deck_remove.get("format_id") or "").strip().upper()
+    is_edh_keep = format_keep in ("EDH", "COMMANDER", "CEDH")
+    is_edh_remove = format_remove in ("EDH", "COMMANDER", "CEDH")
+    is_edh_both = is_edh_keep and is_edh_remove
+
     for field in DECK_MERGE_FIELDS:
+        if is_edh_both and field in ("commanders", "archetype"):
+            continue  # handled below as commanders_archetype
         v_keep = deck_keep.get(field)
         v_remove = deck_remove.get(field)
         if field == "player_count":
@@ -1089,13 +1134,44 @@ def _deck_merge_conflicts(deck_keep: dict, deck_remove: dict) -> list[MergeConfl
         if not has_keep or not has_remove:
             continue  # prefer the one with data; no conflict to show
         if field in ("commanders", "mainboard", "sideboard"):
-            if v_keep != v_remove:
-                conflicts.append(MergeConflictItem(field=field, value_keep=v_keep, value_remove=v_remove))
+            if field == "commanders":
+                if v_keep != v_remove:
+                    conflicts.append(MergeConflictItem(field=field, value_keep=v_keep, value_remove=v_remove))
+            else:
+                # mainboard/sideboard: compare content (same cards and qty = no conflict)
+                if not _boards_content_equal(v_keep if isinstance(v_keep, list) else [], v_remove if isinstance(v_remove, list) else []):
+                    conflicts.append(MergeConflictItem(field=field, value_keep=v_keep, value_remove=v_remove))
         else:
             s_keep = (v_keep or "").strip() if isinstance(v_keep, str) else (v_keep if v_keep is not None else "")
             s_remove = (v_remove or "").strip() if isinstance(v_remove, str) else (v_remove if v_remove is not None else "")
             if s_keep != s_remove:
                 conflicts.append(MergeConflictItem(field=field, value_keep=v_keep, value_remove=v_remove))
+
+    # EDH: single combined commanders_archetype conflict when either commanders or archetype differs
+    # Archetype is a commander card; treat double-faced same as front face (e.g. Norman Osborn === Norman Osborn // Green Goblin)
+    if is_edh_both:
+        cmd_keep = deck_keep.get("commanders") or []
+        arch_keep = (deck_keep.get("archetype") or "").strip()
+        cmd_remove = deck_remove.get("commanders") or []
+        arch_remove = (deck_remove.get("archetype") or "").strip()
+        has_keep = bool(cmd_keep or arch_keep)
+        has_remove = bool(cmd_remove or arch_remove)
+        if has_keep and has_remove:
+            # Compare as sets of canonical card names (front face, case-insensitive); include archetype as a commander
+            set_keep = {_canonical_card_key(c) for c in cmd_keep if (c or "").strip()}
+            if arch_keep:
+                set_keep.add(_canonical_card_key(arch_keep))
+            set_remove = {_canonical_card_key(c) for c in cmd_remove if (c or "").strip()}
+            if arch_remove:
+                set_remove.add(_canonical_card_key(arch_remove))
+            if set_keep != set_remove:
+                conflicts.append(
+                    MergeConflictItem(
+                        field="commanders_archetype",
+                        value_keep=_format_commanders_archetype(deck_keep),
+                        value_remove=_format_commanders_archetype(deck_remove),
+                    )
+                )
     return conflicts
 
 
@@ -1107,8 +1183,10 @@ def _deck_merge_conflicts(deck_keep: dict, deck_remove: dict) -> list[MergeConfl
 def merge_preview(
     event_id_a: str = Query(..., alias="event_id_a"),
     event_id_b: str = Query(..., alias="event_id_b"),
+    manual_pairs: str | None = Query(None, alias="manual_pairs", description="Comma-separated keep_id-remove_id for manual deck pairs to include conflict preview"),
 ):
-    """Preview merging two events. Cannot merge two MTGTop8 events. Prefer MTGTop8 data when merging manual + MTGTop8."""
+    """Preview merging two events. Cannot merge two MTGTop8 events. Prefer MTGTop8 data when merging manual + MTGTop8.
+    Optional manual_pairs=deck_id_keep-deck_id_remove,... includes those pairs in deck_pairs with same validations as auto-paired."""
     with _db.session_scope() as session:
         row_a = _db.get_event(session, event_id_a)
         row_b = _db.get_event(session, event_id_b)
@@ -1201,15 +1279,45 @@ def merge_preview(
                 paired_keep_ids.add(k["deck_id"])
                 paired_remove_ids.add(d["deck_id"])
                 pair_conflicts = _deck_merge_conflicts(k, d)
-                # Add matchups conflict if both decks have different matchup data
-                m_keep = _db.list_matchups_by_deck(session, k["deck_id"])
-                m_remove = _db.list_matchups_by_deck(session, d["deck_id"])
-                if len(m_keep) != len(m_remove) or (m_keep != m_remove and (m_keep or m_remove)):
+                # Add matchups conflict only when both have matchup data and counts differ (effective = as deck + as opponent)
+                n_keep = _db.count_effective_matchups_for_deck(session, k["deck_id"])
+                n_remove = _db.count_effective_matchups_for_deck(session, d["deck_id"])
+                if n_keep > 0 and n_remove > 0 and n_keep != n_remove:
                     pair_conflicts.append(
                         MergeConflictItem(
                             field="matchups",
-                            value_keep=f"{len(m_keep)} matchups",
-                            value_remove=f"{len(m_remove)} matchups",
+                            value_keep=f"{n_keep} matchups",
+                            value_remove=f"{n_remove} matchups",
+                        )
+                    )
+                deck_pairs.append(DeckPairPreview(deck_keep=k, deck_remove=d, conflicts=pair_conflicts))
+        # Manual pairs: same validations (deck, rank, matchups, etc.) as auto-paired
+        if manual_pairs and manual_pairs.strip():
+            keep_by_id = {d["deck_id"]: d for d in decks_keep}
+            remove_by_id = {d["deck_id"]: d for d in decks_remove}
+            for part in manual_pairs.strip().split(","):
+                part = part.strip()
+                if "-" not in part:
+                    continue
+                a, b = part.split("-", 1)
+                try:
+                    keep_id = int(a.strip())
+                    remove_id = int(b.strip())
+                except ValueError:
+                    continue
+                k = keep_by_id.get(keep_id)
+                d = remove_by_id.get(remove_id)
+                if not k or not d:
+                    continue
+                pair_conflicts = _deck_merge_conflicts(k, d)
+                n_keep = _db.count_effective_matchups_for_deck(session, k["deck_id"])
+                n_remove = _db.count_effective_matchups_for_deck(session, d["deck_id"])
+                if n_keep > 0 and n_remove > 0 and n_keep != n_remove:
+                    pair_conflicts.append(
+                        MergeConflictItem(
+                            field="matchups",
+                            value_keep=f"{n_keep} matchups",
+                            value_remove=f"{n_remove} matchups",
                         )
                     )
                 deck_pairs.append(DeckPairPreview(deck_keep=k, deck_remove=d, conflicts=pair_conflicts))
@@ -1538,7 +1646,16 @@ def merge_events(body: MergeEventsBody):
                 merged_deck["event_id"] = keep_row.event_id
                 merged_deck["event_name"] = event_name
                 merged_deck["date"] = date
+                # EDH: apply commanders_archetype resolution to both commanders and archetype
+                if res.get("commanders_archetype") == "remove":
+                    merged_deck["commanders"] = d_remove.get("commanders") or []
+                    merged_deck["archetype"] = d_remove.get("archetype") or ""
+                elif res.get("commanders_archetype") == "keep":
+                    merged_deck["commanders"] = d_keep.get("commanders") or []
+                    merged_deck["archetype"] = d_keep.get("archetype") or ""
                 for field in DECK_MERGE_FIELDS:
+                    if field in ("commanders", "archetype") and "commanders_archetype" in res:
+                        continue  # already set above
                     choice = res.get(field)
                     v_keep = d_keep.get(field)
                     v_remove = d_remove.get(field)
@@ -2563,7 +2680,7 @@ def get_archetype_detail(
     filtered = _filter_decks_for_query(_decks, event_id, event_ids, date_from, date_to)
     filtered = [
         d for d in filtered
-        if (d.get("archetype") or "(unknown)") == decoded
+        if ((d.get("archetype") or "(unknown)").strip().lower() == (decoded or "").strip().lower())
     ]
     if not filtered:
         raise HTTPException(status_code=404, detail="Archetype not found or no decks in range")
@@ -3015,7 +3132,7 @@ def get_matchups_summary(
 
     archetype_set = None
     if archetype:
-        archetype_set = {x.strip() for x in archetype if (x or "").strip()}
+        archetype_set = {x.strip().lower() for x in archetype if (x or "").strip()}
 
     filtered = []
     for r in rows:
@@ -3028,10 +3145,10 @@ def get_matchups_summary(
         if archetype_set is not None:
             arch = (r.get("archetype") or "").strip()
             opp = (r.get("opponent_archetype") or "").strip()
-            if arch not in archetype_set:
+            if arch.lower() not in archetype_set:
                 continue
             # When multiple archetypes selected: only matchups between those archetypes. When single: show that archetype vs all.
-            if len(archetype_set) > 1 and opp not in archetype_set:
+            if len(archetype_set) > 1 and opp.lower() not in archetype_set:
                 continue
         # Bye and drop count as rounds for validation but are not used in matchup calculations
         if (r.get("result") or "").strip().lower() in ("bye", "drop"):
@@ -3055,9 +3172,9 @@ def get_matchups_summary(
 
     def add_to_agg(arch: str, opp: str, w: int, l: int, d: int, is_intentional_draw: bool, matches: int):
         for (a, o), (aw, al, ad) in [((arch, opp), (w, l, d)), ((opp, arch), (l, w, d))]:
-            key = (a, o)
+            key = (a.lower(), o.lower())
             if key not in agg:
-                agg[key] = {"wins": 0, "losses": 0, "draws": 0, "intentional_draws": 0, "matches": 0}
+                agg[key] = {"wins": 0, "losses": 0, "draws": 0, "intentional_draws": 0, "matches": 0, "archetype": a, "opponent_archetype": o}
             agg[key]["wins"] += aw
             agg[key]["losses"] += al
             agg[key]["draws"] += ad
@@ -3114,9 +3231,9 @@ def get_matchups_summary(
         arch = (r.get("archetype") or "(unknown)").strip()
         opp = (r.get("opponent_archetype") or "(unknown)").strip()
         w, l, d = to_effective_wld(r)
-        key = (arch, opp)
+        key = (arch.lower(), opp.lower())
         if key not in agg:
-            agg[key] = {"wins": 0, "losses": 0, "draws": 0, "intentional_draws": 0, "matches": 0}
+            agg[key] = {"wins": 0, "losses": 0, "draws": 0, "intentional_draws": 0, "matches": 0, "archetype": arch, "opponent_archetype": opp}
         agg[key]["wins"] += w
         agg[key]["losses"] += l
         agg[key]["draws"] += d
@@ -3125,13 +3242,13 @@ def get_matchups_summary(
         agg[key]["matches"] += 1
 
     list_out = []
-    for (arch, opp), v in agg.items():
+    for (_arch_lower, _opp_lower), v in agg.items():
         if v["matches"] < min_matches:
             continue
         wr = (v["wins"] + 0.5 * v["draws"]) / v["matches"] if v["matches"] else 0
         list_out.append({
-            "archetype": arch,
-            "opponent_archetype": opp,
+            "archetype": v["archetype"],
+            "opponent_archetype": v["opponent_archetype"],
             "wins": v["wins"],
             "losses": v["losses"],
             "draws": v["draws"],
@@ -3148,7 +3265,7 @@ def get_matchups_summary(
             if i == j:
                 row.append(None)
                 continue
-            key = (a, b)
+            key = (a.lower(), b.lower())
             v = agg.get(key, {"matches": 0, "wins": 0, "draws": 0})
             if v["matches"] < min_matches:
                 row.append(None)
@@ -3501,7 +3618,7 @@ async def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
                 store=store,
                 event_ids=scrape_event_ids,
                 on_progress=on_progress,
-                skip_event_ids=None if body.force_replace else skip_event_ids,
+                skip_event_ids=None if body.force_replace or scrape_event_ids else skip_event_ids,
                 should_stop=lambda: _scrape_cancel_event.is_set() if _scrape_cancel_event else False,
             )
             result_holder.append(decks)

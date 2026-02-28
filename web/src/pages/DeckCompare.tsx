@@ -8,6 +8,7 @@ import { PieChartTooltipContent } from '../components/PieChartTooltip'
 import type { DeckAnalysis } from '../api'
 import type { Deck } from '../types'
 import CardHover from '../components/CardHover'
+import { canonicalCardNameForCompare } from '../lib/deckUtils'
 import { reportError } from '../utils'
 
 const MAX_DECKS = 4
@@ -98,12 +99,16 @@ export default function DeckCompare() {
   }, [compareData])
 
   const allCards = compareData
-    ? [...new Set(compareData.flatMap((d) => d.mainboard.map((c) => c.card)))]
+    ? [...new Set(compareData.flatMap((d) => d.mainboard.map((c) => canonicalCardNameForCompare(c.card))))].sort(
+        (a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })
+      )
     : []
-  const cardInDeck = (card: string, deck: Deck) =>
-    deck.mainboard.some((c) => c.card === card)
-  const cardQtyInDeck = (card: string, deck: Deck) =>
-    deck.mainboard.find((c) => c.card === card)?.qty ?? 0
+  const cardInDeck = (canonicalCard: string, deck: Deck) =>
+    deck.mainboard.some((c) => canonicalCardNameForCompare(c.card) === canonicalCard)
+  const cardQtyInDeck = (canonicalCard: string, deck: Deck) =>
+    deck.mainboard
+      .filter((c) => canonicalCardNameForCompare(c.card) === canonicalCard)
+      .reduce((sum, c) => sum + c.qty, 0)
 
   const UNIQUE_COLORS = [
     'rgba(29, 155, 240, 0.25)',

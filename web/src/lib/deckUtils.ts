@@ -3,6 +3,19 @@ import type { CardLookupResult } from '../api'
 export const WUBRG_ORDER = ['W', 'U', 'B', 'R', 'G'] as const
 
 /**
+ * Canonical card name for equality/comparison (double-faced = front face, case-insensitive).
+ * Double-faced cards may be stored as full name or front only; treat as same by using front face.
+ * Returns lowercase so all card comparisons are case-insensitive across the site.
+ */
+export function canonicalCardNameForCompare(card: string): string {
+  if (card == null || typeof card !== 'string') return ''
+  const s = card.trim()
+  const i = s.indexOf(' // ')
+  const name = i >= 0 ? s.slice(0, i).trim() : s
+  return name.toLowerCase()
+}
+
+/**
  * EDH archetype: single commander = name; 2+ commanders = "Partner {Colors}" (WUBRG).
  */
 export function getEDHArchetype(

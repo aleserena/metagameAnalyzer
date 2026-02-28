@@ -2,6 +2,7 @@
 from typing import Any, Callable
 
 from .models import Deck
+from .normalize import canonical_card_name_for_compare
 from .storage import save_json
 
 # Rank to weight for placement-weighted stats (higher = better)
@@ -123,18 +124,21 @@ def archetype_distribution(
     placement_weighted: bool = False,
     rank_weights: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
-    """Count (or weighted score) and % per archetype. (Unknown) archetype is ignored."""
+    """Count (or weighted score) and % per archetype. (Unknown) archetype is ignored. Case-insensitive grouping."""
     scores: dict[str, float] = {}
+    display_name: dict[str, str] = {}  # key (lower) -> first-seen display name
     for d in decks:
         raw = (d.archetype or "").strip()
         if not raw or raw.lower() == IGNORED_ARCHETYPE.lower():
             continue
-        key = raw
+        key = raw.lower()
         w = _get_weight(d.rank, rank_weights) if placement_weighted else 1.0
         scores[key] = scores.get(key, 0.0) + w
+        if key not in display_name:
+            display_name[key] = raw
     total = sum(scores.values()) or 1
     return [
-        {"archetype": a, "count": round(n, 1), "pct": round(100 * n / total, 1)}
+        {"archetype": display_name[a], "count": round(n, 1), "pct": round(100 * n / total, 1)}
         for a, n in sorted(scores.items(), key=lambda x: -x[1])
     ]
 
@@ -526,7 +530,7 @@ def archetype_aggregate_analysis(
 
 
 def deck_diversity(decks: list[Deck]) -> dict[str, Any]:
-    """Unique players/archetypes, simple diversity metrics. (unknown) and (Unknown) placeholders are ignored."""
+    """Unique players/archetypes, simple diversity metrics. (unknown) and (Unknown) placeholders are ignored. Archetypes counted case-insensitively."""
     players = set()
     archetypes = set()
     for d in decks:
@@ -535,7 +539,7 @@ def deck_diversity(decks: list[Deck]) -> dict[str, Any]:
             players.add(d.player.strip())
         a = (d.archetype or "").strip()
         if a and a.lower() != IGNORED_ARCHETYPE.lower():
-            archetypes.add(d.archetype.strip())
+            archetypes.add(a.lower())
     return {
         "total_decks": len(decks),
         "unique_players": len(players),
@@ -647,9 +651,14 @@ def similar_decks(
 
 
 def find_duplicate_decks(decks: list[Deck]) -> dict[int, list[int]]:
-    """Deck IDs that are duplicates (identical mainboard). Returns {deck_id: [other_duplicate_ids]}."""
+    """Deck IDs that are duplicates (identical mainboard). Double-faced cards match by front face."""
     def mainboard_key(d: Deck) -> tuple:
-        return tuple(sorted((qty, c) for qty, c in effective_mainboard(d)))
+        by_canonical: dict[str, int] = {}
+        for qty, c in effective_mainboard(d):
+            key = canonical_card_name_for_compare(c or "")
+            if key:
+                by_canonical[key] = by_canonical.get(key, 0) + qty
+        return tuple(sorted(by_canonical.items(), key=lambda x: (x[0].lower(), x[1])))
 
     by_key: dict[tuple, list[int]] = {}
     for d in decks:

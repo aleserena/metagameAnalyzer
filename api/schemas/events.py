@@ -95,7 +95,7 @@ class ScrapeBody(BaseModel):
     period: str | None = None
     meta: int | None = None
     store: str | None = None
-    event_ids: list[int] | None = None
+    event_ids: str | list[int] | None = None  # comma-separated string from frontend or list of ints
     ignore_existing_events: bool = False
     force_replace: bool = False
 

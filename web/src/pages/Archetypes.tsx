@@ -76,14 +76,16 @@ export default function Archetypes() {
   const archetypesTop8 = metagame?.archetype_distribution_top8 ?? []
   const byName: Record<string, { archetype: string; count: number; pct: number; countTop8: number; pctTop8: number; conversion: number; colors?: string[] }> = {}
   for (const r of archetypes) {
-    byName[r.archetype] = { ...r, countTop8: 0, pctTop8: 0, conversion: 0 }
+    const key = (r.archetype || '').toLowerCase()
+    byName[key] = { ...r, countTop8: 0, pctTop8: 0, conversion: 0 }
   }
   for (const r of archetypesTop8) {
-    if (!byName[r.archetype]) {
-      byName[r.archetype] = { archetype: r.archetype, count: 0, pct: 0, countTop8: r.count, pctTop8: r.pct, conversion: 0, colors: r.colors }
+    const key = (r.archetype || '').toLowerCase()
+    if (!byName[key]) {
+      byName[key] = { archetype: r.archetype, count: 0, pct: 0, countTop8: r.count, pctTop8: r.pct, conversion: 0, colors: r.colors }
     } else {
-      byName[r.archetype].countTop8 = r.count
-      byName[r.archetype].pctTop8 = r.pct
+      byName[key].countTop8 = r.count
+      byName[key].pctTop8 = r.pct
     }
   }
   for (const row of Object.values(byName)) {
@@ -100,7 +102,7 @@ export default function Archetypes() {
   const rows = Object.values(byName)
   const filteredRows = rows.filter((row) => {
     if (filterColors.length === 0) return true
-    const colors = row.colors ?? archetypes.find((a) => a.archetype === row.archetype)?.colors ?? []
+    const colors = row.colors ?? archetypes.find((a) => (a.archetype || '').toLowerCase() === (row.archetype || '').toLowerCase())?.colors ?? []
     if (!colors.length) return false
     const set = new Set(colors)
     return filterColors.every((c) => set.has(c))
@@ -315,7 +317,7 @@ export default function Archetypes() {
               </thead>
               <tbody>
                 {sortedRows.map((row) => {
-                  const colors = row.colors ?? archetypes.find((a) => a.archetype === row.archetype)?.colors
+                  const colors = row.colors ?? archetypes.find((a) => (a.archetype || '').toLowerCase() === (row.archetype || '').toLowerCase())?.colors
                   const manaCost = colors && colors.length ? `{${colors.join('}{')}}` : ''
                   return (
                     <tr key={row.archetype}>

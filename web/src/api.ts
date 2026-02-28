@@ -320,8 +320,15 @@ export interface MergePreviewResponse {
   decks_remove_only: Deck[]
 }
 
-export async function getMergePreview(eventIdA: string, eventIdB: string): Promise<MergePreviewResponse> {
+export async function getMergePreview(
+  eventIdA: string,
+  eventIdB: string,
+  manualPairs?: { deck_id_keep: number; deck_id_remove: number }[]
+): Promise<MergePreviewResponse> {
   const params = new URLSearchParams({ event_id_a: eventIdA, event_id_b: eventIdB })
+  if (manualPairs?.length) {
+    params.set('manual_pairs', manualPairs.map((p) => `${p.deck_id_keep}-${p.deck_id_remove}`).join(','))
+  }
   return fetchApi(`/events/merge-preview?${params.toString()}`)
 }
 
