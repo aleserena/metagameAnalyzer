@@ -478,6 +478,18 @@ if _database_available():
 _RANK_ORDER = {"1": 0, "2": 1, "3-4": 2, "5-8": 3, "9-16": 4, "17-32": 5, "33-64": 6, "65-128": 7}
 
 
+def _rank_sort_value(rank_str: str) -> int:
+    """Return a numeric value for ordering ranks (1, 2, 3, ..., 12, ...). Uses lower bound for ranges like 3-4."""
+    r = (rank_str or "").strip()
+    if not r:
+        return 999
+    part = r.split("-")[0].strip()
+    if not part.isdigit():
+        return 999
+    n = int(part)
+    return n if 1 <= n <= 128 else 999
+
+
 def _parse_date_sortkey(date_str: str) -> str:
     """Convert DD/MM/YY to YYMMDD for sorting."""
     parts = date_str.split("/")
@@ -487,10 +499,10 @@ def _parse_date_sortkey(date_str: str) -> str:
 
 
 def _deck_sort_key(d: dict) -> tuple:
-    """Sort by date descending, then rank ascending."""
+    """Sort by date descending, then rank ascending (1, 2, ..., 12, ...)."""
     date_key = _parse_date_sortkey(d.get("date", ""))
-    rank_key = _RANK_ORDER.get(normalize_rank(d.get("rank", "")), 99)
-    return (-int(date_key) if date_key.isdigit() else 0, rank_key)
+    rank_val = _rank_sort_value(d.get("rank", ""))
+    return (-int(date_key) if date_key.isdigit() else 0, rank_val)
 
 
 def _date_in_range(date_str: str, date_from: str | None, date_to: str | None) -> bool:
@@ -648,11 +660,11 @@ def _deck_sort_key_by(sort: str, order: str):
         if sort == "date":
             date_key = _parse_date_sortkey(d.get("date", ""))
             val = int(date_key) if date_key.isdigit() else 0
-            return (-val if reverse else val, _RANK_ORDER.get(normalize_rank(d.get("rank", "")), 99))
+            rv = _rank_sort_value(d.get("rank", ""))
+            return (-val if reverse else val, -rv if reverse else rv)
         if sort == "rank":
-            rk = _RANK_ORDER.get(normalize_rank(d.get("rank", "")), 99)
-            date_key = _parse_date_sortkey(d.get("date", ""))
-            return (-rk if reverse else rk, -(int(date_key) if date_key.isdigit() else 0))
+            rk = _rank_sort_value(d.get("rank", ""))
+            return (-rk if reverse else rk,)
         if sort == "player":
             return ((d.get("player") or "").lower(),)
         if sort == "name":
@@ -1034,6 +1046,22 @@ def get_event_ids_with_discrepancies():
     return {"event_ids": event_ids_with_discrepancies}
 
 
+@app.get("/api/events/event-ids-with-missing-decks", dependencies=[Depends(require_admin), Depends(require_database)])
+def get_event_ids_with_missing_decks():
+    """Return event_ids where deck count < player_count (admin)."""
+    with _db.session_scope() as session:
+        event_ids = _db.list_event_ids_with_missing_decks(session)
+    return {"event_ids": event_ids}
+
+
+@app.get("/api/events/event-ids-with-missing-matchups", dependencies=[Depends(require_admin), Depends(require_database)])
+def get_event_ids_with_missing_matchups():
+    """Return event_ids where every deck has the expected matchups (admin). Events NOT in this list have missing matchups."""
+    with _db.session_scope() as session:
+        event_ids = _db.list_event_ids_with_complete_matchups(session)
+    return {"event_ids": event_ids}
+
+
 def _event_row_to_merge_dict(row) -> dict:
     """Event row to dict keyed by EVENT_MERGE_FIELDS (name -> event_name)."""
     return {
@@ -1047,7 +1075,7 @@ def _event_row_to_merge_dict(row) -> dict:
 
 
 def _deck_merge_conflicts(deck_keep: dict, deck_remove: dict) -> list[MergeConflictItem]:
-    """Compare two deck dicts on DECK_MERGE_FIELDS; return list of conflicts (different values)."""
+    """Compare two deck dicts on DECK_MERGE_FIELDS. Only add conflict when both have data and values differ (prefer non-empty)."""
     conflicts = []
     for field in DECK_MERGE_FIELDS:
         v_keep = deck_keep.get(field)
@@ -1055,8 +1083,11 @@ def _deck_merge_conflicts(deck_keep: dict, deck_remove: dict) -> list[MergeConfl
         if field == "player_count":
             v_keep = 0 if v_keep is None else int(v_keep)
             v_remove = 0 if v_remove is None else int(v_remove)
+        has_keep = (v_keep not in (None, "", [])) if field != "player_count" else (v_keep is not None and v_keep != 0)
+        has_remove = (v_remove not in (None, "", [])) if field != "player_count" else (v_remove is not None and v_remove != 0)
+        if not has_keep or not has_remove:
+            continue  # prefer the one with data; no conflict to show
         if field in ("commanders", "mainboard", "sideboard"):
-            # Compare lists (order-sensitive for mainboard/sideboard)
             if v_keep != v_remove:
                 conflicts.append(MergeConflictItem(field=field, value_keep=v_keep, value_remove=v_remove))
         else:
@@ -1156,22 +1187,33 @@ def merge_preview(
     with _db.session_scope() as session:
         decks_keep = _db.get_decks_by_event(session, keep.event_id)
         decks_remove = _db.get_decks_by_event(session, remove.event_id)
-    keep_by_canonical: dict[str, dict] = {}
-    for d in decks_keep:
-        c = _normalize_player(d.get("player") or "")
-        keep_by_canonical[c] = d
-    paired_keep_ids: set[int] = set()
-    paired_remove_ids: set[int] = set()
-    for d in decks_remove:
-        c = _normalize_player(d.get("player") or "")
-        if c in keep_by_canonical:
-            k = keep_by_canonical[c]
-            paired_keep_ids.add(k["deck_id"])
-            paired_remove_ids.add(d["deck_id"])
-            pair_conflicts = _deck_merge_conflicts(k, d)
-            deck_pairs.append(DeckPairPreview(deck_keep=k, deck_remove=d, conflicts=pair_conflicts))
-    decks_keep_only = [d for d in decks_keep if d["deck_id"] not in paired_keep_ids]
-    decks_remove_only = [d for d in decks_remove if d["deck_id"] not in paired_remove_ids]
+        keep_by_canonical: dict[str, dict] = {}
+        for d in decks_keep:
+            c = _normalize_player(d.get("player") or "")
+            keep_by_canonical[c] = d
+        paired_keep_ids: set[int] = set()
+        paired_remove_ids: set[int] = set()
+        for d in decks_remove:
+            c = _normalize_player(d.get("player") or "")
+            if c in keep_by_canonical:
+                k = keep_by_canonical[c]
+                paired_keep_ids.add(k["deck_id"])
+                paired_remove_ids.add(d["deck_id"])
+                pair_conflicts = _deck_merge_conflicts(k, d)
+                # Add matchups conflict if both decks have different matchup data
+                m_keep = _db.list_matchups_by_deck(session, k["deck_id"])
+                m_remove = _db.list_matchups_by_deck(session, d["deck_id"])
+                if len(m_keep) != len(m_remove) or (m_keep != m_remove and (m_keep or m_remove)):
+                    pair_conflicts.append(
+                        MergeConflictItem(
+                            field="matchups",
+                            value_keep=f"{len(m_keep)} matchups",
+                            value_remove=f"{len(m_remove)} matchups",
+                        )
+                    )
+                deck_pairs.append(DeckPairPreview(deck_keep=k, deck_remove=d, conflicts=pair_conflicts))
+        decks_keep_only = [d for d in decks_keep if d["deck_id"] not in paired_keep_ids]
+        decks_remove_only = [d for d in decks_remove if d["deck_id"] not in paired_remove_ids]
 
     return MergePreviewResponse(
         can_merge=True,
@@ -1340,7 +1382,17 @@ def merge_events(body: MergeEventsBody):
                         if merged_deck[field] is None:
                             merged_deck[field] = [] if field in ("commanders", "mainboard", "sideboard") else (0 if field == "player_count" else "")
                 _db.upsert_deck(session, merged_deck, origin=keep_row.origin or _db.ORIGIN_MTGTOP8)
-                _db.reassign_matchups_to_deck(session, deck_id_remove, deck_id_keep)
+                matchups_choice = res.get("matchups")
+                if matchups_choice == "keep":
+                    # Keep only kept deck's matchups; remove deck's matchups are dropped when we delete it
+                    pass
+                elif matchups_choice == "remove":
+                    # Use only removed deck's matchups: delete keep's, then reassign remove's to keep
+                    _db.delete_matchups_for_deck(session, deck_id_keep)
+                    _db.reassign_matchups_to_deck(session, deck_id_remove, deck_id_keep)
+                else:
+                    # Merge both (default)
+                    _db.reassign_matchups_to_deck(session, deck_id_remove, deck_id_keep)
                 _db.delete_deck(session, deck_id_remove)
 
             unpaired_remove_ids = [d["deck_id"] for d in decks_remove if d["deck_id"] not in paired_remove_ids]
@@ -2265,10 +2317,12 @@ def get_metagame(
             ordered = [c for c in color_code_order if c in colors]
             if ordered:
                 row["colors"] = ordered
-    top_players = player_leaderboard(
+    full_leaderboard = player_leaderboard(
         decks, normalize_player=_normalize_player, rank_weights=rank_weights
-    )[:5]
-    result["top_players"] = top_players
+    )
+    result["top_players"] = full_leaderboard[:5]
+    # Unique players must match leaderboard (alias-aware): count distinct canonical players
+    result["summary"]["unique_players"] = len(full_leaderboard)
     return result
 
 
@@ -2883,6 +2937,18 @@ def get_matchups_summary(
         "matrix": matrix,
         "min_matches": min_matches,
     }
+
+
+@app.get("/api/events/{event_id}/missing-matchups", dependencies=[Depends(require_admin), Depends(require_database)])
+def get_missing_matchups(event_id: str):
+    """List players (decks) in this event that have fewer matchups than expected (admin).
+    Expected = number of decks in event minus one."""
+    with _db.session_scope() as session:
+        ev = _db.get_event(session, event_id)
+        if not ev:
+            raise HTTPException(status_code=404, detail="Event not found")
+        missing = _db.list_missing_matchups_for_event(session, event_id)
+    return {"missing": missing}
 
 
 @app.get("/api/events/{event_id}/matchup-discrepancies", dependencies=[Depends(require_admin), Depends(require_database)])
