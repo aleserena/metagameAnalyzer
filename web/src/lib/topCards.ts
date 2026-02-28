@@ -54,4 +54,8 @@ export interface TopCardItem {
   decks: number
   play_rate_pct: number
   total_copies: number
+  /** Decks that played this card and made top 8. */
+  decks_top8?: number
+  /** % of decks that played this card and made top 8 (conversion). */
+  conversion_rate_pct?: number
 }

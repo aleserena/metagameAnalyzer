@@ -5,6 +5,15 @@ import CardHover from './CardHover'
 import { ColorFilterPills, CmcFilterPills, TypeFilterPills } from './FilterPills'
 import { useTopCardsFilters } from '../hooks/useTopCardsFilters'
 
+function formatConversion(c: TopCardItem): string {
+  const pct =
+    c.conversion_rate_pct ??
+    (typeof c.decks_top8 === 'number' && c.decks > 0
+      ? Math.round((100 * c.decks_top8) / c.decks * 10) / 10
+      : null)
+  return pct != null ? `${pct}%` : '—'
+}
+
 export interface TopCardsSectionProps {
   title: string
   subtitle?: ReactNode
@@ -34,6 +43,8 @@ export default function TopCardsSection({
     setFilterTypeAndResetPage,
     clearFilters,
     hasAnyFilter,
+    sortBy,
+    setSortBy,
     filteredTotal,
     filteredPages,
     safePage,
@@ -148,8 +159,63 @@ export default function TopCardsSection({
                 <th scope="col">#</th>
                 <th scope="col">Card</th>
                 <th scope="col">Decks</th>
-                <th scope="col">Play Rate</th>
-                <th scope="col">{placementWeighted ? 'Weighted Score' : 'Copies'}</th>
+                <th scope="col">
+                  <button
+                    type="button"
+                    className="th-sort"
+                    onClick={() => setSortBy('play_rate')}
+                    title="Sort by play rate"
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      padding: 0,
+                      font: 'inherit',
+                      cursor: 'pointer',
+                      color: 'inherit',
+                      textDecoration: sortBy === 'play_rate' ? 'underline' : undefined,
+                    }}
+                  >
+                    Play Rate {sortBy === 'play_rate' ? '▼' : ''}
+                  </button>
+                </th>
+                <th scope="col">
+                  <button
+                    type="button"
+                    className="th-sort"
+                    onClick={() => setSortBy('conversion_rate')}
+                    title="Sort by conversion rate (top 8)"
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      padding: 0,
+                      font: 'inherit',
+                      cursor: 'pointer',
+                      color: 'inherit',
+                      textDecoration: sortBy === 'conversion_rate' ? 'underline' : undefined,
+                    }}
+                  >
+                    Conversion % {sortBy === 'conversion_rate' ? '▼' : ''}
+                  </button>
+                </th>
+                <th scope="col">
+                  <button
+                    type="button"
+                    className="th-sort"
+                    onClick={() => setSortBy('copies')}
+                    title="Sort by copies"
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      padding: 0,
+                      font: 'inherit',
+                      cursor: 'pointer',
+                      color: 'inherit',
+                      textDecoration: sortBy === 'copies' ? 'underline' : undefined,
+                    }}
+                  >
+                    {placementWeighted ? 'Weighted Score' : 'Copies'} {sortBy === 'copies' ? '▼' : ''}
+                  </button>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -163,6 +229,9 @@ export default function TopCardsSection({
                   </td>
                   <td>{c.decks}</td>
                   <td>{c.play_rate_pct}%</td>
+                  <td title={c.decks_top8 != null ? `${c.decks_top8} top 8` : undefined}>
+                    {formatConversion(c)}
+                  </td>
                   <td>{c.total_copies}</td>
                 </tr>
               ))}

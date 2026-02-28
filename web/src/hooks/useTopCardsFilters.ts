@@ -8,6 +8,8 @@ import {
   TOP_CARDS_PER_PAGE,
 } from '../lib/topCards'
 
+export type TopCardsSortKey = 'copies' | 'play_rate' | 'conversion_rate'
+
 export interface UseTopCardsFiltersParams {
   topCardsMain: TopCardItem[]
   cardMeta: Record<string, CardLookupResult>
@@ -22,6 +24,8 @@ export interface UseTopCardsFiltersResult {
   setFilterTypeAndResetPage: (v: string[]) => void
   clearFilters: () => void
   hasAnyFilter: boolean
+  sortBy: TopCardsSortKey
+  setSortBy: (key: TopCardsSortKey) => void
   filteredTopCards: TopCardItem[]
   filteredTotal: number
   filteredPages: number
@@ -40,11 +44,12 @@ export function useTopCardsFilters({
   const [filterCmc, setFilterCmc] = useState<number[]>([])
   const [filterType, setFilterType] = useState<string[]>([])
   const [topCardsPage, setTopCardsPage] = useState(0)
+  const [sortBy, setSortByState] = useState<TopCardsSortKey>('copies')
 
   const hasAnyFilter = filterColor.length > 0 || filterCmc.length > 0 || filterType.length > 0
 
   const filteredTopCards = useMemo(() => {
-    return topCardsMain.filter((c) => {
+    const filtered = topCardsMain.filter((c) => {
       const m = cardMeta[c.card]
       if (!m || 'error' in m) return !hasAnyFilter
       const colors = (m as CardLookupResult).color_identity ?? (m as CardLookupResult).colors ?? []
@@ -56,7 +61,19 @@ export function useTopCardsFilters({
       if (filterType.length > 0 && !filterType.some((t) => cardTypes.includes(t))) return false
       return true
     })
-  }, [topCardsMain, cardMeta, filterColor, filterCmc, filterType, hasAnyFilter])
+    const key: (c: TopCardItem) => number =
+      sortBy === 'conversion_rate'
+        ? (c) => c.conversion_rate_pct ?? 0
+        : sortBy === 'play_rate'
+          ? (c) => c.play_rate_pct
+          : (c) => c.total_copies
+    return [...filtered].sort((a, b) => key(b) - key(a))
+  }, [topCardsMain, cardMeta, filterColor, filterCmc, filterType, hasAnyFilter, sortBy])
+
+  const setSortBy = (key: TopCardsSortKey) => {
+    setSortByState(key)
+    setTopCardsPage(0)
+  }
 
   const filteredTotal = filteredTopCards.length
   const filteredPages = Math.ceil(filteredTotal / TOP_CARDS_PER_PAGE)
@@ -94,6 +111,8 @@ export function useTopCardsFilters({
     setFilterTypeAndResetPage,
     clearFilters,
     hasAnyFilter,
+    sortBy,
+    setSortBy,
     filteredTopCards,
     filteredTotal,
     filteredPages,
