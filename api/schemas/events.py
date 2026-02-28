@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class EventResponse(BaseModel):
@@ -88,6 +88,8 @@ class MergeEventsBody(BaseModel):
 
 
 class ScrapeBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     # Accepts JSON key "format" (frontend) while exposing field name "format_id" in Python.
     format_id: str = Field(alias="format")
     period: str | None = None
@@ -97,6 +99,13 @@ class ScrapeBody(BaseModel):
     ignore_existing_events: bool = False
     force_replace: bool = False
 
-    class Config:
-        allow_population_by_field_name = True
+
+class EventExportData(BaseModel):
+    """Payload for exporting/importing a single event and all related data."""
+
+    schema_version: int = 1
+    event: EventResponse
+    decks: list[dict] = Field(default_factory=list)
+    matchups: list[dict] = Field(default_factory=list)
+    player_emails: dict[str, str] = Field(default_factory=dict)
 

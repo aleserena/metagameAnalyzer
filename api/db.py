@@ -7,6 +7,7 @@ falls back to in-memory + file storage (see api/main.py).
 from __future__ import annotations
 
 import logging
+import math
 import os
 from contextlib import contextmanager
 from datetime import datetime
@@ -355,6 +356,39 @@ def _normalize_boards(d: dict) -> tuple[list[dict], list[dict]]:
 def get_all_events(session: Session) -> list[dict]:
     rows = session.query(EventRow).order_by(EventRow.date.desc(), EventRow.event_id).all()
     return [event_row_to_dict(r) for r in rows]
+
+
+def list_event_ids_with_missing_decks(session: Session) -> list[str]:
+    """Event IDs where deck count < player_count (and player_count > 0)."""
+    deck_counts = (
+        session.query(DeckRow.event_id, func.count(DeckRow.deck_id).label("cnt"))
+        .group_by(DeckRow.event_id)
+        .all()
+    )
+    deck_by_event = {_event_id_str(eid): cnt for (eid, cnt) in deck_counts}
+    result = []
+    for (eid, pc) in session.query(EventRow.event_id, EventRow.player_count).all():
+        if eid is None:
+            continue
+        eid_str = _event_id_str(eid)
+        pc_val = pc or 0
+        if pc_val > 0 and deck_by_event.get(eid_str, 0) < pc_val:
+            result.append(eid_str)
+    return result
+
+
+def list_event_ids_with_complete_matchups(session: Session) -> list[str]:
+    """Event IDs where every deck has the expected number of matchups (Swiss rounds).
+    Frontend uses this set: events NOT in this list have missing matchups."""
+    event_ids = [r.event_id or "" for r in session.query(EventRow.event_id).all() if (r.event_id or "").strip()]
+    result = []
+    for eid in event_ids:
+        if not eid:
+            continue
+        missing = list_missing_matchups_for_event(session, eid)
+        if not missing:  # no deck has missing matchups
+            result.append(eid)
+    return result
 
 
 def get_mtgtop8_event_ids(session: Session) -> set[int]:
@@ -710,6 +744,14 @@ def update_matchup(
     return True
 
 
+def delete_matchups_for_deck(session: Session, deck_id: int) -> int:
+    """Delete all matchups for this deck. Returns count deleted."""
+    rows = session.query(MatchupRow).filter(MatchupRow.deck_id == deck_id).all()
+    for r in rows:
+        session.delete(r)
+    return len(rows)
+
+
 def reassign_matchups_to_deck(
     session: Session,
     from_deck_id: int,
@@ -761,6 +803,58 @@ def list_all_matchups_with_event_id(session: Session) -> list[dict]:
         {"deck_id": r.deck_id, "opponent_deck_id": r.opponent_deck_id, "result": r.result or "", "event_id": r.event_id or ""}
         for r in rows
     ]
+
+
+def _swiss_rounds_for_players(n: int) -> int:
+    """Expected Swiss rounds: 1–2 → 1 round, 3–4 → 2, 5–8 → 3, 9–16 → 4, 17–32 → 5, 33–64 → 6, etc."""
+    if n <= 0:
+        return 0
+    return max(1, math.ceil(math.log2(n)))
+
+
+def list_missing_matchups_for_event(session: Session, event_id: str) -> list[dict]:
+    """Decks in this event that have fewer matchups than expected (expected = Swiss rounds for player count).
+    Byes count as a round. Decks with any result=drop are exempt from validation.
+    Returns list of { deck_id, player, matchup_count, expected_count }."""
+    eid = _event_id_str(event_id)
+    decks = (
+        session.query(DeckRow.deck_id, DeckRow.player)
+        .filter(DeckRow.event_id == eid)
+        .all()
+    )
+    n = len(decks)
+    expected = _swiss_rounds_for_players(n)
+    if n == 0:
+        return []
+    event_deck_ids = [d.deck_id for d in decks]
+    # Deck IDs in this event that have at least one matchup with result=drop (exempt from expected count)
+    dropped_deck_ids = set()
+    if event_deck_ids:
+        rows = (
+            session.query(MatchupRow.deck_id)
+            .filter(MatchupRow.deck_id.in_(event_deck_ids), MatchupRow.result == "drop")
+            .distinct()
+            .all()
+        )
+        dropped_deck_ids = {r[0] for r in rows}
+    result = []
+    for (deck_id, player) in decks:
+        if deck_id in dropped_deck_ids:
+            continue
+        count = (
+            session.query(func.count(MatchupRow.id))
+            .filter(MatchupRow.deck_id == deck_id)
+            .scalar()
+            or 0
+        )
+        if count < expected:
+            result.append({
+                "deck_id": deck_id,
+                "player": (player or "").strip() or "(unknown)",
+                "matchup_count": count,
+                "expected_count": expected,
+            })
+    return result
 
 
 def list_matchups_reported_against_player(session: Session, event_id: str, opponent_player: str) -> list[dict]:

@@ -17,10 +17,13 @@ import {
   sendFeedbackLinks,
   sendFeedbackLinkToPlayer,
   getMatchupDiscrepancies,
+  getMissingMatchups,
   patchMatchup,
   getDeckMatchups,
   updateDeckMatchups,
   createEventUploadLinks,
+  exportEvent,
+  getPlayers,
 } from '../api'
 import type { EventWithOrigin } from '../api'
 import type { Deck } from '../types'
@@ -33,8 +36,8 @@ import MatchupsForm from '../components/event/MatchupsForm'
 import PageError from '../components/PageError'
 import PageSkeleton from '../components/PageSkeleton'
 import CardSearchInput from '../components/CardSearchInput'
-import { parseMoxfieldDeckList } from '../lib/deckListParser'
-import { matchupItemToRow } from '../lib/matchups'
+import { parseMoxfieldDeckList, formatMoxfieldDeckList } from '../lib/deckListParser'
+import { isBye, isDrop, matchupItemToRow } from '../lib/matchups'
 import { reportError, ddMmYyToIso, isoToDdMmYy } from '../utils'
 
 /** Coerce value for display; avoid [object Object]. */
@@ -69,7 +72,7 @@ export default function EventDetail() {
   const { data, loading, error, refetch } = useFetch<EventDetailData>(
     () =>
       eventId
-        ? Promise.all([getEvent(eventId), getDecks({ event_id: eventId, limit: 500 })]).then(([ev, decksRes]) => ({
+        ? Promise.all([getEvent(eventId), getDecks({ event_id: eventId, limit: 500, sort: 'rank', order: 'asc' })]).then(([ev, decksRes]) => ({
             event: ev,
             decks: decksRes.decks,
           }))
@@ -110,15 +113,43 @@ export default function EventDetail() {
   const [generatingFeedbackLinkForDeckId, setGeneratingFeedbackLinkForDeckId] = useState<number | null>(null)
   const [discrepancies, setDiscrepancies] = useState<Awaited<ReturnType<typeof getMatchupDiscrepancies>>['discrepancies'] | null>(null)
   const [loadingDiscrepancies, setLoadingDiscrepancies] = useState(false)
+  const [missingMatchups, setMissingMatchups] = useState<Awaited<ReturnType<typeof getMissingMatchups>>['missing'] | null>(null)
   const [fixingPairKey, setFixingPairKey] = useState<string | null>(null)
   const [matchupsDeckId, setMatchupsDeckId] = useState<number | null>(null)
   const [matchupsList, setMatchupsList] = useState<Array<{ opponent_player: string; result: string; intentional_draw: boolean }>>([])
   const [loadingMatchups, setLoadingMatchups] = useState(false)
   const [savingMatchups, setSavingMatchups] = useState(false)
+  const [exportingEvent, setExportingEvent] = useState(false)
 
   const canEditEvent = user === 'admin' || eventEditMode
   const canDeleteEvent = user === 'admin'
   const showUploadLinksSection = user === 'admin'
+
+  const { data: playersData } = useFetch<{ players: { player: string }[] }>(
+    () => (canEditEvent && eventId ? getPlayers() : Promise.resolve({ players: [] })),
+    [canEditEvent, eventId ?? '']
+  )
+
+  const playerOptionsForEditDeck = useMemo(() => {
+    if (editingDeckId == null || !decks.length) return []
+    const otherPlayersInEvent = new Set(
+      decks.filter((d) => d.deck_id !== editingDeckId).map((d) => (d.player || '').trim()).filter(Boolean)
+    )
+    const currentPlayer = (decks.find((d) => d.deck_id === editingDeckId)?.player ?? '').trim()
+    const allNames = (playersData?.players ?? []).map((p) => (p.player || '').trim()).filter(Boolean)
+    const suggested = [
+      ...(currentPlayer ? [currentPlayer] : []),
+      ...allNames.filter((name) => !otherPlayersInEvent.has(name)),
+    ]
+    return [...new Set(suggested)].sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }))
+  }, [editingDeckId, decks, playersData?.players])
+
+  useEffect(() => {
+    if (user !== 'admin' || !eventId || !data?.decks.length) return
+    getMissingMatchups(eventId)
+      .then((res) => setMissingMatchups(res.missing))
+      .catch(() => {})
+  }, [user, eventId, data?.decks?.length])
 
   useEffect(() => {
     if (!urlToken || !eventId || eventEditValidatedRef.current) return
@@ -284,6 +315,32 @@ export default function EventDetail() {
       .finally(() => setAddingDecks(false))
   }
 
+  const handleExportEvent = () => {
+    if (!eventId || !event) return
+    setExportingEvent(true)
+    exportEvent(eventId)
+      .then((blob) => {
+        const url = window.URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        const rawName = (event.event_name || 'event').toString()
+        const slug = rawName
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '') || 'event'
+        const datePart = (event.date || '').toString().replace(/\//g, '-')
+        const filename = `event-${String(eventId)}${datePart ? `-${datePart}` : ''}-${slug}.json`
+        link.href = url
+        link.download = filename
+        document.body.appendChild(link)
+        link.click()
+        link.remove()
+        window.URL.revokeObjectURL(url)
+        toast.success('Event exported')
+      })
+      .catch((e: unknown) => toast.error(reportError(e)))
+      .finally(() => setExportingEvent(false))
+  }
+
   const handleDeleteClick = () => {
     if (eventId) setConfirmDeleteEvent(true)
   }
@@ -348,9 +405,25 @@ export default function EventDetail() {
 
   const isEDH = (event?.format_id ?? '').toLowerCase() === 'edh' || (event?.format_id ?? '').toLowerCase() === 'commander'
 
-  const openUploadDeckModal = (deckId: number) => {
-    setUploadDeckForDeckId(deckId)
-    setUploadDeckListText('')
+  const openUploadDeckModal = (deck: Deck) => {
+    setUploadDeckForDeckId(deck.deck_id)
+    const hasList = deck.mainboard && deck.mainboard.length > 0
+    if (hasList) {
+      setUploadDeckListText(
+        formatMoxfieldDeckList(
+          deck.commanders ?? [],
+          deck.mainboard ?? [],
+          deck.sideboard ?? []
+        )
+      )
+    } else {
+      if (isEDH) {
+        const commanderLine = (deck.archetype || '').trim() ? `1 ${(deck.archetype || '').trim()}\n\n` : ''
+        setUploadDeckListText(`Commander\n${commanderLine}Mainboard\n\nSideboard\n`)
+      } else {
+        setUploadDeckListText('Mainboard\n\nSideboard\n')
+      }
+    }
   }
   const closeUploadDeckModal = () => {
     setUploadDeckForDeckId(null)
@@ -424,9 +497,9 @@ export default function EventDetail() {
     if (matchupsDeckId == null) return
     const payload = {
       matchups: matchupsList
-        .filter((m) => (m.opponent_player || '').trim())
+        .filter((m) => (m.opponent_player || '').trim() || isBye(m.result) || isDrop(m.result))
         .map((m) => ({
-          opponent_player: m.opponent_player.trim(),
+          opponent_player: isBye(m.result) || isDrop(m.result) ? '' : (m.opponent_player || '').trim(),
           result: m.result || 'draw',
         })),
     }
@@ -436,6 +509,7 @@ export default function EventDetail() {
         refetch()
         closeUpdateMatchupsModal()
         toast.success('Matchups updated')
+        if (eventId && missingMatchups !== null) loadMissingMatchups()
       })
       .catch((e) => toast.error(reportError(e)))
       .finally(() => setSavingMatchups(false))
@@ -443,8 +517,14 @@ export default function EventDetail() {
 
   const matchupsOpponentOptions = useMemo(() => {
     if (matchupsDeckId == null) return []
-    return [...new Set(decks.filter((d) => d.deck_id !== matchupsDeckId).map((d) => (d.player || '').trim()).filter(Boolean))]
+    const players = [...new Set(decks.filter((d) => d.deck_id !== matchupsDeckId).map((d) => (d.player || '').trim()).filter(Boolean))]
+    return [...players, 'Bye', '(drop)']
   }, [matchupsDeckId, decks])
+
+  const missingMatchupsByDeckId = useMemo(() => {
+    if (!missingMatchups) return {}
+    return Object.fromEntries(missingMatchups.map((m) => [m.deck_id, { matchup_count: m.matchup_count, expected_count: m.expected_count }]))
+  }, [missingMatchups])
 
   const missingDecksCount = decks.filter((d) => !(d.mainboard && d.mainboard.length)).length
   const handleSendMissingDeckLinks = () => {
@@ -533,6 +613,13 @@ export default function EventDetail() {
       .then((res) => setDiscrepancies(res.discrepancies))
       .catch((e) => toast.error(reportError(e)))
       .finally(() => setLoadingDiscrepancies(false))
+  }
+
+  const loadMissingMatchups = () => {
+    if (!eventId) return
+    getMissingMatchups(eventId)
+      .then((res) => setMissingMatchups(res.missing))
+      .catch((e) => toast.error(reportError(e)))
   }
   const pairKey = (d: { matchup_a: { id: number }; matchup_b: { id: number } }) => `${d.matchup_a.id}-${d.matchup_b.id}`
   const fixMatchupPair = (
@@ -694,6 +781,14 @@ export default function EventDetail() {
                     )}
                   </>
                 )}
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={handleExportEvent}
+                  disabled={exportingEvent}
+                >
+                  {exportingEvent ? 'Exporting…' : 'Export event'}
+                </button>
                 {canDeleteEvent && (
                   <button type="button" className="btn" style={{ color: 'var(--danger, #c00)' }} onClick={handleDeleteClick} disabled={deleting}>
                     Delete event
@@ -895,12 +990,11 @@ export default function EventDetail() {
                       ) : (
                         <>
                           <td>
-                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
                               <Link to={`/decks/${d.deck_id}`} style={{ color: 'var(--accent)' }}>{cellStr(d.name) || 'Unnamed'}</Link>
                               {!(d.mainboard && d.mainboard.length) && (
                                 <span
                                   style={{
-                                    marginLeft: 6,
                                     fontSize: '0.7rem',
                                     padding: '0.1rem 0.35rem',
                                     background: 'rgba(220, 53, 69, 0.2)',
@@ -910,6 +1004,20 @@ export default function EventDetail() {
                                   title="No cards in mainboard"
                                 >
                                   empty
+                                </span>
+                              )}
+                              {showUploadLinksSection && missingMatchupsByDeckId[d.deck_id] && (
+                                <span
+                                  style={{
+                                    fontSize: '0.7rem',
+                                    padding: '0.1rem 0.35rem',
+                                    background: 'rgba(255, 193, 7, 0.3)',
+                                    borderRadius: 4,
+                                    color: 'var(--text)',
+                                  }}
+                                  title={`Missing matchups: ${missingMatchupsByDeckId[d.deck_id].matchup_count} of ${missingMatchupsByDeckId[d.deck_id].expected_count} rounds reported`}
+                                >
+                                  {missingMatchupsByDeckId[d.deck_id].matchup_count}/{missingMatchupsByDeckId[d.deck_id].expected_count} matchups
                                 </span>
                               )}
                             </span>
@@ -958,9 +1066,9 @@ export default function EventDetail() {
                                   className="btn"
                                   style={{ fontSize: '0.875rem', padding: '0.25rem 0.5rem' }}
                                   disabled={uploadingDeck && uploadDeckForDeckId === d.deck_id}
-                                  onClick={() => openUploadDeckModal(d.deck_id)}
+                                  onClick={() => openUploadDeckModal(d)}
                                 >
-                                  {uploadingDeck && uploadDeckForDeckId === d.deck_id ? 'Uploading…' : 'Upload deck'}
+                                  {uploadingDeck && uploadDeckForDeckId === d.deck_id ? 'Updating…' : 'Update deck'}
                                 </button>
                                 <button
                                   type="button"
@@ -1010,13 +1118,18 @@ export default function EventDetail() {
       )}
 
       {canEditEvent && editingDeckId != null && (
-        <Modal title="Update deck" onClose={closeUpdateDeck} size={420}>
+        <Modal
+          title={`Update deck — ${cellStr(decks.find((d) => d.deck_id === editingDeckId)?.player) || 'Unnamed'}`}
+          onClose={closeUpdateDeck}
+          size={420}
+        >
           <UpdateDeckForm
             name={editDeckName}
             player={editDeckPlayer}
             rank={editDeckRank}
             archetype={editDeckArchetype}
             isEDH={isEDH}
+            playerOptions={playerOptionsForEditDeck}
             onNameChange={setEditDeckName}
             onPlayerChange={setEditDeckPlayer}
             onRankChange={setEditDeckRank}
@@ -1030,7 +1143,7 @@ export default function EventDetail() {
 
       {canEditEvent && uploadDeckForDeckId != null && (
         <Modal
-          title={`Upload deck ${decks.find((x) => x.deck_id === uploadDeckForDeckId) ? `— ${cellStr(decks.find((x) => x.deck_id === uploadDeckForDeckId)?.name) || 'Unnamed'}` : ''}`}
+          title={`Update deck — ${cellStr(decks.find((x) => x.deck_id === uploadDeckForDeckId)?.player) || 'Unnamed'}`}
           onClose={closeUploadDeckModal}
           size={520}
         >
@@ -1046,7 +1159,7 @@ export default function EventDetail() {
 
       {matchupsDeckId != null && (
         <Modal
-          title={`Update matchups ${decks.find((d) => d.deck_id === matchupsDeckId) ? `— ${cellStr(decks.find((d) => d.deck_id === matchupsDeckId)?.name) || 'Unnamed'}` : ''}`}
+          title={`Update matchups — ${cellStr(decks.find((d) => d.deck_id === matchupsDeckId)?.player) || 'Unnamed'}`}
           onClose={() => !savingMatchups && closeUpdateMatchupsModal()}
           closeOnOverlayClick={!savingMatchups}
           size={520}

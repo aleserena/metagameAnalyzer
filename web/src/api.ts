@@ -236,6 +236,16 @@ export async function getEventIdsWithDiscrepancies(): Promise<{ event_ids: strin
   return fetchApi('/events/event-ids-with-discrepancies')
 }
 
+/** Admin only. Returns event_ids where deck count < player_count. */
+export async function getEventIdsWithMissingDecks(): Promise<{ event_ids: string[] }> {
+  return fetchApi('/events/event-ids-with-missing-decks')
+}
+
+/** Admin only. Returns event_ids that have at least one deck with missing matchups. */
+export async function getEventIdsWithMissingMatchups(): Promise<{ event_ids: string[] }> {
+  return fetchApi('/events/event-ids-with-missing-matchups')
+}
+
 export async function getEvent(eventId: number | string): Promise<EventWithOrigin & { player_count?: number }> {
   return fetchApi(`/events/${encodeURIComponent(String(eventId))}`)
 }
@@ -250,6 +260,18 @@ export async function createEvent(body: {
   location?: string
 }): Promise<{ event_id: string; event_name: string; store: string; location: string; date: string; format_id: string; player_count: number }> {
   return fetchApi('/events', { method: 'POST', body: JSON.stringify(body) })
+}
+
+export async function exportEvent(eventId: number | string): Promise<Blob> {
+  return fetchWithAuth(
+    `/events/${encodeURIComponent(String(eventId))}/export`,
+    { method: 'GET' },
+    'blob'
+  ) as Promise<Blob>
+}
+
+export async function importEvent(body: unknown): Promise<{ event_id: string; message: string; deck_count?: number }> {
+  return fetchApi('/events/import', { method: 'POST', body: JSON.stringify(body) })
 }
 
 export async function updateEvent(
@@ -365,6 +387,12 @@ export async function sendFeedbackLinkToPlayer(eventId: string, player: string):
     method: 'POST',
     body: JSON.stringify({ player }),
   })
+}
+
+export async function getMissingMatchups(eventId: string): Promise<{
+  missing: Array<{ deck_id: number; player: string; matchup_count: number; expected_count: number }>
+}> {
+  return fetchApi(`/events/${encodeURIComponent(eventId)}/missing-matchups`)
 }
 
 export async function getMatchupDiscrepancies(eventId: string): Promise<{

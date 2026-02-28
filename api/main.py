@@ -70,6 +70,7 @@ from api.schemas.events import (
     CreateEventBody,
     DeckPairPreview,
     DECK_MERGE_FIELDS,
+    EventExportData,
     EventResponse,
     EVENT_MERGE_FIELDS,
     LoadBody,
@@ -478,6 +479,18 @@ if _database_available():
 _RANK_ORDER = {"1": 0, "2": 1, "3-4": 2, "5-8": 3, "9-16": 4, "17-32": 5, "33-64": 6, "65-128": 7}
 
 
+def _rank_sort_value(rank_str: str) -> int:
+    """Return a numeric value for ordering ranks (1, 2, 3, ..., 12, ...). Uses lower bound for ranges like 3-4."""
+    r = (rank_str or "").strip()
+    if not r:
+        return 999
+    part = r.split("-")[0].strip()
+    if not part.isdigit():
+        return 999
+    n = int(part)
+    return n if 1 <= n <= 128 else 999
+
+
 def _parse_date_sortkey(date_str: str) -> str:
     """Convert DD/MM/YY to YYMMDD for sorting."""
     parts = date_str.split("/")
@@ -487,10 +500,10 @@ def _parse_date_sortkey(date_str: str) -> str:
 
 
 def _deck_sort_key(d: dict) -> tuple:
-    """Sort by date descending, then rank ascending."""
+    """Sort by date descending, then rank ascending (1, 2, ..., 12, ...)."""
     date_key = _parse_date_sortkey(d.get("date", ""))
-    rank_key = _RANK_ORDER.get(normalize_rank(d.get("rank", "")), 99)
-    return (-int(date_key) if date_key.isdigit() else 0, rank_key)
+    rank_val = _rank_sort_value(d.get("rank", ""))
+    return (-int(date_key) if date_key.isdigit() else 0, rank_val)
 
 
 def _date_in_range(date_str: str, date_from: str | None, date_to: str | None) -> bool:
@@ -648,11 +661,11 @@ def _deck_sort_key_by(sort: str, order: str):
         if sort == "date":
             date_key = _parse_date_sortkey(d.get("date", ""))
             val = int(date_key) if date_key.isdigit() else 0
-            return (-val if reverse else val, _RANK_ORDER.get(normalize_rank(d.get("rank", "")), 99))
+            rv = _rank_sort_value(d.get("rank", ""))
+            return (-val if reverse else val, -rv if reverse else rv)
         if sort == "rank":
-            rk = _RANK_ORDER.get(normalize_rank(d.get("rank", "")), 99)
-            date_key = _parse_date_sortkey(d.get("date", ""))
-            return (-rk if reverse else rk, -(int(date_key) if date_key.isdigit() else 0))
+            rk = _rank_sort_value(d.get("rank", ""))
+            return (-rk if reverse else rk,)
         if sort == "player":
             return ((d.get("player") or "").lower(),)
         if sort == "name":
@@ -1034,6 +1047,22 @@ def get_event_ids_with_discrepancies():
     return {"event_ids": event_ids_with_discrepancies}
 
 
+@app.get("/api/events/event-ids-with-missing-decks", dependencies=[Depends(require_admin), Depends(require_database)])
+def get_event_ids_with_missing_decks():
+    """Return event_ids where deck count < player_count (admin)."""
+    with _db.session_scope() as session:
+        event_ids = _db.list_event_ids_with_missing_decks(session)
+    return {"event_ids": event_ids}
+
+
+@app.get("/api/events/event-ids-with-missing-matchups", dependencies=[Depends(require_admin), Depends(require_database)])
+def get_event_ids_with_missing_matchups():
+    """Return event_ids where every deck has the expected matchups (admin). Events NOT in this list have missing matchups."""
+    with _db.session_scope() as session:
+        event_ids = _db.list_event_ids_with_complete_matchups(session)
+    return {"event_ids": event_ids}
+
+
 def _event_row_to_merge_dict(row) -> dict:
     """Event row to dict keyed by EVENT_MERGE_FIELDS (name -> event_name)."""
     return {
@@ -1047,7 +1076,7 @@ def _event_row_to_merge_dict(row) -> dict:
 
 
 def _deck_merge_conflicts(deck_keep: dict, deck_remove: dict) -> list[MergeConflictItem]:
-    """Compare two deck dicts on DECK_MERGE_FIELDS; return list of conflicts (different values)."""
+    """Compare two deck dicts on DECK_MERGE_FIELDS. Only add conflict when both have data and values differ (prefer non-empty)."""
     conflicts = []
     for field in DECK_MERGE_FIELDS:
         v_keep = deck_keep.get(field)
@@ -1055,8 +1084,11 @@ def _deck_merge_conflicts(deck_keep: dict, deck_remove: dict) -> list[MergeConfl
         if field == "player_count":
             v_keep = 0 if v_keep is None else int(v_keep)
             v_remove = 0 if v_remove is None else int(v_remove)
+        has_keep = (v_keep not in (None, "", [])) if field != "player_count" else (v_keep is not None and v_keep != 0)
+        has_remove = (v_remove not in (None, "", [])) if field != "player_count" else (v_remove is not None and v_remove != 0)
+        if not has_keep or not has_remove:
+            continue  # prefer the one with data; no conflict to show
         if field in ("commanders", "mainboard", "sideboard"):
-            # Compare lists (order-sensitive for mainboard/sideboard)
             if v_keep != v_remove:
                 conflicts.append(MergeConflictItem(field=field, value_keep=v_keep, value_remove=v_remove))
         else:
@@ -1156,22 +1188,33 @@ def merge_preview(
     with _db.session_scope() as session:
         decks_keep = _db.get_decks_by_event(session, keep.event_id)
         decks_remove = _db.get_decks_by_event(session, remove.event_id)
-    keep_by_canonical: dict[str, dict] = {}
-    for d in decks_keep:
-        c = _normalize_player(d.get("player") or "")
-        keep_by_canonical[c] = d
-    paired_keep_ids: set[int] = set()
-    paired_remove_ids: set[int] = set()
-    for d in decks_remove:
-        c = _normalize_player(d.get("player") or "")
-        if c in keep_by_canonical:
-            k = keep_by_canonical[c]
-            paired_keep_ids.add(k["deck_id"])
-            paired_remove_ids.add(d["deck_id"])
-            pair_conflicts = _deck_merge_conflicts(k, d)
-            deck_pairs.append(DeckPairPreview(deck_keep=k, deck_remove=d, conflicts=pair_conflicts))
-    decks_keep_only = [d for d in decks_keep if d["deck_id"] not in paired_keep_ids]
-    decks_remove_only = [d for d in decks_remove if d["deck_id"] not in paired_remove_ids]
+        keep_by_canonical: dict[str, dict] = {}
+        for d in decks_keep:
+            c = _normalize_player(d.get("player") or "")
+            keep_by_canonical[c] = d
+        paired_keep_ids: set[int] = set()
+        paired_remove_ids: set[int] = set()
+        for d in decks_remove:
+            c = _normalize_player(d.get("player") or "")
+            if c in keep_by_canonical:
+                k = keep_by_canonical[c]
+                paired_keep_ids.add(k["deck_id"])
+                paired_remove_ids.add(d["deck_id"])
+                pair_conflicts = _deck_merge_conflicts(k, d)
+                # Add matchups conflict if both decks have different matchup data
+                m_keep = _db.list_matchups_by_deck(session, k["deck_id"])
+                m_remove = _db.list_matchups_by_deck(session, d["deck_id"])
+                if len(m_keep) != len(m_remove) or (m_keep != m_remove and (m_keep or m_remove)):
+                    pair_conflicts.append(
+                        MergeConflictItem(
+                            field="matchups",
+                            value_keep=f"{len(m_keep)} matchups",
+                            value_remove=f"{len(m_remove)} matchups",
+                        )
+                    )
+                deck_pairs.append(DeckPairPreview(deck_keep=k, deck_remove=d, conflicts=pair_conflicts))
+        decks_keep_only = [d for d in decks_keep if d["deck_id"] not in paired_keep_ids]
+        decks_remove_only = [d for d in decks_remove if d["deck_id"] not in paired_remove_ids]
 
     return MergePreviewResponse(
         can_merge=True,
@@ -1203,6 +1246,71 @@ def get_event_by_id(event_id: str):
     if ev:
         return EventResponse(**ev)
     raise HTTPException(status_code=404, detail="Event not found")
+
+
+@app.get(
+    "/api/events/{event_id}/export",
+    dependencies=[Depends(require_admin_or_event_edit)],
+)
+def export_event(event_id: str):
+    """Export an event and all related data (decks, matchups, player emails) as JSON."""
+    event_dict: dict | None = None
+    decks: list[dict] = []
+    matchups: list[dict] = []
+    player_emails: dict[str, str] = {}
+
+    if _database_available():
+        try:
+            with _db.session_scope() as session:
+                row = _db.get_event(session, event_id)
+                if not row:
+                    raise HTTPException(status_code=404, detail="Event not found")
+                event_dict = _db.event_row_to_dict(row)
+                decks = _db.get_decks_by_event(session, event_id)
+
+                # Collect matchups for all decks in this event
+                for d in decks:
+                    deck_id = d.get("deck_id")
+                    if deck_id is None:
+                        continue
+                    rows = _db.list_matchups_by_deck(session, deck_id)
+                    if rows:
+                        matchups.extend(rows)
+
+                # Collect player emails only for players in this event
+                players = {
+                    (d.get("player") or "").strip()
+                    for d in decks
+                    if (d.get("player") or "").strip()
+                }
+                if players:
+                    player_emails = _db.get_emails_for_players(session, list(players))
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("Failed to export event from database: %s", e)
+            raise HTTPException(status_code=500, detail="Failed to export event")
+    else:
+        ev = _get_event_by_id_from_decks(event_id)
+        if not ev:
+            raise HTTPException(status_code=404, detail="Event not found")
+        event_dict = ev
+        decks = [d for d in _decks if str(d.get("event_id")) == str(event_id)]
+        matchups = []
+        player_emails = {}
+
+    payload = EventExportData(
+        schema_version=1,
+        event=EventResponse(**event_dict),
+        decks=decks,
+        matchups=matchups,
+        player_emails=player_emails,
+    )
+    filename = f"event-{event_dict['event_id']}.json"
+    return JSONResponse(
+        content=payload.model_dump(),
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.put("/api/events/{event_id}", dependencies=[Depends(require_admin_or_event_edit), Depends(require_database)])
@@ -1247,6 +1355,110 @@ def delete_event_endpoint(event_id: str):
     except Exception as e:
         logger.exception("Delete event failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post(
+    "/api/events/import",
+    dependencies=[Depends(require_admin), Depends(require_database)],
+)
+def import_event(body: EventExportData):
+    """Import a new manual event (and all decks/matchups/emails) from an exported JSON payload."""
+    if body.schema_version != 1:
+        raise HTTPException(status_code=400, detail=f"Unsupported schema_version: {body.schema_version}")
+    if not _database_available():
+        raise HTTPException(status_code=503, detail="Database is required for importing events")
+
+    try:
+        with _db.session_scope() as session:
+            # Create new manual event with a fresh ID
+            new_event_id = _db.next_manual_event_id(session)
+            ev = body.event
+            row = _db.create_event(
+                session,
+                event_name=(ev.event_name or "").strip() or "Unnamed",
+                date=(ev.date or "").strip(),
+                format_id=(ev.format_id or "").strip() or "EDH",
+                origin=_db.ORIGIN_MANUAL,
+                event_id=new_event_id,
+                player_count=ev.player_count or 0,
+                store=(ev.store or "").strip(),
+                location=(ev.location or "").strip(),
+            )
+            event_dict = _db.event_row_to_dict(row)
+
+            # Map old deck_ids -> new manual deck_ids
+            decks_data = body.decks or []
+            deck_id_map: dict[int, int] = {}
+            next_deck_id = _db.next_manual_deck_id(session)
+            for deck_dict_raw in decks_data:
+                if "deck_id" not in deck_dict_raw:
+                    raise HTTPException(status_code=400, detail="Each deck must include a 'deck_id' field")
+                try:
+                    old_deck_id = int(deck_dict_raw.get("deck_id"))
+                except Exception:
+                    raise HTTPException(status_code=400, detail="Each deck 'deck_id' must be an integer")
+                new_deck_id = next_deck_id
+                next_deck_id += 1
+                deck_id_map[old_deck_id] = new_deck_id
+
+                deck_data = dict(deck_dict_raw)
+                deck_data["deck_id"] = new_deck_id
+                deck_data["event_id"] = new_event_id
+                deck_data["event_name"] = event_dict.get("event_name") or deck_data.get("event_name") or ""
+                deck_data["date"] = event_dict.get("date") or deck_data.get("date") or ""
+                if not deck_data.get("format_id"):
+                    deck_data["format_id"] = event_dict.get("format_id", "") or "EDH"
+
+                deck_row = _db.dict_to_deck_row(deck_data, origin=_db.ORIGIN_MANUAL)
+                session.add(deck_row)
+
+            # Insert matchups, remapping deck IDs
+            matchups_data = body.matchups or []
+            per_deck_matchups: dict[int, list[dict]] = {}
+            for m_raw in matchups_data:
+                if "deck_id" not in m_raw:
+                    continue
+                try:
+                    old_deck_id = int(m_raw.get("deck_id"))
+                except Exception:
+                    continue
+                new_deck_id = deck_id_map.get(old_deck_id)
+                if new_deck_id is None:
+                    continue
+
+                opp_old = m_raw.get("opponent_deck_id")
+                new_opp_id = None
+                if opp_old is not None:
+                    try:
+                        new_opp_id = deck_id_map.get(int(opp_old))
+                    except Exception:
+                        new_opp_id = None
+
+                item = {
+                    "opponent_player": (m_raw.get("opponent_player") or "").strip(),
+                    "opponent_deck_id": new_opp_id,
+                    "opponent_archetype": m_raw.get("opponent_archetype"),
+                    "result": (m_raw.get("result") or "loss").strip() or "loss",
+                    "result_note": (m_raw.get("result_note") or None),
+                    "round": m_raw.get("round"),
+                }
+                per_deck_matchups.setdefault(new_deck_id, []).append(item)
+
+            for deck_id, items in per_deck_matchups.items():
+                _db.upsert_matchups_for_deck(session, deck_id, items)
+
+            # Restore player emails for players in this event
+            for player, email in (body.player_emails or {}).items():
+                _db.set_player_email(session, player, email)
+
+        _load_decks_from_db()
+        _invalidate_events_cache()
+        return {"event_id": event_dict["event_id"], "message": "imported", "deck_count": len(decks_data)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Import event failed: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to import event")
 
 
 @app.post(
@@ -1340,7 +1552,17 @@ def merge_events(body: MergeEventsBody):
                         if merged_deck[field] is None:
                             merged_deck[field] = [] if field in ("commanders", "mainboard", "sideboard") else (0 if field == "player_count" else "")
                 _db.upsert_deck(session, merged_deck, origin=keep_row.origin or _db.ORIGIN_MTGTOP8)
-                _db.reassign_matchups_to_deck(session, deck_id_remove, deck_id_keep)
+                matchups_choice = res.get("matchups")
+                if matchups_choice == "keep":
+                    # Keep only kept deck's matchups; remove deck's matchups are dropped when we delete it
+                    pass
+                elif matchups_choice == "remove":
+                    # Use only removed deck's matchups: delete keep's, then reassign remove's to keep
+                    _db.delete_matchups_for_deck(session, deck_id_keep)
+                    _db.reassign_matchups_to_deck(session, deck_id_remove, deck_id_keep)
+                else:
+                    # Merge both (default)
+                    _db.reassign_matchups_to_deck(session, deck_id_remove, deck_id_keep)
                 _db.delete_deck(session, deck_id_remove)
 
             unpaired_remove_ids = [d["deck_id"] for d in decks_remove if d["deck_id"] not in paired_remove_ids]
@@ -1661,8 +1883,9 @@ def get_upload_link_info(token: str):
                             event_players_set.add(p)
                     deck_out["event_players"] = sorted(event_players_set)
                     # Matchups others reported vs this player (prepopulate: their win = our loss)
+                    current_player_norm = _normalize_player((deck.get("player") or "").strip())
                     reported_against_me = _db.list_matchups_reported_against_player(
-                        session, row.event_id, deck.get("player")
+                        session, row.event_id, current_player_norm
                     )
                     inverted = []
                     for r in reported_against_me:
@@ -1677,11 +1900,14 @@ def get_upload_link_info(token: str):
                             inv_result = "intentional_draw_win"
                         else:
                             inv_result = "draw" if res == "intentional_draw" else "draw"
-                        inverted.append({
-                            "opponent_player": (r.get("reporting_player") or "").strip(),
-                            "result": inv_result,
-                            "intentional_draw": _is_intentional_draw_result(res),
-                        })
+                        # Use normalized name so it matches opponent dropdown (event_players / deck list)
+                        reporting_player = _normalize_player((r.get("reporting_player") or "").strip())
+                        if reporting_player and reporting_player != "(unknown)":
+                            inverted.append({
+                                "opponent_player": reporting_player,
+                                "result": inv_result,
+                                "intentional_draw": _is_intentional_draw_result(res),
+                            })
                     deck_out["opponent_reported_matchups"] = inverted
                 out["deck"] = deck_out
             else:
@@ -1837,6 +2063,18 @@ def submit_feedback_with_upload_link(token: str, body: EventFeedbackBody):
         _db.upsert_deck(session, deck_dict, origin=deck_dict.get("origin", _db.ORIGIN_MANUAL))
         matchup_rows = []
         for m in body.matchups or []:
+            result_raw = (m.result or "1-1").strip().lower()
+            if result_raw in ("bye", "drop"):
+                opponent_player = "Bye" if result_raw == "bye" else "(drop)"
+                matchup_rows.append({
+                    "opponent_player": opponent_player,
+                    "opponent_deck_id": None,
+                    "opponent_archetype": None,
+                    "result": result_raw,
+                    "result_note": None,
+                    "round": None,
+                })
+                continue
             opp_player = _normalize_player((m.opponent_player or "").strip())
             if not opp_player or opp_player == "(unknown)":
                 continue
@@ -1927,6 +2165,21 @@ def update_deck_endpoint(deck_id: int, body: UpdateDeckBody):
     # EDH: if no commander present, use first mainboard card as commander
     if (current.get("format_id") or "").upper() == "EDH" and not current.get("commanders") and current.get("mainboard"):
         current["commanders"] = [current["mainboard"][0]["card"]]
+    # No duplicate player per event: another deck in same event cannot have the same player
+    event_id = current.get("event_id")
+    if event_id and (body.player is not None or current.get("player")):
+        new_player = _normalize_player((current.get("player") or "").strip())
+        if new_player and new_player != "(unknown)":
+            with _db.session_scope() as session:
+                event_decks = _db.get_decks_by_event(session, event_id)
+                for d in event_decks:
+                    if d.get("deck_id") != deck_id:
+                        other_player = _normalize_player((d.get("player") or "").strip())
+                        if other_player == new_player:
+                            raise HTTPException(
+                                status_code=400,
+                                detail="Player already in this event. Each player can only have one deck per event.",
+                            )
     try:
         with _db.session_scope() as session:
             _db.upsert_deck(session, current, origin=current.get("origin", _db.ORIGIN_MTGTOP8))
@@ -1967,7 +2220,9 @@ def get_deck_matchups(deck_id: int):
         rows = _db.list_matchups_by_deck(session, deck_id)
         opponent_reported_matchups = []
         if event_id and current_player:
-            reported_against_me = _db.list_matchups_reported_against_player(session, event_id, deck.get("player"))
+            # Use normalized current player so we match MatchupRow.opponent_player (stored normalized)
+            current_player_norm = _normalize_player(current_player)
+            reported_against_me = _db.list_matchups_reported_against_player(session, event_id, current_player_norm)
             for r in reported_against_me:
                 res = (r.get("result") or "").strip().lower()
                 if res == "win":
@@ -1980,11 +2235,14 @@ def get_deck_matchups(deck_id: int):
                     inv_result = "intentional_draw_win"
                 else:
                     inv_result = "draw" if res == "intentional_draw" else "draw"
-                opponent_reported_matchups.append({
-                    "opponent_player": (r.get("reporting_player") or "").strip(),
-                    "result": inv_result,
-                    "intentional_draw": _is_intentional_draw_result(res),
-                })
+                # Use normalized name so it matches opponent dropdown (deck list uses normalized player)
+                reporting_player = _normalize_player((r.get("reporting_player") or "").strip())
+                if reporting_player and reporting_player != "(unknown)":
+                    opponent_reported_matchups.append({
+                        "opponent_player": reporting_player,
+                        "result": inv_result,
+                        "intentional_draw": _is_intentional_draw_result(res),
+                    })
     return {"matchups": rows, "opponent_reported_matchups": opponent_reported_matchups}
 
 
@@ -2002,6 +2260,19 @@ def update_deck_matchups(deck_id: int, body: AdminMatchupsBody):
     with _db.session_scope() as session:
         matchup_rows = []
         for m in body.matchups or []:
+            result_raw = (m.result or "draw").strip().lower()
+            if result_raw in ("bye", "drop"):
+                # Bye and drop don't require an opponent; count as a round for validation
+                opponent_player = "Bye" if result_raw == "bye" else "(drop)"
+                matchup_rows.append({
+                    "opponent_player": opponent_player,
+                    "opponent_deck_id": None,
+                    "opponent_archetype": None,
+                    "result": result_raw,
+                    "result_note": None,
+                    "round": None,
+                })
+                continue
             opp_player = _normalize_player((m.opponent_player or "").strip())
             if not opp_player or opp_player == "(unknown)":
                 continue
@@ -2265,10 +2536,12 @@ def get_metagame(
             ordered = [c for c in color_code_order if c in colors]
             if ordered:
                 row["colors"] = ordered
-    top_players = player_leaderboard(
+    full_leaderboard = player_leaderboard(
         decks, normalize_player=_normalize_player, rank_weights=rank_weights
-    )[:5]
-    result["top_players"] = top_players
+    )
+    result["top_players"] = full_leaderboard[:5]
+    # Unique players must match leaderboard (alias-aware): count distinct canonical players
+    result["summary"]["unique_players"] = len(full_leaderboard)
     return result
 
 
@@ -2627,8 +2900,10 @@ def send_feedback_link_to_player(event_id: str, request: Request, body: SendFeed
 
 
 def _matchup_result_to_canonical(result: str) -> str:
-    """Map result string to canonical win/loss/draw/intentional_draw for consistency check."""
+    """Map result string to canonical win/loss/draw/intentional_draw/bye/drop for consistency check."""
     r = (result or "").strip().lower()
+    if r in ("bye", "drop"):
+        return r
     if r in ("intentional_draw", "id"):
         return "intentional_draw"
     if r == "intentional_draw_win":
@@ -2653,9 +2928,11 @@ def _is_intentional_draw_result(result: str) -> bool:
 
 
 def _matchup_result_consistent(result_a: str, result_b: str) -> bool:
-    """True if the pair is consistent: one win + one loss, or both draw/intentional_draw."""
+    """True if the pair is consistent: one win + one loss, or both draw/intentional_draw. Bye/drop have no pair."""
     a = _matchup_result_to_canonical(result_a)
     b = _matchup_result_to_canonical(result_b)
+    if a in ("bye", "drop") or b in ("bye", "drop"):
+        return True
     if a in ("draw", "intentional_draw") and b in ("draw", "intentional_draw"):
         return True
     if (a == "win" and b == "loss") or (a == "loss" and b == "win"):
@@ -2756,6 +3033,9 @@ def get_matchups_summary(
             # When multiple archetypes selected: only matchups between those archetypes. When single: show that archetype vs all.
             if len(archetype_set) > 1 and opp not in archetype_set:
                 continue
+        # Bye and drop count as rounds for validation but are not used in matchup calculations
+        if (r.get("result") or "").strip().lower() in ("bye", "drop"):
+            continue
         filtered.append(r)
 
     def to_effective_wld(row):
@@ -2883,6 +3163,18 @@ def get_matchups_summary(
         "matrix": matrix,
         "min_matches": min_matches,
     }
+
+
+@app.get("/api/events/{event_id}/missing-matchups", dependencies=[Depends(require_admin), Depends(require_database)])
+def get_missing_matchups(event_id: str):
+    """List players (decks) in this event that have fewer matchups than expected (admin).
+    Expected = number of decks in event minus one."""
+    with _db.session_scope() as session:
+        ev = _db.get_event(session, event_id)
+        if not ev:
+            raise HTTPException(status_code=404, detail="Event not found")
+        missing = _db.list_missing_matchups_for_event(session, event_id)
+    return {"missing": missing}
 
 
 @app.get("/api/events/{event_id}/matchup-discrepancies", dependencies=[Depends(require_admin), Depends(require_database)])

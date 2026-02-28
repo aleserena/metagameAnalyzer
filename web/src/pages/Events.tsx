@@ -1,10 +1,13 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import {
   getEvents,
   createEvent,
+  importEvent,
   getEventIdsWithDiscrepancies,
+  getEventIdsWithMissingDecks,
+  getEventIdsWithMissingMatchups,
   getMergePreview,
   mergeEvents,
 } from '../api'
@@ -56,7 +59,7 @@ export default function Events() {
   const [filterName, setFilterName] = useState('')
   const [filterDateIso, setFilterDateIso] = useState('') // YYYY-MM-DD for date picker
   const [filterFormat, setFilterFormat] = useState('')
-  const [filterWithDiscrepanciesOnly, setFilterWithDiscrepanciesOnly] = useState(false)
+  const [filterIssueTypes, setFilterIssueTypes] = useState<string[]>([])
   const [sortBy, setSortBy] = useState<SortKey>('date')
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
   const [mergeEventIdA, setMergeEventIdA] = useState('')
@@ -67,18 +70,76 @@ export default function Events() {
   const [manualPairs, setManualPairs] = useState<PlayerMergePair[]>([])
   const [mergeLoading, setMergeLoading] = useState(false)
   const [mergeSubmitting, setMergeSubmitting] = useState(false)
+  const [hoveredIssuesEventId, setHoveredIssuesEventId] = useState<string | null>(null)
+  const [importing, setImporting] = useState(false)
+  const importInputRef = useRef<HTMLInputElement | null>(null)
   const { data: discrepancyData } = useFetch<{ event_ids: string[] }>(
     () => (user === 'admin' ? getEventIdsWithDiscrepancies() : Promise.resolve({ event_ids: [] })),
+    [user]
+  )
+  const { data: missingDecksData } = useFetch<{ event_ids: string[] }>(
+    () => (user === 'admin' ? getEventIdsWithMissingDecks() : Promise.resolve({ event_ids: [] })),
+    [user]
+  )
+  const { data: missingMatchupsData } = useFetch<{ event_ids: string[] }>(
+    () => (user === 'admin' ? getEventIdsWithMissingMatchups() : Promise.resolve({ event_ids: [] })),
     [user]
   )
   const eventIdsWithDiscrepancies = useMemo(
     () => new Set((discrepancyData?.event_ids ?? []).map((id) => String(id))),
     [discrepancyData]
   )
+  const eventIdsWithMissingDecks = useMemo(
+    () => new Set((missingDecksData?.event_ids ?? []).map((id) => String(id))),
+    [missingDecksData]
+  )
+  /** API returns event IDs with *complete* matchups; events NOT in this set have missing matchups */
+  const eventIdsWithCompleteMatchups = useMemo(
+    () => new Set((missingMatchupsData?.event_ids ?? []).map((id) => String(id))),
+    [missingMatchupsData]
+  )
+  const eventHasMissingMatchups = (eventId: string | number) => !eventIdsWithCompleteMatchups.has(String(eventId))
 
   useEffect(() => {
     if (error) toast.error(reportError(new Error(error)))
   }, [error])
+
+  const handleImportClick = () => {
+    importInputRef.current?.click()
+  }
+
+  const handleImportFileChange: React.ChangeEventHandler<HTMLInputElement> = (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setImporting(true)
+    const reader = new FileReader()
+    reader.onload = () => {
+      try {
+        const text = String(reader.result ?? '')
+        const json = JSON.parse(text)
+        importEvent(json)
+          .then(() => {
+            toast.success('Event imported')
+            refetch()
+          })
+          .catch((err: unknown) => toast.error(reportError(err)))
+          .finally(() => {
+            setImporting(false)
+            if (importInputRef.current) importInputRef.current.value = ''
+          })
+      } catch {
+        toast.error('Invalid JSON file')
+        setImporting(false)
+        if (importInputRef.current) importInputRef.current.value = ''
+      }
+    }
+    reader.onerror = () => {
+      toast.error('Failed to read file')
+      setImporting(false)
+      if (importInputRef.current) importInputRef.current.value = ''
+    }
+    reader.readAsText(file)
+  }
 
   const handleCreate = () => {
     const name = newName.trim() || 'Unnamed'
@@ -177,6 +238,7 @@ export default function Events() {
     archetype: 'Archetype',
     mainboard: 'Mainboard',
     sideboard: 'Sideboard',
+    matchups: 'Matchups',
   }
 
   /** Format a conflict value for display (lists show length). */
@@ -214,8 +276,15 @@ export default function Events() {
     if (filterFormat) {
       list = list.filter((e) => cellStr(e.format_id) === filterFormat)
     }
-    if (user === 'admin' && filterWithDiscrepanciesOnly) {
-      list = list.filter((e) => eventIdsWithDiscrepancies.has(String(e.event_id)))
+    if (user === 'admin' && filterIssueTypes.length > 0) {
+      list = list.filter((e) => {
+        const id = String(e.event_id)
+        return (
+          (filterIssueTypes.includes('Discrepancies') && eventIdsWithDiscrepancies.has(id)) ||
+          (filterIssueTypes.includes('Missing decks') && eventIdsWithMissingDecks.has(id)) ||
+          (filterIssueTypes.includes('Missing matchups') && eventHasMissingMatchups(e.event_id))
+        )
+      })
     }
     const dir = sortOrder === 'asc' ? 1 : -1
     return [...list].sort((a, b) => {
@@ -226,7 +295,7 @@ export default function Events() {
         : String(va).localeCompare(String(vb), undefined, { numeric: true })
       return dir * cmp
     })
-  }, [events, filterName, filterDateIso, filterFormat, filterWithDiscrepanciesOnly, eventIdsWithDiscrepancies, user, sortBy, sortOrder])
+  }, [events, filterName, filterDateIso, filterFormat, filterIssueTypes, eventIdsWithDiscrepancies, eventIdsWithMissingDecks, eventIdsWithCompleteMatchups, user, sortBy, sortOrder])
 
   const formatOptions = useMemo(() => {
     const set = new Set<string>()
@@ -237,12 +306,35 @@ export default function Events() {
     return [...set].sort()
   }, [events])
 
-  const hasFilters = Boolean(filterName.trim() || filterDateIso || filterFormat || (user === 'admin' && filterWithDiscrepanciesOnly))
+  /** Events sorted by date descending (newest first) for merge selectors */
+  const eventsByDateDesc = useMemo(
+    () =>
+      [...events].sort((a, b) => {
+        const ka = dateSortKey(cellStr(a.date))
+        const kb = dateSortKey(cellStr(b.date))
+        return kb.localeCompare(ka)
+      }),
+    [events]
+  )
+
+  const hasFilters = Boolean(
+    filterName.trim() ||
+    filterDateIso ||
+    filterFormat ||
+    (user === 'admin' && filterIssueTypes.length > 0)
+  )
   const clearFilters = () => {
     setFilterName('')
     setFilterDateIso('')
     setFilterFormat('')
-    setFilterWithDiscrepanciesOnly(false)
+    setFilterIssueTypes([])
+  }
+
+  const ISSUE_PILL_OPTIONS = ['Discrepancies', 'Missing decks', 'Missing matchups'] as const
+  const toggleIssueFilter = (issue: string) => {
+    setFilterIssueTypes((prev) =>
+      prev.includes(issue) ? prev.filter((x) => x !== issue) : [...prev, issue]
+    )
   }
 
   const handleSort = (key: SortKey) => {
@@ -329,6 +421,21 @@ export default function Events() {
             <button type="button" className="btn btn-primary" onClick={handleCreate} disabled={creating}>
               {creating ? 'Creating…' : 'Create event'}
             </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={handleImportClick}
+              disabled={importing}
+            >
+              {importing ? 'Importing…' : 'Import event'}
+            </button>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept="application/json,.json"
+              style={{ display: 'none' }}
+              onChange={handleImportFileChange}
+            />
           </div>
         </section>
       )}
@@ -348,7 +455,7 @@ export default function Events() {
                 style={{ minWidth: 220 }}
               >
                 <option value="">Select event…</option>
-                {events.map((e) => (
+                {eventsByDateDesc.map((e) => (
                   <option key={String(e.event_id)} value={String(e.event_id)}>
                     {cellStr(e.event_name) || 'Unnamed'} ({cellStr(e.date)}) {e.origin === 'manual' ? ' [manual]' : ''}
                   </option>
@@ -363,7 +470,7 @@ export default function Events() {
                 style={{ minWidth: 220 }}
               >
                 <option value="">Select event…</option>
-                {events.map((e) => (
+                {eventsByDateDesc.map((e) => (
                   <option key={String(e.event_id)} value={String(e.event_id)}>
                     {cellStr(e.event_name) || 'Unnamed'} ({cellStr(e.date)}) {e.origin === 'manual' ? ' [manual]' : ''}
                   </option>
@@ -399,6 +506,7 @@ export default function Events() {
                   {mergePreview.conflicts.length > 0 && (
                     <div style={{ marginBottom: '1rem' }}>
                       <span className="label">Event: resolve conflicts (choose which value to keep)</span>
+                      <p className="muted" style={{ margin: '0.25rem 0 0', fontSize: '0.85rem' }}>When one side has no data, the other is used automatically.</p>
                       <ul style={{ margin: '0.25rem 0 0', paddingLeft: 0, listStyle: 'none' }}>
                         {mergePreview.conflicts.map((c) => (
                           <li key={c.field} style={{ marginBottom: '0.5rem' }}>
@@ -432,6 +540,7 @@ export default function Events() {
                       {mergePreview.deck_pairs && mergePreview.deck_pairs.length > 0 && (
                         <div style={{ marginTop: '0.5rem' }}>
                           <strong>Same player in both events (will merge into one deck):</strong>
+                          <p className="muted" style={{ margin: '0.25rem 0 0', fontSize: '0.85rem' }}>When one side has no data, the other is used automatically. Resolve only when both differ.</p>
                           <ul style={{ margin: '0.25rem 0 0', paddingLeft: '1.25rem' }}>
                             {mergePreview.deck_pairs.map((pair) => {
                               const key = pairKey(pair.deck_keep.deck_id, pair.deck_remove.deck_id)
@@ -556,54 +665,94 @@ export default function Events() {
         </div>
       ) : (
         <>
-          <div className="events-filters toolbar toolbar--wrap-on-mobile" style={{ marginBottom: '1rem', gap: '1rem', alignItems: 'flex-end' }}>
-            <label className="events-filters-item" style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-              <span className="label">Filter by name</span>
-              <input
-                type="text"
-                value={filterName}
-                onChange={(e) => setFilterName(e.target.value)}
-                placeholder="Event name contains…"
-                style={{ minWidth: 180 }}
-              />
-            </label>
-            <label className="events-filters-item" style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-              <span className="label">Filter by date</span>
-              <input
-                type="date"
-                value={filterDateIso}
-                onChange={(e) => setFilterDateIso(e.target.value)}
-                style={{ width: 140 }}
-              />
-            </label>
-            <label className="events-filters-item" style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-              <span className="label">Filter by format</span>
-              <select
-                value={filterFormat}
-                onChange={(e) => setFilterFormat(e.target.value)}
-                style={{ minWidth: 100 }}
-              >
-                <option value="">All formats</option>
-                {formatOptions.map((f) => (
-                  <option key={f} value={f}>{f}</option>
-                ))}
-              </select>
-            </label>
-            {user === 'admin' && (
-              <label className="events-filters-item" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', cursor: 'pointer' }}>
+          <div
+            className="events-filters top-cards-filters"
+            style={{
+              padding: '0.5rem 0.75rem',
+              background: 'var(--bg)',
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              marginBottom: '1rem',
+              fontSize: '0.8125rem',
+            }}
+          >
+            <div className="toolbar toolbar--wrap-on-mobile" style={{ gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Filter:</span>
+              <label className="events-filters-item" style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                <span className="label" style={{ fontWeight: 600 }}>Name</span>
                 <input
-                  type="checkbox"
-                  checked={filterWithDiscrepanciesOnly}
-                  onChange={(e) => setFilterWithDiscrepanciesOnly(e.target.checked)}
+                  type="text"
+                  value={filterName}
+                  onChange={(e) => setFilterName(e.target.value)}
+                  placeholder="Event name contains…"
+                  style={{ minWidth: 180, padding: '0.2rem 0.4rem' }}
                 />
-                <span className="label">With discrepancies only</span>
               </label>
-            )}
-            {hasFilters && (
-              <button type="button" className="btn" onClick={clearFilters}>
-                Clear filters
-              </button>
-            )}
+              <label className="events-filters-item" style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                <span className="label" style={{ fontWeight: 600 }}>Date</span>
+                <input
+                  type="date"
+                  value={filterDateIso}
+                  onChange={(e) => setFilterDateIso(e.target.value)}
+                  style={{ width: 140, padding: '0.2rem 0.4rem' }}
+                />
+              </label>
+              <label className="events-filters-item" style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                <span className="label" style={{ fontWeight: 600 }}>Format</span>
+                <select
+                  value={filterFormat}
+                  onChange={(e) => setFilterFormat(e.target.value)}
+                  style={{ minWidth: 100, padding: '0.2rem 0.4rem' }}
+                >
+                  <option value="">All formats</option>
+                  {formatOptions.map((f) => (
+                    <option key={f} value={f}>{f}</option>
+                  ))}
+                </select>
+              </label>
+              {user === 'admin' && (
+                <>
+                  <span style={{ fontWeight: 600 }}>Issues</span>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
+                    {ISSUE_PILL_OPTIONS.map((issue) => {
+                      const active = filterIssueTypes.includes(issue)
+                      return (
+                        <button
+                          key={issue}
+                          type="button"
+                          onClick={() => toggleIssueFilter(issue)}
+                          style={{
+                            borderRadius: 999,
+                            padding: '0.1rem 0.4rem',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            opacity: active ? 1 : 0.9,
+                            cursor: 'pointer',
+                            border: active ? '1px solid var(--accent)' : '1px solid var(--border)',
+                            background: active ? 'var(--accent-soft, var(--accent))' : 'transparent',
+                            color: active ? '#ffffff' : 'var(--text)',
+                            fontSize: '0.8rem',
+                          }}
+                          aria-pressed={active}
+                        >
+                          {issue}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </>
+              )}
+              {hasFilters && (
+                <button
+                  type="button"
+                  className="btn"
+                  style={{ padding: '0.2rem 0.5rem', fontSize: '0.8rem' }}
+                  onClick={clearFilters}
+                >
+                  Clear filters
+                </button>
+              )}
+            </div>
           </div>
           {hasFilters && (
             <p className="muted" style={{ marginBottom: '0.75rem' }}>
@@ -616,7 +765,7 @@ export default function Events() {
               <thead>
                 <tr>
                   {user === 'admin' && (
-                    <th scope="col" style={{ width: 28, textAlign: 'center' }} title="Has matchup discrepancies">
+                    <th scope="col" style={{ width: 28, textAlign: 'center' }} title="Event issues (hover for details)">
                       ⚠
                     </th>
                   )}
@@ -683,11 +832,74 @@ export default function Events() {
                 </tr>
               </thead>
               <tbody>
-                {filteredAndSorted.map((e) => (
-                <tr key={String(e.event_id)}>
+                {filteredAndSorted.map((e) => {
+                  const id = String(e.event_id)
+                  const issues: string[] = []
+                  if (eventIdsWithDiscrepancies.has(id)) issues.push('Matchup discrepancies')
+                  if (eventIdsWithMissingDecks.has(id)) issues.push('Missing decks')
+                  if (eventHasMissingMatchups(e.event_id)) issues.push('Missing matchups')
+                  const issueCount = issues.length
+                  const issueColor =
+                    issueCount === 0
+                      ? 'transparent'
+                      : issueCount === 1
+                        ? '#22c55e'
+                        : issueCount === 2
+                          ? 'var(--warning, #e6a800)'
+                          : '#dc3545'
+                  return (
+                <tr key={id}>
                   {user === 'admin' && (
-                    <td style={{ textAlign: 'center' }} title={eventIdsWithDiscrepancies.has(String(e.event_id)) ? 'Has matchup discrepancies' : ''}>
-                      {eventIdsWithDiscrepancies.has(String(e.event_id)) ? '⚠' : '—'}
+                    <td
+                      style={{ textAlign: 'center', position: 'relative' }}
+                      onMouseEnter={() => setHoveredIssuesEventId(id)}
+                      onMouseLeave={() => setHoveredIssuesEventId(null)}
+                    >
+                      {issueCount === 0 ? (
+                        '—'
+                      ) : (
+                        <span
+                          style={{
+                            color: issueColor,
+                            cursor: 'default',
+                            fontWeight: 'bold',
+                          }}
+                          aria-label={issues.join(', ')}
+                        >
+                          ⚠
+                        </span>
+                      )}
+                      {hoveredIssuesEventId === id && (
+                        <div
+                          role="tooltip"
+                          style={{
+                            position: 'absolute',
+                            left: 0,
+                            top: '100%',
+                            marginTop: 4,
+                            padding: '6px 10px',
+                            background: 'var(--bg-card)',
+                            border: '1px solid var(--border)',
+                            borderRadius: 6,
+                            fontSize: '0.8125rem',
+                            zIndex: 1000,
+                            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                            pointerEvents: 'none',
+                            minWidth: 'max-content',
+                            maxWidth: 'min(320px, calc(100vw - 24px))',
+                          }}
+                        >
+                          {issues.length > 0 ? (
+                            <ul style={{ margin: 0, paddingLeft: '1.2em' }}>
+                              {issues.map((issue) => (
+                                <li key={issue}>{issue}</li>
+                              ))}
+                            </ul>
+                          ) : (
+                            'No issues'
+                          )}
+                        </div>
+                      )}
                     </td>
                   )}
                   <td>
@@ -701,7 +913,8 @@ export default function Events() {
                   <td>{cellStr(e.store) || '—'}</td>
                   <td>{cellStr(e.location) || '—'}</td>
                 </tr>
-              ))}
+                  )
+                })}
               </tbody>
             </table>
             </div>

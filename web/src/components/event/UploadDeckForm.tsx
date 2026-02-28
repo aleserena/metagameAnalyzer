@@ -31,7 +31,7 @@ export default function UploadDeckForm({
       </label>
       <div style={{ display: 'flex', gap: '0.5rem' }}>
         <button type="button" className="btn btn-primary" onClick={onSubmit} disabled={uploading}>
-          {uploading ? 'Uploading…' : 'Upload'}
+          {uploading ? 'Updating…' : 'Update'}
         </button>
         <button type="button" className="btn" onClick={onCancel} disabled={uploading}>
           Cancel
