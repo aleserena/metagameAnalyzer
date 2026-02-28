@@ -193,15 +193,6 @@ export default function EventDetail() {
     return () => window.removeEventListener('beforeunload', handler)
   }, [hasUnsavedEdits])
 
-  useEffect(() => {
-    if (!isUpdateModalOpen && !isUploadDeckModalOpen && !isConfirmModalOpen) return
-    const prevOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => {
-      document.body.style.overflow = prevOverflow
-    }
-  }, [isUpdateModalOpen, isUploadDeckModalOpen, isConfirmModalOpen])
-
   const getDeckEdit = (d: Deck): BulkDeckEdit => bulkDeckEdits[d.deck_id] ?? defaultDeckEdit(d)
 
   const setDeckEditField = (deckId: number, field: keyof BulkDeckEdit, value: string, fallback: BulkDeckEdit) => {
@@ -449,16 +440,6 @@ export default function EventDetail() {
       .catch((e) => toast.error(reportError(e)))
       .finally(() => setSavingMatchups(false))
   }
-
-  useEffect(() => {
-    if (matchupsDeckId != null) {
-      const prev = document.body.style.overflow
-      document.body.style.overflow = 'hidden'
-      return () => {
-        document.body.style.overflow = prev
-      }
-    }
-  }, [matchupsDeckId])
 
   const matchupsOpponentOptions = useMemo(() => {
     if (matchupsDeckId == null) return []

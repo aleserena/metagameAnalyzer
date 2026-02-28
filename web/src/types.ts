@@ -131,6 +131,8 @@ export interface Event {
   date: string
   format_id: string
   player_count?: number  // number of players in the event
+  /** 'mtgtop8' | 'manual' — used for merge rules (cannot merge two mtgtop8) */
+  origin?: 'mtgtop8' | 'manual'
 }
 
 export interface PlayerStats {
