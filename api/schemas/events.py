@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class EventResponse(BaseModel):
@@ -88,6 +88,8 @@ class MergeEventsBody(BaseModel):
 
 
 class ScrapeBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     # Accepts JSON key "format" (frontend) while exposing field name "format_id" in Python.
     format_id: str = Field(alias="format")
     period: str | None = None
@@ -96,7 +98,4 @@ class ScrapeBody(BaseModel):
     event_ids: list[int] | None = None
     ignore_existing_events: bool = False
     force_replace: bool = False
-
-    class Config:
-        allow_population_by_field_name = True
 
