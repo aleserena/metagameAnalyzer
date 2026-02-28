@@ -243,6 +243,13 @@ def get_all_decks(session: Session) -> list[dict]:
     return [deck_row_to_dict(r) for r in rows]
 
 
+def get_decks_by_event(session: Session, event_id: int | str) -> list[dict]:
+    """Return all decks for an event (by event_id)."""
+    eid = _event_id_str(event_id)
+    rows = session.query(DeckRow).filter(DeckRow.event_id == eid).all()
+    return [deck_row_to_dict(r) for r in rows]
+
+
 def upsert_deck(session: Session, d: dict, origin: str = ORIGIN_MTGTOP8) -> DeckRow:
     """Insert or update a deck by deck_id. For scrape duplicate protection (re-scrape same event = update)."""
     row = session.query(DeckRow).filter(DeckRow.deck_id == d["deck_id"]).first()
@@ -289,6 +296,23 @@ def delete_deck(session: Session, deck_id: int) -> bool:
     return False
 
 
+def update_deck_event(
+    session: Session,
+    deck_id: int,
+    event_id: str,
+    event_name: str,
+    date: str,
+) -> bool:
+    """Update a deck's event assignment (move to another event). Returns True if deck existed."""
+    row = session.query(DeckRow).filter(DeckRow.deck_id == deck_id).first()
+    if not row:
+        return False
+    row.event_id = _event_id_str(event_id)
+    row.event_name = event_name or row.event_name
+    row.date = date or row.date
+    return True
+
+
 def next_manual_deck_id(session: Session) -> int:
     """Return next deck_id for manual uploads (>= MANUAL_DECK_ID_START)."""
     from sqlalchemy import func
@@ -311,6 +335,7 @@ def event_row_to_dict(row: EventRow) -> dict:
         "date": row.date,
         "format_id": row.format_id,
         "player_count": row.player_count or 0,
+        "origin": row.origin or ORIGIN_MTGTOP8,
     }
 
 
@@ -438,6 +463,38 @@ def delete_event(session: Session, event_id: int | str, delete_decks: bool = Fal
         session.query(DeckRow).filter(DeckRow.event_id == eid).delete()
     session.delete(row)
     return True
+
+
+def reassign_decks_to_event(
+    session: Session,
+    from_event_id: int | str,
+    to_event_id: str,
+    new_event_name: str,
+    new_date: str,
+) -> int:
+    """Move all decks from from_event_id to to_event_id and set event_name/date. Returns count of decks moved."""
+    eid_from = _event_id_str(from_event_id)
+    eid_to = _event_id_str(to_event_id)
+    rows = session.query(DeckRow).filter(DeckRow.event_id == eid_from).all()
+    for row in rows:
+        row.event_id = eid_to
+        row.event_name = new_event_name or row.event_name
+        row.date = new_date or row.date
+    return len(rows)
+
+
+def reassign_upload_links_to_event(
+    session: Session,
+    from_event_id: int | str,
+    to_event_id: str,
+) -> int:
+    """Update all upload links pointing at from_event_id to to_event_id. Returns count updated."""
+    eid_from = _event_id_str(from_event_id)
+    eid_to = _event_id_str(to_event_id)
+    rows = session.query(EventUploadLinkRow).filter(EventUploadLinkRow.event_id == eid_from).all()
+    for row in rows:
+        row.event_id = eid_to
+    return len(rows)
 
 
 # --- Repository helpers: event_upload_links ---
@@ -651,6 +708,21 @@ def update_matchup(
     if round is not None:
         row.round = round
     return True
+
+
+def reassign_matchups_to_deck(
+    session: Session,
+    from_deck_id: int,
+    to_deck_id: int,
+) -> tuple[int, int]:
+    """Move all matchups from from_deck to to_deck (merge). Updates deck_id and opponent_deck_id. Returns (updated_as_deck, updated_as_opponent)."""
+    rows_deck = session.query(MatchupRow).filter(MatchupRow.deck_id == from_deck_id).all()
+    rows_opp = session.query(MatchupRow).filter(MatchupRow.opponent_deck_id == from_deck_id).all()
+    for r in rows_deck:
+        r.deck_id = to_deck_id
+    for r in rows_opp:
+        r.opponent_deck_id = to_deck_id
+    return len(rows_deck), len(rows_opp)
 
 
 def list_matchups_for_event(session: Session, event_id: str) -> list[dict]:

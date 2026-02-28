@@ -66,7 +66,20 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 from api.routers import router as api_router
 from api.schemas.auth_feedback import CardLookupBody, LoginBody, SiteFeedbackBody
 from api.schemas.decks import DeckCardUpdate, DeckListBody, ImportMoxfieldBody, SubmitDeckBody, UpdateDeckBody
-from api.schemas.events import CreateEventBody, EventResponse, LoadBody, NewEventBody, ScrapeBody, UploadDecksBody
+from api.schemas.events import (
+    CreateEventBody,
+    DeckPairPreview,
+    DECK_MERGE_FIELDS,
+    EventResponse,
+    EVENT_MERGE_FIELDS,
+    LoadBody,
+    MergeConflictItem,
+    MergeEventsBody,
+    MergePreviewResponse,
+    NewEventBody,
+    ScrapeBody,
+    UploadDecksBody,
+)
 from api.schemas.matchups import AdminMatchupsBody, MatchupItem, PatchMatchupBody
 from api.schemas.players import PlayerAliasBody, PlayerEmailBody
 from api.schemas.settings import (
@@ -327,6 +340,7 @@ def _event_from_deck_dict(d: dict) -> dict:
         "date": d.get("date", ""),
         "format_id": d.get("format_id", ""),
         "player_count": d.get("player_count", 0),
+        "origin": d.get("origin", "mtgtop8"),
     }
 
 
@@ -988,6 +1002,191 @@ def create_event(body: CreateEventBody):
         raise HTTPException(status_code=500, detail="Failed to create event")
 
 
+@app.get("/api/events/event-ids-with-discrepancies", dependencies=[Depends(require_admin), Depends(require_database)])
+def get_event_ids_with_discrepancies():
+    """Return event_ids that have at least one matchup discrepancy (admin)."""
+    with _db.session_scope() as session:
+        rows = _db.list_all_matchups_with_event_id(session)
+    by_event: dict[str, list[dict]] = {}
+    for r in rows:
+        eid = (r.get("event_id") or "").strip()
+        if not eid:
+            continue
+        by_event.setdefault(eid, []).append(r)
+    event_ids_with_discrepancies: list[str] = []
+    for eid, event_rows in by_event.items():
+        by_pair: dict[tuple[int, int], list[dict]] = {}
+        for r in event_rows:
+            key = tuple(sorted([r["deck_id"], r["opponent_deck_id"]]))
+            by_pair.setdefault(key, []).append(r)
+        for (deck_a, deck_b), matchups in by_pair.items():
+            if len(matchups) != 2:
+                continue
+            from_a = next((m for m in matchups if m["deck_id"] == deck_a), None)
+            from_b = next((m for m in matchups if m["deck_id"] == deck_b), None)
+            if from_a is None or from_b is None:
+                continue
+            r1 = from_a.get("result") or ""
+            r2 = from_b.get("result") or ""
+            if not _matchup_result_consistent(r1, r2):
+                event_ids_with_discrepancies.append(eid)
+                break
+    return {"event_ids": event_ids_with_discrepancies}
+
+
+def _event_row_to_merge_dict(row) -> dict:
+    """Event row to dict keyed by EVENT_MERGE_FIELDS (name -> event_name)."""
+    return {
+        "event_name": row.name or "",
+        "store": row.store or "",
+        "location": row.location or "",
+        "date": row.date or "",
+        "format_id": row.format_id or "",
+        "player_count": row.player_count or 0,
+    }
+
+
+def _deck_merge_conflicts(deck_keep: dict, deck_remove: dict) -> list[MergeConflictItem]:
+    """Compare two deck dicts on DECK_MERGE_FIELDS; return list of conflicts (different values)."""
+    conflicts = []
+    for field in DECK_MERGE_FIELDS:
+        v_keep = deck_keep.get(field)
+        v_remove = deck_remove.get(field)
+        if field == "player_count":
+            v_keep = 0 if v_keep is None else int(v_keep)
+            v_remove = 0 if v_remove is None else int(v_remove)
+        if field in ("commanders", "mainboard", "sideboard"):
+            # Compare lists (order-sensitive for mainboard/sideboard)
+            if v_keep != v_remove:
+                conflicts.append(MergeConflictItem(field=field, value_keep=v_keep, value_remove=v_remove))
+        else:
+            s_keep = (v_keep or "").strip() if isinstance(v_keep, str) else (v_keep if v_keep is not None else "")
+            s_remove = (v_remove or "").strip() if isinstance(v_remove, str) else (v_remove if v_remove is not None else "")
+            if s_keep != s_remove:
+                conflicts.append(MergeConflictItem(field=field, value_keep=v_keep, value_remove=v_remove))
+    return conflicts
+
+
+@app.get(
+    "/api/events/merge-preview",
+    dependencies=[Depends(require_admin), Depends(require_database)],
+    response_model=MergePreviewResponse,
+)
+def merge_preview(
+    event_id_a: str = Query(..., alias="event_id_a"),
+    event_id_b: str = Query(..., alias="event_id_b"),
+):
+    """Preview merging two events. Cannot merge two MTGTop8 events. Prefer MTGTop8 data when merging manual + MTGTop8."""
+    with _db.session_scope() as session:
+        row_a = _db.get_event(session, event_id_a)
+        row_b = _db.get_event(session, event_id_b)
+    if not row_a:
+        raise HTTPException(status_code=404, detail=f"Event not found: {event_id_a}")
+    if not row_b:
+        raise HTTPException(status_code=404, detail=f"Event not found: {event_id_b}")
+    if row_a.event_id == row_b.event_id:
+        raise HTTPException(status_code=400, detail="Cannot merge an event with itself")
+
+    origin_a = row_a.origin or _db.ORIGIN_MTGTOP8
+    origin_b = row_b.origin or _db.ORIGIN_MTGTOP8
+    if origin_a == _db.ORIGIN_MTGTOP8 and origin_b == _db.ORIGIN_MTGTOP8:
+        return MergePreviewResponse(
+            can_merge=False,
+            error="Cannot merge two events imported from MTGTop8.",
+            event_a=_db.event_row_to_dict(row_a),
+            event_b=_db.event_row_to_dict(row_b),
+            conflicts=[],
+            merged_preview={},
+            keep_event_id="",
+            remove_event_id="",
+        )
+
+    # Determine which event to keep: prefer MTGTop8; if both manual, keep A remove B
+    if origin_a == _db.ORIGIN_MTGTOP8 and origin_b == _db.ORIGIN_MANUAL:
+        keep, remove = row_a, row_b
+    elif origin_a == _db.ORIGIN_MANUAL and origin_b == _db.ORIGIN_MTGTOP8:
+        keep, remove = row_b, row_a
+    else:
+        keep, remove = row_a, row_b
+
+    d_keep = _event_row_to_merge_dict(keep)
+    d_remove = _event_row_to_merge_dict(remove)
+    merged = {}
+    conflicts = []
+    for field in EVENT_MERGE_FIELDS:
+        v_keep = d_keep.get(field)
+        v_remove = d_remove.get(field)
+        # Normalize empty
+        if field == "player_count":
+            v_keep = 0 if v_keep is None else int(v_keep)
+            v_remove = 0 if v_remove is None else int(v_remove)
+        else:
+            v_keep = (v_keep or "").strip() if isinstance(v_keep, str) else (v_keep or "")
+            v_remove = (v_remove or "").strip() if isinstance(v_remove, str) else (v_remove or "")
+        has_keep = (v_keep != "" and v_keep is not None) if field != "player_count" else (v_keep is not None and v_keep != 0)
+        has_remove = (v_remove != "" and v_remove is not None) if field != "player_count" else (v_remove is not None and v_remove != 0)
+        if not has_keep and has_remove:
+            merged[field] = v_remove
+        elif has_keep and not has_remove:
+            merged[field] = v_keep
+        elif has_keep and has_remove:
+            if v_keep == v_remove:
+                merged[field] = v_keep
+            else:
+                merged[field] = v_keep  # default: prefer keep (MTGTop8 when mixed)
+                conflicts.append(MergeConflictItem(field=field, value_keep=v_keep, value_remove=v_remove))
+        else:
+            merged[field] = v_keep if field != "player_count" else 0
+
+    # Full merged_preview for API (include event_id of kept event)
+    merged_preview = {
+        "event_id": keep.event_id,
+        "event_name": merged["event_name"],
+        "store": merged["store"],
+        "location": merged["location"],
+        "date": merged["date"],
+        "format_id": merged["format_id"],
+        "player_count": merged["player_count"],
+    }
+
+    # Player/deck pairing: same canonical player in both events -> merge decks
+    deck_pairs: list[DeckPairPreview] = []
+    decks_keep_only: list[dict] = []
+    decks_remove_only: list[dict] = []
+    with _db.session_scope() as session:
+        decks_keep = _db.get_decks_by_event(session, keep.event_id)
+        decks_remove = _db.get_decks_by_event(session, remove.event_id)
+    keep_by_canonical: dict[str, dict] = {}
+    for d in decks_keep:
+        c = _normalize_player(d.get("player") or "")
+        keep_by_canonical[c] = d
+    paired_keep_ids: set[int] = set()
+    paired_remove_ids: set[int] = set()
+    for d in decks_remove:
+        c = _normalize_player(d.get("player") or "")
+        if c in keep_by_canonical:
+            k = keep_by_canonical[c]
+            paired_keep_ids.add(k["deck_id"])
+            paired_remove_ids.add(d["deck_id"])
+            pair_conflicts = _deck_merge_conflicts(k, d)
+            deck_pairs.append(DeckPairPreview(deck_keep=k, deck_remove=d, conflicts=pair_conflicts))
+    decks_keep_only = [d for d in decks_keep if d["deck_id"] not in paired_keep_ids]
+    decks_remove_only = [d for d in decks_remove if d["deck_id"] not in paired_remove_ids]
+
+    return MergePreviewResponse(
+        can_merge=True,
+        event_a=_db.event_row_to_dict(row_a),
+        event_b=_db.event_row_to_dict(row_b),
+        conflicts=conflicts,
+        merged_preview=merged_preview,
+        keep_event_id=keep.event_id,
+        remove_event_id=remove.event_id,
+        deck_pairs=deck_pairs,
+        decks_keep_only=decks_keep_only,
+        decks_remove_only=decks_remove_only,
+    )
+
+
 @app.get("/api/events/{event_id}", response_model=EventResponse)
 def get_event_by_id(event_id: str):
     """Get a single event by ID. Returns 404 if not found."""
@@ -1048,6 +1247,132 @@ def delete_event_endpoint(event_id: str):
     except Exception as e:
         logger.exception("Delete event failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post(
+    "/api/events/merge",
+    dependencies=[Depends(require_admin), Depends(require_database)],
+)
+def merge_events(body: MergeEventsBody):
+    """Merge two events: move all decks and links to the kept event, update kept event with resolved data, delete the removed event."""
+    with _db.session_scope() as session:
+        keep_row = _db.get_event(session, body.event_id_keep)
+        remove_row = _db.get_event(session, body.event_id_remove)
+    if not keep_row:
+        raise HTTPException(status_code=404, detail=f"Event not found: {body.event_id_keep!r}")
+    if not remove_row:
+        raise HTTPException(status_code=404, detail=f"Event not found: {body.event_id_remove!r}")
+    if keep_row.event_id == remove_row.event_id:
+        raise HTTPException(status_code=400, detail="Cannot merge an event with itself")
+    origin_keep = keep_row.origin or _db.ORIGIN_MTGTOP8
+    origin_remove = remove_row.origin or _db.ORIGIN_MANUAL
+    if origin_keep == _db.ORIGIN_MTGTOP8 and origin_remove == _db.ORIGIN_MTGTOP8:
+        raise HTTPException(status_code=400, detail="Cannot merge two events imported from MTGTop8.")
+
+    # Build merged same as preview (prefer keep, fill missing from remove), then apply resolutions
+    d_keep = _event_row_to_merge_dict(keep_row)
+    d_remove = _event_row_to_merge_dict(remove_row)
+    merged = {}
+    for field in EVENT_MERGE_FIELDS:
+        v_keep = d_keep.get(field)
+        v_remove = d_remove.get(field)
+        if field == "player_count":
+            v_keep = 0 if v_keep is None else int(v_keep)
+            v_remove = 0 if v_remove is None else int(v_remove)
+        has_keep = (v_keep not in (None, "")) if field != "player_count" else (v_keep is not None and v_keep != 0)
+        has_remove = (v_remove not in (None, "")) if field != "player_count" else (v_remove is not None and v_remove != 0)
+        if not has_keep and has_remove:
+            merged[field] = v_remove
+        elif has_keep and not has_remove:
+            merged[field] = v_keep
+        elif has_keep and has_remove:
+            merged[field] = v_keep if body.resolutions.get(field) != "remove" else v_remove
+        else:
+            merged[field] = v_keep if field != "player_count" else 0
+    event_name = merged.get("event_name") or ""
+    date = merged.get("date") or ""
+    try:
+        with _db.session_scope() as session:
+            decks_keep = _db.get_decks_by_event(session, keep_row.event_id)
+            decks_remove = _db.get_decks_by_event(session, remove_row.event_id)
+        keep_by_canonical = {}
+        for d in decks_keep:
+            c = _normalize_player(d.get("player") or "")
+            keep_by_canonical[c] = d
+        auto_pairs: list[tuple[dict, dict]] = []
+        paired_remove_ids: set[int] = set()
+        for d in decks_remove:
+            c = _normalize_player(d.get("player") or "")
+            if c in keep_by_canonical:
+                auto_pairs.append((keep_by_canonical[c], d))
+                paired_remove_ids.add(d["deck_id"])
+        all_pairs: list[tuple[int, int]] = [(k["deck_id"], r["deck_id"]) for k, r in auto_pairs]
+        for pm in body.player_merges:
+            if pm.deck_id_remove not in paired_remove_ids:
+                all_pairs.append((pm.deck_id_keep, pm.deck_id_remove))
+                paired_remove_ids.add(pm.deck_id_remove)
+        deck_keep_by_id = {d["deck_id"]: d for d in decks_keep}
+        deck_remove_by_id = {d["deck_id"]: d for d in decks_remove}
+
+        with _db.session_scope() as session:
+            for (deck_id_keep, deck_id_remove) in all_pairs:
+                d_keep = deck_keep_by_id.get(deck_id_keep)
+                d_remove = deck_remove_by_id.get(deck_id_remove)
+                if not d_keep or not d_remove:
+                    continue
+                key = f"{deck_id_keep}-{deck_id_remove}"
+                res = body.deck_resolutions.get(key, {})
+                merged_deck = dict(d_keep)
+                merged_deck["event_id"] = keep_row.event_id
+                merged_deck["event_name"] = event_name
+                merged_deck["date"] = date
+                for field in DECK_MERGE_FIELDS:
+                    choice = res.get(field)
+                    v_keep = d_keep.get(field)
+                    v_remove = d_remove.get(field)
+                    if choice == "remove":
+                        merged_deck[field] = v_remove if field != "player_count" else (v_remove if v_remove is not None else 0)
+                        if field in ("commanders", "mainboard", "sideboard") and merged_deck[field] is None:
+                            merged_deck[field] = []
+                    else:
+                        has_keep = (v_keep not in (None, "", [])) if field != "player_count" else (v_keep is not None)
+                        merged_deck[field] = v_keep if has_keep else v_remove
+                        if merged_deck[field] is None:
+                            merged_deck[field] = [] if field in ("commanders", "mainboard", "sideboard") else (0 if field == "player_count" else "")
+                _db.upsert_deck(session, merged_deck, origin=keep_row.origin or _db.ORIGIN_MTGTOP8)
+                _db.reassign_matchups_to_deck(session, deck_id_remove, deck_id_keep)
+                _db.delete_deck(session, deck_id_remove)
+
+            unpaired_remove_ids = [d["deck_id"] for d in decks_remove if d["deck_id"] not in paired_remove_ids]
+            for deck_id in unpaired_remove_ids:
+                _db.update_deck_event(session, deck_id, keep_row.event_id, event_name, date)
+
+            _db.update_event(
+                session,
+                keep_row.event_id,
+                event_name=event_name,
+                date=date,
+                format_id=merged.get("format_id"),
+                player_count=merged.get("player_count"),
+                store=merged.get("store"),
+                location=merged.get("location"),
+            )
+            _db.reassign_upload_links_to_event(session, remove_row.event_id, keep_row.event_id)
+            _db.delete_event(session, remove_row.event_id, delete_decks=False)
+        _load_decks_from_db()
+        _invalidate_events_cache()
+        decks_merged = len(all_pairs)
+        decks_moved = len(unpaired_remove_ids)
+        return {
+            "message": "Events merged.",
+            "keep_event_id": keep_row.event_id,
+            "remove_event_id": remove_row.event_id,
+            "decks_merged": decks_merged,
+            "decks_moved": decks_moved,
+        }
+    except Exception as e:
+        logger.exception("Merge events failed: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to merge events.")
 
 
 @app.post("/api/events/{event_id}/decks", dependencies=[Depends(require_admin), Depends(require_database)])
@@ -2558,38 +2883,6 @@ def get_matchups_summary(
         "matrix": matrix,
         "min_matches": min_matches,
     }
-
-
-@app.get("/api/events/event-ids-with-discrepancies", dependencies=[Depends(require_admin), Depends(require_database)])
-def get_event_ids_with_discrepancies():
-    """Return event_ids that have at least one matchup discrepancy (admin)."""
-    with _db.session_scope() as session:
-        rows = _db.list_all_matchups_with_event_id(session)
-    by_event: dict[str, list[dict]] = {}
-    for r in rows:
-        eid = (r.get("event_id") or "").strip()
-        if not eid:
-            continue
-        by_event.setdefault(eid, []).append(r)
-    event_ids_with_discrepancies: list[str] = []
-    for eid, event_rows in by_event.items():
-        by_pair: dict[tuple[int, int], list[dict]] = {}
-        for r in event_rows:
-            key = tuple(sorted([r["deck_id"], r["opponent_deck_id"]]))
-            by_pair.setdefault(key, []).append(r)
-        for (deck_a, deck_b), matchups in by_pair.items():
-            if len(matchups) != 2:
-                continue
-            from_a = next((m for m in matchups if m["deck_id"] == deck_a), None)
-            from_b = next((m for m in matchups if m["deck_id"] == deck_b), None)
-            if from_a is None or from_b is None:
-                continue
-            r1 = from_a.get("result") or ""
-            r2 = from_b.get("result") or ""
-            if not _matchup_result_consistent(r1, r2):
-                event_ids_with_discrepancies.append(eid)
-                break
-    return {"event_ids": event_ids_with_discrepancies}
 
 
 @app.get("/api/events/{event_id}/matchup-discrepancies", dependencies=[Depends(require_admin), Depends(require_database)])

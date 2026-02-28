@@ -271,6 +271,54 @@ export async function deleteEvent(eventId: number | string): Promise<{ event_id:
   return fetchApi(`/events/${encodeURIComponent(String(eventId))}`, { method: 'DELETE' })
 }
 
+/** Admin only. Preview merging two events. Cannot merge two MTGTop8 events. */
+export interface MergeConflictItem {
+  field: string
+  value_keep: string | number | unknown[] | null | unknown
+  value_remove: string | number | unknown[] | null | unknown
+}
+
+export interface DeckPairPreview {
+  deck_keep: Deck
+  deck_remove: Deck
+  conflicts: MergeConflictItem[]
+}
+
+export interface MergePreviewResponse {
+  can_merge: boolean
+  error?: string
+  event_a: Event
+  event_b: Event
+  conflicts: MergeConflictItem[]
+  merged_preview: Event
+  keep_event_id: string
+  remove_event_id: string
+  deck_pairs: DeckPairPreview[]
+  decks_keep_only: Deck[]
+  decks_remove_only: Deck[]
+}
+
+export async function getMergePreview(eventIdA: string, eventIdB: string): Promise<MergePreviewResponse> {
+  const params = new URLSearchParams({ event_id_a: eventIdA, event_id_b: eventIdB })
+  return fetchApi(`/events/merge-preview?${params.toString()}`)
+}
+
+/** Admin only. Merge two events (players/decks merged when same or manually paired; unpaired decks moved). */
+export interface PlayerMergePair {
+  deck_id_keep: number
+  deck_id_remove: number
+}
+
+export async function mergeEvents(body: {
+  event_id_keep: string
+  event_id_remove: string
+  resolutions?: Record<string, 'keep' | 'remove'>
+  player_merges?: PlayerMergePair[]
+  deck_resolutions?: Record<string, Record<string, 'keep' | 'remove'>>
+}): Promise<{ message: string; keep_event_id: string; remove_event_id: string; decks_merged: number; decks_moved: number }> {
+  return fetchApi('/events/merge', { method: 'POST', body: JSON.stringify(body) })
+}
+
 export async function addDeckToEvent(
   eventId: number | string
 ): Promise<{ event_id: string; deck_id: number; message: string }> {
