@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { getMatchupsSummary } from '../api'
 import EventSelector from '../components/EventSelector'
 import FiltersPanel from '../components/FiltersPanel'
@@ -43,6 +43,11 @@ export default function Matchups() {
   const archetypeButtonRef = useRef<HTMLButtonElement>(null)
   const [archetypeFlipAbove, setArchetypeFlipAbove] = useState(false)
   const [archetypeMaxHeight, setArchetypeMaxHeight] = useState(DROPDOWN_MAX_HEIGHT)
+  const [hoveredCell, setHoveredCell] = useState<{
+    archetype: string
+    opponent: string
+    rect: DOMRect
+  } | null>(null)
 
   useEffect(() => {
     if (eventMetadataError) toast.error(reportError(new Error(eventMetadataError)))
@@ -98,6 +103,15 @@ export default function Matchups() {
       return [...next]
     })
   }
+
+  const matchupsByPair = useMemo(() => {
+    const m = new Map<string, (Awaited<ReturnType<typeof getMatchupsSummary>>['list'][number])>()
+    if (!summary) return m
+    for (const row of summary.list) {
+      m.set(`${row.archetype}|||${row.opponent_archetype}`, row)
+    }
+    return m
+  }, [summary])
 
   return (
     <div className="page">
@@ -345,11 +359,29 @@ export default function Matchups() {
                           if (i === j) return <td key={j} style={{ padding: '0.35rem', backgroundColor: 'rgba(128,128,128,0.2)' }} title="Same archetype"> </td>
                           if (cell == null) return <td key={j} style={{ padding: '0.35rem', color: 'var(--text-muted)' }}>—</td>
                           const pct = cell * 100
+                          const opponent = summary.archetypes[j]
+                          const key = `${a}|||${opponent}`
+                          const matchupRow = matchupsByPair.get(key)
                           return (
                             <td
                               key={j}
-                              style={{ padding: '0.35rem', backgroundColor: heatmapColor(pct) }}
-                              title={`${summary!.archetypes[i]} win rate against ${summary!.archetypes[j]}: ${pct.toFixed(1)}%`}
+                              style={{ padding: '0.35rem', backgroundColor: heatmapColor(pct), cursor: matchupRow ? 'help' : 'default' }}
+                              onMouseEnter={(e) => {
+                                if (!matchupRow) return
+                                setHoveredCell({ archetype: a, opponent, rect: e.currentTarget.getBoundingClientRect() })
+                              }}
+                              onMouseMove={(e) => {
+                                if (!matchupRow) return
+                                setHoveredCell({ archetype: a, opponent, rect: e.currentTarget.getBoundingClientRect() })
+                              }}
+                              onMouseLeave={() => setHoveredCell(null)}
+                              onFocus={(e) => {
+                                if (!matchupRow) return
+                                setHoveredCell({ archetype: a, opponent, rect: e.currentTarget.getBoundingClientRect() })
+                              }}
+                              onBlur={() => setHoveredCell(null)}
+                              tabIndex={matchupRow ? 0 : -1}
+                              aria-label={matchupRow ? `${a} vs ${opponent}` : undefined}
                             >
                               {pct.toFixed(0)}%
                             </td>
@@ -361,6 +393,50 @@ export default function Matchups() {
                 </tbody>
               </table>
             </div>
+            {hoveredCell && (() => {
+              const row = matchupsByPair.get(`${hoveredCell.archetype}|||${hoveredCell.opponent}`)
+              if (!row) return null
+              const drawPct = row.matches > 0 ? (row.draws / row.matches) * 100 : 0
+              const left = hoveredCell.rect.left + hoveredCell.rect.width / 2
+              const top = hoveredCell.rect.bottom
+              return (
+                <div
+                  role="tooltip"
+                  style={{
+                    position: 'fixed',
+                    left,
+                    top,
+                    transform: 'translate(-50%, 8px)',
+                    zIndex: 1000,
+                    pointerEvents: 'none',
+                    background: 'var(--bg-card)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    padding: '0.5rem 0.6rem',
+                    color: 'var(--text)',
+                    boxShadow: '0 10px 26px rgba(0,0,0,0.25)',
+                    minWidth: 220,
+                    maxWidth: 320,
+                    fontSize: '0.85rem',
+                    lineHeight: 1.25,
+                  }}
+                >
+                  <div style={{ fontWeight: 700, marginBottom: '0.35rem' }}>
+                    {row.archetype} vs {row.opponent_archetype}
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: '0.75rem', rowGap: '0.2rem' }}>
+                    <div style={{ color: 'var(--text-muted)' }}>Win %</div>
+                    <div style={{ textAlign: 'right' }}>{(row.win_rate * 100).toFixed(1)}%</div>
+                    <div style={{ color: 'var(--text-muted)' }}>Draw %</div>
+                    <div style={{ textAlign: 'right' }}>{drawPct.toFixed(1)}%</div>
+                    <div style={{ color: 'var(--text-muted)' }}>Record</div>
+                    <div style={{ textAlign: 'right' }}>{row.wins}–{row.losses}–{row.draws}</div>
+                    <div style={{ color: 'var(--text-muted)' }}>Matches</div>
+                    <div style={{ textAlign: 'right' }}>{row.matches}</div>
+                  </div>
+                </div>
+              )
+            })()}
           </div>
         )
       })()}
