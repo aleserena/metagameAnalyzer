@@ -70,6 +70,7 @@ from api.schemas.events import (
     CreateEventBody,
     DeckPairPreview,
     DECK_MERGE_FIELDS,
+    EventExportData,
     EventResponse,
     EVENT_MERGE_FIELDS,
     LoadBody,
@@ -1247,6 +1248,71 @@ def get_event_by_id(event_id: str):
     raise HTTPException(status_code=404, detail="Event not found")
 
 
+@app.get(
+    "/api/events/{event_id}/export",
+    dependencies=[Depends(require_admin_or_event_edit)],
+)
+def export_event(event_id: str):
+    """Export an event and all related data (decks, matchups, player emails) as JSON."""
+    event_dict: dict | None = None
+    decks: list[dict] = []
+    matchups: list[dict] = []
+    player_emails: dict[str, str] = {}
+
+    if _database_available():
+        try:
+            with _db.session_scope() as session:
+                row = _db.get_event(session, event_id)
+                if not row:
+                    raise HTTPException(status_code=404, detail="Event not found")
+                event_dict = _db.event_row_to_dict(row)
+                decks = _db.get_decks_by_event(session, event_id)
+
+                # Collect matchups for all decks in this event
+                for d in decks:
+                    deck_id = d.get("deck_id")
+                    if deck_id is None:
+                        continue
+                    rows = _db.list_matchups_by_deck(session, deck_id)
+                    if rows:
+                        matchups.extend(rows)
+
+                # Collect player emails only for players in this event
+                players = {
+                    (d.get("player") or "").strip()
+                    for d in decks
+                    if (d.get("player") or "").strip()
+                }
+                if players:
+                    player_emails = _db.get_emails_for_players(session, list(players))
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("Failed to export event from database: %s", e)
+            raise HTTPException(status_code=500, detail="Failed to export event")
+    else:
+        ev = _get_event_by_id_from_decks(event_id)
+        if not ev:
+            raise HTTPException(status_code=404, detail="Event not found")
+        event_dict = ev
+        decks = [d for d in _decks if str(d.get("event_id")) == str(event_id)]
+        matchups = []
+        player_emails = {}
+
+    payload = EventExportData(
+        schema_version=1,
+        event=EventResponse(**event_dict),
+        decks=decks,
+        matchups=matchups,
+        player_emails=player_emails,
+    )
+    filename = f"event-{event_dict['event_id']}.json"
+    return JSONResponse(
+        content=payload.model_dump(),
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.put("/api/events/{event_id}", dependencies=[Depends(require_admin_or_event_edit), Depends(require_database)])
 def update_event_endpoint(
     event_id: str,
@@ -1289,6 +1355,110 @@ def delete_event_endpoint(event_id: str):
     except Exception as e:
         logger.exception("Delete event failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post(
+    "/api/events/import",
+    dependencies=[Depends(require_admin), Depends(require_database)],
+)
+def import_event(body: EventExportData):
+    """Import a new manual event (and all decks/matchups/emails) from an exported JSON payload."""
+    if body.schema_version != 1:
+        raise HTTPException(status_code=400, detail=f"Unsupported schema_version: {body.schema_version}")
+    if not _database_available():
+        raise HTTPException(status_code=503, detail="Database is required for importing events")
+
+    try:
+        with _db.session_scope() as session:
+            # Create new manual event with a fresh ID
+            new_event_id = _db.next_manual_event_id(session)
+            ev = body.event
+            row = _db.create_event(
+                session,
+                event_name=(ev.event_name or "").strip() or "Unnamed",
+                date=(ev.date or "").strip(),
+                format_id=(ev.format_id or "").strip() or "EDH",
+                origin=_db.ORIGIN_MANUAL,
+                event_id=new_event_id,
+                player_count=ev.player_count or 0,
+                store=(ev.store or "").strip(),
+                location=(ev.location or "").strip(),
+            )
+            event_dict = _db.event_row_to_dict(row)
+
+            # Map old deck_ids -> new manual deck_ids
+            decks_data = body.decks or []
+            deck_id_map: dict[int, int] = {}
+            next_deck_id = _db.next_manual_deck_id(session)
+            for deck_dict_raw in decks_data:
+                if "deck_id" not in deck_dict_raw:
+                    raise HTTPException(status_code=400, detail="Each deck must include a 'deck_id' field")
+                try:
+                    old_deck_id = int(deck_dict_raw.get("deck_id"))
+                except Exception:
+                    raise HTTPException(status_code=400, detail="Each deck 'deck_id' must be an integer")
+                new_deck_id = next_deck_id
+                next_deck_id += 1
+                deck_id_map[old_deck_id] = new_deck_id
+
+                deck_data = dict(deck_dict_raw)
+                deck_data["deck_id"] = new_deck_id
+                deck_data["event_id"] = new_event_id
+                deck_data["event_name"] = event_dict.get("event_name") or deck_data.get("event_name") or ""
+                deck_data["date"] = event_dict.get("date") or deck_data.get("date") or ""
+                if not deck_data.get("format_id"):
+                    deck_data["format_id"] = event_dict.get("format_id", "") or "EDH"
+
+                deck_row = _db.dict_to_deck_row(deck_data, origin=_db.ORIGIN_MANUAL)
+                session.add(deck_row)
+
+            # Insert matchups, remapping deck IDs
+            matchups_data = body.matchups or []
+            per_deck_matchups: dict[int, list[dict]] = {}
+            for m_raw in matchups_data:
+                if "deck_id" not in m_raw:
+                    continue
+                try:
+                    old_deck_id = int(m_raw.get("deck_id"))
+                except Exception:
+                    continue
+                new_deck_id = deck_id_map.get(old_deck_id)
+                if new_deck_id is None:
+                    continue
+
+                opp_old = m_raw.get("opponent_deck_id")
+                new_opp_id = None
+                if opp_old is not None:
+                    try:
+                        new_opp_id = deck_id_map.get(int(opp_old))
+                    except Exception:
+                        new_opp_id = None
+
+                item = {
+                    "opponent_player": (m_raw.get("opponent_player") or "").strip(),
+                    "opponent_deck_id": new_opp_id,
+                    "opponent_archetype": m_raw.get("opponent_archetype"),
+                    "result": (m_raw.get("result") or "loss").strip() or "loss",
+                    "result_note": (m_raw.get("result_note") or None),
+                    "round": m_raw.get("round"),
+                }
+                per_deck_matchups.setdefault(new_deck_id, []).append(item)
+
+            for deck_id, items in per_deck_matchups.items():
+                _db.upsert_matchups_for_deck(session, deck_id, items)
+
+            # Restore player emails for players in this event
+            for player, email in (body.player_emails or {}).items():
+                _db.set_player_email(session, player, email)
+
+        _load_decks_from_db()
+        _invalidate_events_cache()
+        return {"event_id": event_dict["event_id"], "message": "imported", "deck_count": len(decks_data)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Import event failed: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to import event")
 
 
 @app.post(

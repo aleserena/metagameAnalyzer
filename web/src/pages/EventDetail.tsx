@@ -22,6 +22,7 @@ import {
   getDeckMatchups,
   updateDeckMatchups,
   createEventUploadLinks,
+  exportEvent,
 } from '../api'
 import type { EventWithOrigin } from '../api'
 import type { Deck } from '../types'
@@ -117,6 +118,7 @@ export default function EventDetail() {
   const [matchupsList, setMatchupsList] = useState<Array<{ opponent_player: string; result: string; intentional_draw: boolean }>>([])
   const [loadingMatchups, setLoadingMatchups] = useState(false)
   const [savingMatchups, setSavingMatchups] = useState(false)
+  const [exportingEvent, setExportingEvent] = useState(false)
 
   const canEditEvent = user === 'admin' || eventEditMode
   const canDeleteEvent = user === 'admin'
@@ -291,6 +293,32 @@ export default function EventDetail() {
       })
       .catch((e: unknown) => toast.error(reportError(e)))
       .finally(() => setAddingDecks(false))
+  }
+
+  const handleExportEvent = () => {
+    if (!eventId || !event) return
+    setExportingEvent(true)
+    exportEvent(eventId)
+      .then((blob) => {
+        const url = window.URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        const rawName = (event.event_name || 'event').toString()
+        const slug = rawName
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '') || 'event'
+        const datePart = (event.date || '').toString().replace(/\//g, '-')
+        const filename = `event-${String(eventId)}${datePart ? `-${datePart}` : ''}-${slug}.json`
+        link.href = url
+        link.download = filename
+        document.body.appendChild(link)
+        link.click()
+        link.remove()
+        window.URL.revokeObjectURL(url)
+        toast.success('Event exported')
+      })
+      .catch((e: unknown) => toast.error(reportError(e)))
+      .finally(() => setExportingEvent(false))
   }
 
   const handleDeleteClick = () => {
@@ -732,6 +760,14 @@ export default function EventDetail() {
                     )}
                   </>
                 )}
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={handleExportEvent}
+                  disabled={exportingEvent}
+                >
+                  {exportingEvent ? 'Exporting…' : 'Export event'}
+                </button>
                 {canDeleteEvent && (
                   <button type="button" className="btn" style={{ color: 'var(--danger, #c00)' }} onClick={handleDeleteClick} disabled={deleting}>
                     Delete event

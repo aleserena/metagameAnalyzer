@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import {
   getEvents,
   createEvent,
+  importEvent,
   getEventIdsWithDiscrepancies,
   getEventIdsWithMissingDecks,
   getEventIdsWithMissingMatchups,
@@ -70,6 +71,8 @@ export default function Events() {
   const [mergeLoading, setMergeLoading] = useState(false)
   const [mergeSubmitting, setMergeSubmitting] = useState(false)
   const [hoveredIssuesEventId, setHoveredIssuesEventId] = useState<string | null>(null)
+  const [importing, setImporting] = useState(false)
+  const importInputRef = useRef<HTMLInputElement | null>(null)
   const { data: discrepancyData } = useFetch<{ event_ids: string[] }>(
     () => (user === 'admin' ? getEventIdsWithDiscrepancies() : Promise.resolve({ event_ids: [] })),
     [user]
@@ -100,6 +103,43 @@ export default function Events() {
   useEffect(() => {
     if (error) toast.error(reportError(new Error(error)))
   }, [error])
+
+  const handleImportClick = () => {
+    importInputRef.current?.click()
+  }
+
+  const handleImportFileChange: React.ChangeEventHandler<HTMLInputElement> = (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setImporting(true)
+    const reader = new FileReader()
+    reader.onload = () => {
+      try {
+        const text = String(reader.result ?? '')
+        const json = JSON.parse(text)
+        importEvent(json)
+          .then(() => {
+            toast.success('Event imported')
+            refetch()
+          })
+          .catch((err: unknown) => toast.error(reportError(err)))
+          .finally(() => {
+            setImporting(false)
+            if (importInputRef.current) importInputRef.current.value = ''
+          })
+      } catch {
+        toast.error('Invalid JSON file')
+        setImporting(false)
+        if (importInputRef.current) importInputRef.current.value = ''
+      }
+    }
+    reader.onerror = () => {
+      toast.error('Failed to read file')
+      setImporting(false)
+      if (importInputRef.current) importInputRef.current.value = ''
+    }
+    reader.readAsText(file)
+  }
 
   const handleCreate = () => {
     const name = newName.trim() || 'Unnamed'
@@ -381,6 +421,21 @@ export default function Events() {
             <button type="button" className="btn btn-primary" onClick={handleCreate} disabled={creating}>
               {creating ? 'Creating…' : 'Create event'}
             </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={handleImportClick}
+              disabled={importing}
+            >
+              {importing ? 'Importing…' : 'Import event'}
+            </button>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept="application/json,.json"
+              style={{ display: 'none' }}
+              onChange={handleImportFileChange}
+            />
           </div>
         </section>
       )}

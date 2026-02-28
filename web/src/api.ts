@@ -262,6 +262,18 @@ export async function createEvent(body: {
   return fetchApi('/events', { method: 'POST', body: JSON.stringify(body) })
 }
 
+export async function exportEvent(eventId: number | string): Promise<Blob> {
+  return fetchWithAuth(
+    `/events/${encodeURIComponent(String(eventId))}/export`,
+    { method: 'GET' },
+    'blob'
+  ) as Promise<Blob>
+}
+
+export async function importEvent(body: unknown): Promise<{ event_id: string; message: string; deck_count?: number }> {
+  return fetchApi('/events/import', { method: 'POST', body: JSON.stringify(body) })
+}
+
 export async function updateEvent(
   eventId: number | string,
   params: { event_name?: string; date?: string; format_id?: string; player_count?: number; store?: string; location?: string }
