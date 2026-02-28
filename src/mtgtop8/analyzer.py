@@ -200,13 +200,15 @@ def top_cards_main(
     rank_weights: dict[str, float] | None = None,
     include_basic_lands: bool = False,
 ) -> list[dict[str, Any]]:
-    """Top cards in mainboard: play rate %, total copies."""
+    """Top cards in mainboard: play rate %, total copies, conversion rate (top 8)."""
     deck_count = len(decks)
     card_decks: dict[str, set[int]] = {}
+    card_decks_top8: dict[str, set[int]] = {}
     card_copies: dict[str, float] = {}
 
     for d in decks:
         w = _get_weight(d.rank, rank_weights) if placement_weighted else 1.0
+        made_top8 = is_top8(d.rank)
         for qty, card in effective_mainboard(d):
             if not include_basic_lands and card in BASIC_LANDS:
                 continue
@@ -214,19 +216,27 @@ def top_cards_main(
                 continue
             if card not in card_decks:
                 card_decks[card] = set()
+                card_decks_top8[card] = set()
                 card_copies[card] = 0.0
             card_decks[card].add(d.deck_id)
+            if made_top8:
+                card_decks_top8[card].add(d.deck_id)
             card_copies[card] += qty * w
 
-    return [
-        {
+    result = []
+    for c in sorted(card_decks.keys(), key=lambda x: -card_copies[x])[:100]:
+        decks_with = len(card_decks[c])
+        top8_with = len(card_decks_top8[c])
+        conversion = round(100 * top8_with / decks_with, 1) if decks_with else 0.0
+        result.append({
             "card": c,
-            "decks": len(card_decks[c]),
-            "play_rate_pct": round(100 * len(card_decks[c]) / deck_count, 1),
+            "decks": decks_with,
+            "play_rate_pct": round(100 * decks_with / deck_count, 1),
             "total_copies": round(card_copies[c], 1),
-        }
-        for c in sorted(card_decks.keys(), key=lambda x: -card_copies[x])
-    ][:100]
+            "decks_top8": top8_with,
+            "conversion_rate_pct": conversion,
+        })
+    return result
 
 
 def top_cards_sideboard(
