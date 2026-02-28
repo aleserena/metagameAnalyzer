@@ -24,6 +24,7 @@ import {
   createEventUploadLinks,
   exportEvent,
   getPlayers,
+  getCardLookup,
 } from '../api'
 import type { EventWithOrigin } from '../api'
 import type { Deck } from '../types'
@@ -105,6 +106,7 @@ export default function EventDetail() {
   const [uploadDeckForDeckId, setUploadDeckForDeckId] = useState<number | null>(null)
   const [uploadDeckListText, setUploadDeckListText] = useState('')
   const [uploadingDeck, setUploadingDeck] = useState(false)
+  const [uploadInvalidCards, setUploadInvalidCards] = useState<string[] | null>(null)
   const [confirmDeleteEvent, setConfirmDeleteEvent] = useState(false)
   const [confirmDeleteDeckId, setConfirmDeleteDeckId] = useState<number | null>(null)
   const [sendingMissingLinks, setSendingMissingLinks] = useState(false)
@@ -250,19 +252,38 @@ export default function EventDetail() {
     setBulkDeckEdits({})
   }
 
-  const saveEdit = () => {
+  const saveEdit = async () => {
     if (!eventId) return
+    if (isEDH && decks.length > 0) {
+      const commanderNames = [...new Set(decks.map((d) => getDeckEdit(d).archetype.trim()).filter(Boolean))]
+      if (commanderNames.length > 0) {
+        setSaving(true)
+        try {
+          const lookup = await getCardLookup(commanderNames)
+          const invalid = commanderNames.filter((n) => !lookup[n] || (lookup[n] as { error?: string }).error)
+          if (invalid.length > 0) {
+            toast.error(`Commander(s) not found: ${invalid.join(', ')}. Please correct before saving.`)
+            setSaving(false)
+            return
+          }
+        } catch (e) {
+          toast.error(reportError(e))
+          setSaving(false)
+          return
+        }
+      }
+    }
     setSaving(true)
-    updateEvent(eventId, {
-      event_name: editName,
-      date: editDate,
-      format_id: editFormatId,
-      player_count: editPlayerCount,
-      store: editStore,
-      location: editLocation,
-    })
-      .then(() => {
-        if (decks.length === 0) return Promise.resolve() as Promise<void>
+    try {
+      await updateEvent(eventId, {
+        event_name: editName,
+        date: editDate,
+        format_id: editFormatId,
+        player_count: editPlayerCount,
+        store: editStore,
+        location: editLocation,
+      })
+      if (decks.length > 0) {
         const deckPromises = decks.map((d) => {
           const edit = getDeckEdit(d)
           const payload: Parameters<typeof updateDeck>[1] = {
@@ -276,21 +297,22 @@ export default function EventDetail() {
           }
           return updateDeck(d.deck_id, payload)
         })
-        return Promise.all(deckPromises).then((): void => undefined)
-      })
-      .then(() => {
-        refetch()
-        setEditing(false)
-        setBulkDeckEdits({})
-        toast.success(decks.length > 0 ? `Event and ${decks.length} deck${decks.length !== 1 ? 's' : ''} updated` : 'Event updated')
-        if (eventEditMode) {
-          clearEventEditToken()
-          setEventEditMode(false)
-          navigate(`/events/${eventId}`, { replace: true })
-        }
-      })
-      .catch((e) => toast.error(reportError(e)))
-      .finally(() => setSaving(false))
+        await Promise.all(deckPromises)
+      }
+      refetch()
+      setEditing(false)
+      setBulkDeckEdits({})
+      toast.success(decks.length > 0 ? `Event and ${decks.length} deck${decks.length !== 1 ? 's' : ''} updated` : 'Event updated')
+      if (eventEditMode) {
+        clearEventEditToken()
+        setEventEditMode(false)
+        navigate(`/events/${eventId}`, { replace: true })
+      }
+    } catch (e) {
+      toast.error(reportError(e))
+    } finally {
+      setSaving(false)
+    }
   }
 
   const maxDecks = typeof event?.player_count === 'number' && event.player_count > 0 ? event.player_count : Infinity
@@ -380,9 +402,26 @@ export default function EventDetail() {
     setEditDeckArchetype('')
   }
 
-  const saveDeckUpdate = () => {
+  const saveDeckUpdate = async () => {
     if (editingDeckId == null) return
     const isEDH = (event?.format_id ?? '').toLowerCase() === 'edh' || (event?.format_id ?? '').toLowerCase() === 'commander'
+    const commanderName = editDeckArchetype.trim()
+    if (isEDH && commanderName) {
+      setSavingDeck(true)
+      try {
+        const lookup = await getCardLookup([commanderName])
+        const invalid = !lookup[commanderName] || (lookup[commanderName] as { error?: string }).error
+        if (invalid) {
+          toast.error('Commander not found. Please select a valid card.')
+          return
+        }
+      } catch (e) {
+        toast.error(reportError(e))
+        return
+      } finally {
+        setSavingDeck(false)
+      }
+    }
     setSavingDeck(true)
     const payload: Parameters<typeof updateDeck>[1] = {
       name: editDeckName.trim() || undefined,
@@ -390,8 +429,8 @@ export default function EventDetail() {
       rank: editDeckRank.trim() || undefined,
       archetype: editDeckArchetype.trim() || undefined,
     }
-    if (isEDH && editDeckArchetype.trim()) {
-      payload.commanders = [editDeckArchetype.trim()]
+    if (isEDH && commanderName) {
+      payload.commanders = [commanderName]
     }
     updateDeck(editingDeckId, payload)
       .then(() => {
@@ -428,9 +467,10 @@ export default function EventDetail() {
   const closeUploadDeckModal = () => {
     setUploadDeckForDeckId(null)
     setUploadDeckListText('')
+    setUploadInvalidCards(null)
   }
 
-  const handleUploadDeckSubmit = () => {
+  const handleUploadDeckSubmit = async () => {
     if (uploadDeckForDeckId == null) return
     const parsed = parseMoxfieldDeckList(uploadDeckListText)
     const mainboard = parsed.mainboard.filter((c) => c.card.trim())
@@ -440,19 +480,36 @@ export default function EventDetail() {
     }
     const commanders = parsed.commanders.map((c) => c.card.trim()).filter(Boolean)
     const sideboard = parsed.sideboard.filter((c) => c.card.trim())
+    const uniqueNames = [
+      ...new Set([
+        ...commanders,
+        ...mainboard.map((c) => c.card),
+        ...sideboard.map((c) => c.card),
+      ]),
+    ].filter((n) => (n || '').trim())
+    setUploadInvalidCards(null)
     setUploadingDeck(true)
-    updateDeck(uploadDeckForDeckId, {
-      mainboard,
-      sideboard,
-      commanders: commanders.length > 0 ? commanders : undefined,
-    })
-      .then(() => {
-        refetch()
-        closeUploadDeckModal()
-        toast.success('Deck updated')
+    try {
+      const lookup = await getCardLookup(uniqueNames)
+      const invalid = uniqueNames.filter((n) => !lookup[n] || (lookup[n] as { error?: string }).error)
+      if (invalid.length > 0) {
+        setUploadInvalidCards(invalid)
+        toast.error(`${invalid.length} card(s) not found. Please correct or remove them.`)
+        return
+      }
+      await updateDeck(uploadDeckForDeckId, {
+        mainboard,
+        sideboard,
+        commanders: commanders.length > 0 ? commanders : undefined,
       })
-      .catch((e) => toast.error(reportError(e)))
-      .finally(() => setUploadingDeck(false))
+      refetch()
+      closeUploadDeckModal()
+      toast.success('Deck updated')
+    } catch (e) {
+      toast.error(reportError(e))
+    } finally {
+      setUploadingDeck(false)
+    }
   }
 
   const openUpdateMatchupsModal = (deckId: number) => {
@@ -1149,10 +1206,14 @@ export default function EventDetail() {
         >
           <UploadDeckForm
             deckListText={uploadDeckListText}
-            onDeckListChange={setUploadDeckListText}
+            onDeckListChange={(v) => {
+              setUploadDeckListText(v)
+              if (uploadInvalidCards?.length) setUploadInvalidCards(null)
+            }}
             onSubmit={handleUploadDeckSubmit}
             onCancel={closeUploadDeckModal}
             uploading={uploadingDeck}
+            invalidCards={uploadInvalidCards}
           />
         </Modal>
       )}

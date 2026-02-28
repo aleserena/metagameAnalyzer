@@ -33,3 +33,19 @@ def normalize_card_name(card: str) -> str:
 
     return s
 
+
+def canonical_card_name_for_compare(card: str) -> str:
+    """Return a canonical key for equality/comparison (double-faced = front face, case-insensitive).
+
+    Double-faced cards may be stored as full name (\"Norman Osborn // Green Goblin\") or front only
+    (\"Norman Osborn\"). For deck list validation and duplicate detection, treat them as the same
+    by using the front face (part before \" // \") as the canonical key. Returns lowercase so
+    all card comparisons are case-insensitive across the site.
+    """
+    if card is None or not isinstance(card, str):
+        return (card or "").strip().lower()
+    s = (card or "").strip()
+    if " // " in s:
+        s = s.split(" // ", 1)[0].strip()
+    return s.lower()
+

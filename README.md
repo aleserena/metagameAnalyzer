@@ -30,6 +30,11 @@ npm install
 npm test
 ```
 
+**Coverage (from project root):**
+
+- Backend: `npm run test:py:coverage` (or `pytest tests/ --cov=src --cov=api --cov-report=term-missing`)
+- Frontend: `npm run test:coverage` (or `cd web && npm run test:coverage`)
+
 ## Web Application
 
 The web app provides a dashboard, metagame analysis, deck browser, player leaderboard, and scrape controls.

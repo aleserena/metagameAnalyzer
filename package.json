@@ -4,7 +4,9 @@
   "scripts": {
     "build": "cd web && npm run build",
     "test": "cd web && npm run test:run",
+    "test:coverage": "cd web && npm run test:coverage",
     "test:py": "python3 -m pytest",
+    "test:py:coverage": "python3 -m pytest tests/ --cov=src --cov=api --cov-report=term-missing",
     "prepare": "husky",
     "api": "python3 -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir api --reload-delay 0.5",
     "web": "cd web && npx vite --host 0.0.0.0 --port 5173",

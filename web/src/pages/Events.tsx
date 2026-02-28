@@ -15,6 +15,7 @@ import type { EventWithOrigin } from '../api'
 import type { MergePreviewResponse, PlayerMergePair } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import { useFetch } from '../hooks/useFetch'
+import { canonicalCardNameForCompare } from '../lib/deckUtils'
 import { reportError, dateSortKey, ddMmYyToIso, isoToDdMmYy } from '../utils'
 
 /** Coerce value to a string for display; avoid rendering [object Object]. */
@@ -73,6 +74,7 @@ export default function Events() {
   const [hoveredIssuesEventId, setHoveredIssuesEventId] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
   const importInputRef = useRef<HTMLInputElement | null>(null)
+  const mergePreviewJustLoadedRef = useRef(false)
   const { data: discrepancyData } = useFetch<{ event_ids: string[] }>(
     () => (user === 'admin' ? getEventIdsWithDiscrepancies() : Promise.resolve({ event_ids: [] })),
     [user]
@@ -103,6 +105,18 @@ export default function Events() {
   useEffect(() => {
     if (error) toast.error(reportError(new Error(error)))
   }, [error])
+
+  // When user adds/removes manual pairs, refetch merge preview so deck_pairs includes them with same validations (conflicts) as auto-paired
+  useEffect(() => {
+    if (!mergePreview?.can_merge || !mergeEventIdA?.trim() || !mergeEventIdB?.trim()) return
+    if (mergePreviewJustLoadedRef.current && manualPairs.length === 0) {
+      mergePreviewJustLoadedRef.current = false
+      return
+    }
+    getMergePreview(mergeEventIdA.trim(), mergeEventIdB.trim(), manualPairs)
+      .then(setMergePreview)
+      .catch((e) => toast.error(reportError(e)))
+  }, [manualPairs])
 
   const handleImportClick = () => {
     importInputRef.current?.click()
@@ -192,6 +206,7 @@ export default function Events() {
         setMergeResolutions({})
         setDeckResolutions({})
         setManualPairs([])
+        mergePreviewJustLoadedRef.current = true
       })
       .catch((e) => toast.error(reportError(e)))
       .finally(() => setMergeLoading(false))
@@ -236,16 +251,87 @@ export default function Events() {
     rank: 'Rank',
     commanders: 'Commanders',
     archetype: 'Archetype',
+    commanders_archetype: 'Commanders / Archetype',
     mainboard: 'Mainboard',
     sideboard: 'Sideboard',
     matchups: 'Matchups',
   }
 
-  /** Format a conflict value for display (lists show length). */
-  function conflictVal(v: unknown): string {
+  /** Total card count for mainboard/sideboard (list of { qty, card }). */
+  function totalBoardCards(board: unknown): number {
+    if (!Array.isArray(board)) return 0
+    return board.reduce((sum: number, entry: { qty?: number }) => sum + (Number(entry?.qty) || 1), 0)
+  }
+
+  /** Format a conflict value for display. For mainboard/sideboard shows total cards; other arrays show length. */
+  function conflictVal(field: string, v: unknown): string {
     if (v == null) return '—'
+    if (field === 'mainboard' || field === 'sideboard') {
+      if (Array.isArray(v)) {
+        const total = totalBoardCards(v)
+        const unique = v.length
+        return unique === total ? `${total} cards` : `${total} cards (${unique} unique)`
+      }
+    }
     if (Array.isArray(v)) return `${v.length} item(s)`
     return String(v)
+  }
+
+  /** Build map canonical card name -> total qty from board. Double-faced variants merge. */
+  function boardToMap(board: unknown): Map<string, number> {
+    const m = new Map<string, number>()
+    if (!Array.isArray(board)) return m
+    for (const entry of board) {
+      if (entry && typeof entry === 'object' && 'card' in entry) {
+        const card = String((entry as { card?: string }).card || '').trim()
+        const qty = Number((entry as { qty?: number }).qty) || 1
+        const key = canonicalCardNameForCompare(card)
+        if (key) m.set(key, (m.get(key) ?? 0) + qty)
+      }
+    }
+    return m
+  }
+
+  /** Tooltip for deck list conflict: card-level diff (only in keep, only in remove, different qty). */
+  function deckListDiffSummary(valueKeep: unknown, valueRemove: unknown, label: string): string {
+    const totalK = totalBoardCards(valueKeep)
+    const totalR = totalBoardCards(valueRemove)
+    const uniqueK = Array.isArray(valueKeep) ? valueKeep.length : 0
+    const uniqueR = Array.isArray(valueRemove) ? valueRemove.length : 0
+    const keepMap = boardToMap(valueKeep)
+    const removeMap = boardToMap(valueRemove)
+    const onlyKeep: string[] = []
+    const onlyRemove: string[] = []
+    const diffQty: string[] = []
+    const maxList = 8
+    for (const [card, qK] of keepMap) {
+      const qR = removeMap.get(card)
+      if (qR === undefined) onlyKeep.push(qK === 1 ? card : `${card} (${qK})`)
+      else if (qK !== qR) diffQty.push(`${card}: ${qK} vs ${qR}`)
+    }
+    for (const [card, qR] of removeMap) {
+      if (!keepMap.has(card)) onlyRemove.push(qR === 1 ? card : `${card} (${qR})`)
+    }
+    const lines: string[] = [
+      `${label} — Keep: ${totalK} cards (${uniqueK} unique). Remove: ${totalR} cards (${uniqueR} unique).`,
+    ]
+    if (onlyKeep.length) {
+      const list = onlyKeep.slice(0, maxList).join(', ')
+      const more = onlyKeep.length > maxList ? ` (+${onlyKeep.length - maxList} more)` : ''
+      lines.push(`Only in keep: ${list}${more}`)
+    }
+    if (onlyRemove.length) {
+      const list = onlyRemove.slice(0, maxList).join(', ')
+      const more = onlyRemove.length > maxList ? ` (+${onlyRemove.length - maxList} more)` : ''
+      lines.push(`Only in remove: ${list}${more}`)
+    }
+    if (diffQty.length) {
+      const list = diffQty.slice(0, maxList).join('; ')
+      const more = diffQty.length > maxList ? ` (+${diffQty.length - maxList} more)` : ''
+      lines.push(`Different qty: ${list}${more}`)
+    }
+    if (lines.length === 1) lines.push('(Same totals; no card-level differences.)')
+    return lines.join(' | ')
   }
 
   const pairKey = (keepId: number, removeId: number) => `${keepId}-${removeId}`
@@ -505,7 +591,7 @@ export default function Events() {
                   </div>
                   {mergePreview.conflicts.length > 0 && (
                     <div style={{ marginBottom: '1rem' }}>
-                      <span className="label">Event: resolve conflicts (choose which value to keep)</span>
+                      <span className="label">Event: resolve conflicts (choose which value to use)</span>
                       <p className="muted" style={{ margin: '0.25rem 0 0', fontSize: '0.85rem' }}>When one side has no data, the other is used automatically.</p>
                       <ul style={{ margin: '0.25rem 0 0', paddingLeft: 0, listStyle: 'none' }}>
                         {mergePreview.conflicts.map((c) => (
@@ -518,7 +604,7 @@ export default function Events() {
                                 checked={(mergeResolutions[c.field] ?? 'keep') === 'keep'}
                                 onChange={() => setMergeResolutions((r) => ({ ...r, [c.field]: 'keep' }))}
                               />
-                              {' '}Kept: {String(c.value_keep)}
+                              {' '}{conflictVal(c.field, c.value_keep)}
                             </label>
                             <label style={{ marginLeft: '0.75rem' }}>
                               <input
@@ -527,7 +613,7 @@ export default function Events() {
                                 checked={mergeResolutions[c.field] === 'remove'}
                                 onChange={() => setMergeResolutions((r) => ({ ...r, [c.field]: 'remove' }))}
                               />
-                              {' '}Removed: {String(c.value_remove)}
+                              {' '}{conflictVal(c.field, c.value_remove)}
                             </label>
                           </li>
                         ))}
@@ -539,46 +625,61 @@ export default function Events() {
                       <span className="label">Players / decks</span>
                       {mergePreview.deck_pairs && mergePreview.deck_pairs.length > 0 && (
                         <div style={{ marginTop: '0.5rem' }}>
-                          <strong>Same player in both events (will merge into one deck):</strong>
-                          <p className="muted" style={{ margin: '0.25rem 0 0', fontSize: '0.85rem' }}>When one side has no data, the other is used automatically. Resolve only when both differ.</p>
+                          <strong>Same player or manually paired (will merge into one deck):</strong>
+                          <p className="muted" style={{ margin: '0.25rem 0 0', fontSize: '0.85rem' }}>When one side has no data, the other is used automatically. Resolve only when both differ. Manual pairs get the same validations as auto-paired.</p>
                           <ul style={{ margin: '0.25rem 0 0', paddingLeft: '1.25rem' }}>
                             {mergePreview.deck_pairs.map((pair) => {
                               const key = pairKey(pair.deck_keep.deck_id, pair.deck_remove.deck_id)
                               const res = deckResolutions[key] ?? {}
                               return (
                                 <li key={key} style={{ marginBottom: '0.75rem' }}>
-                                  <span>{pair.deck_keep.player} (kept deck #{pair.deck_keep.deck_id}) ↔ (removed deck #{pair.deck_remove.deck_id})</span>
+                                  <span>{pair.deck_keep.player} (#{pair.deck_keep.deck_id} ↔ #{pair.deck_remove.deck_id})</span>
                                   {pair.conflicts.length > 0 && (
                                     <ul style={{ marginTop: '0.25rem', paddingLeft: '1rem', listStyle: 'none' }}>
-                                      {pair.conflicts.map((c) => (
-                                        <li key={c.field} style={{ marginBottom: '0.25rem' }}>
-                                          <strong>{mergeFieldLabel[c.field] ?? c.field}:</strong>{' '}
-                                          <label style={{ marginLeft: '0.35rem' }}>
-                                            <input
-                                              type="radio"
-                                              name={`deck-${key}-${c.field}`}
-                                              checked={(res[c.field] ?? 'keep') === 'keep'}
-                                              onChange={() => setDeckResolutions((prev) => ({
-                                                ...prev,
-                                                [key]: { ...prev[key], [c.field]: 'keep' as const },
-                                              }))}
-                                            />
-                                            {' '}Kept: {conflictVal(c.value_keep)}
-                                          </label>
-                                          <label style={{ marginLeft: '0.5rem' }}>
-                                            <input
-                                              type="radio"
-                                              name={`deck-${key}-${c.field}`}
-                                              checked={res[c.field] === 'remove'}
-                                              onChange={() => setDeckResolutions((prev) => ({
-                                                ...prev,
-                                                [key]: { ...prev[key], [c.field]: 'remove' as const },
-                                              }))}
-                                            />
-                                            {' '}Removed: {conflictVal(c.value_remove)}
-                                          </label>
-                                        </li>
-                                      ))}
+                                      {pair.conflicts.map((c) => {
+                                        const isDeckList = c.field === 'mainboard' || c.field === 'sideboard'
+                                        const tooltip = isDeckList
+                                          ? deckListDiffSummary(c.value_keep, c.value_remove, mergeFieldLabel[c.field] ?? c.field)
+                                          : undefined
+                                        return (
+                                          <li
+                                            key={c.field}
+                                            style={{ marginBottom: '0.25rem' }}
+                                            title={tooltip}
+                                          >
+                                            <strong>{mergeFieldLabel[c.field] ?? c.field}:</strong>{' '}
+                                            {isDeckList && (
+                                              <span title={tooltip} style={{ cursor: 'help', textDecoration: 'underline dotted' }}>
+                                                {' '}(diff)
+                                              </span>
+                                            )}
+                                            <label style={{ marginLeft: '0.35rem' }}>
+                                              <input
+                                                type="radio"
+                                                name={`deck-${key}-${c.field}`}
+                                                checked={(res[c.field] ?? 'keep') === 'keep'}
+                                                onChange={() => setDeckResolutions((prev) => ({
+                                                  ...prev,
+                                                  [key]: { ...prev[key], [c.field]: 'keep' as const },
+                                                }))}
+                                              />
+                                              {' '}{conflictVal(c.field, c.value_keep)}
+                                            </label>
+                                            <label style={{ marginLeft: '0.5rem' }}>
+                                              <input
+                                                type="radio"
+                                                name={`deck-${key}-${c.field}`}
+                                                checked={res[c.field] === 'remove'}
+                                                onChange={() => setDeckResolutions((prev) => ({
+                                                  ...prev,
+                                                  [key]: { ...prev[key], [c.field]: 'remove' as const },
+                                                }))}
+                                              />
+                                              {' '}{conflictVal(c.field, c.value_remove)}
+                                            </label>
+                                          </li>
+                                        )
+                                      })}
                                     </ul>
                                   )}
                                 </li>
@@ -611,12 +712,11 @@ export default function Events() {
                                       style={{ marginLeft: '0.35rem', fontSize: '0.9rem' }}
                                     >
                                       <option value="">Merge with…</option>
-                                      {(mergePreview.decks_keep_only ?? []).map((k) => (
-                                        <option key={k.deck_id} value={k.deck_id}>{k.player} (deck #{k.deck_id})</option>
-                                      ))}
-                                      {mergePreview.deck_pairs?.map((p) => (
-                                        <option key={p.deck_keep.deck_id} value={p.deck_keep.deck_id}>{p.deck_keep.player} (deck #{p.deck_keep.deck_id})</option>
-                                      ))}
+                                      {(mergePreview.decks_keep_only ?? [])
+                                        .filter((k) => !manualPairs.some((p) => p.deck_id_keep === k.deck_id && p.deck_id_remove !== d.deck_id))
+                                        .map((k) => (
+                                          <option key={k.deck_id} value={k.deck_id}>{k.player} (deck #{k.deck_id})</option>
+                                        ))}
                                     </select>
                                   </>
                                 )}

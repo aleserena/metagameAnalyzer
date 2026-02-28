@@ -4,6 +4,8 @@ export interface UploadDeckFormProps {
   onSubmit: () => void
   onCancel: () => void
   uploading: boolean
+  /** Card names that failed lookup (e.g. non-existing cards). Shown when non-empty. */
+  invalidCards?: string[] | null
 }
 
 export default function UploadDeckForm({
@@ -12,6 +14,7 @@ export default function UploadDeckForm({
   onSubmit,
   onCancel,
   uploading,
+  invalidCards = null,
 }: UploadDeckFormProps) {
   return (
     <>
@@ -29,6 +32,15 @@ export default function UploadDeckForm({
           aria-label="Deck list"
         />
       </label>
+      {invalidCards != null && invalidCards.length > 0 && (
+        <div
+          className="error"
+          style={{ marginBottom: '1rem' }}
+          role="alert"
+        >
+          <strong>Cards not found:</strong> {invalidCards.join(', ')}. Please correct or remove them before saving.
+        </div>
+      )}
       <div style={{ display: 'flex', gap: '0.5rem' }}>
         <button type="button" className="btn btn-primary" onClick={onSubmit} disabled={uploading}>
           {uploading ? 'Updating…' : 'Update'}

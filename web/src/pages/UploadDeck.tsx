@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useParams, useNavigate } from 'react-router-dom'
 import { Toaster } from 'react-hot-toast'
 import toast from 'react-hot-toast'
-import { getUploadLinkInfo, submitDeckWithUploadLink, submitFeedbackWithUploadLink, submitDecklistWithUploadLink } from '../api'
+import { getUploadLinkInfo, getCardLookup, submitDeckWithUploadLink, submitFeedbackWithUploadLink, submitDecklistWithUploadLink } from '../api'
 import { parseMoxfieldDeckList, formatMoxfieldDeckList } from '../lib/deckListParser'
 import { isBye, isDrop, MATCHUP_RESULT_OPTIONS, matchupItemToRow } from '../lib/matchups'
 import { reportError } from '../utils'
@@ -121,7 +121,24 @@ export default function UploadDeck() {
         toast.success('Feedback submitted successfully.')
       } else {
         const parsed = parseMoxfieldDeckList(deckListText)
-        const commanders = parsed.commanders.map((c) => c.card)
+        const commanders = parsed.commanders.map((c) => c.card.trim()).filter(Boolean)
+        const mainboard = parsed.mainboard.filter((c) => c.card.trim())
+        const sideboard = parsed.sideboard.filter((c) => c.card.trim())
+        const uniqueNames = [
+          ...new Set([
+            ...commanders,
+            ...mainboard.map((c) => c.card),
+            ...sideboard.map((c) => c.card),
+          ]),
+        ].filter((n) => (n || '').trim())
+        if (uniqueNames.length > 0) {
+          const lookup = await getCardLookup(uniqueNames)
+          const invalid = uniqueNames.filter((n) => !lookup[n] || (lookup[n] as { error?: string }).error)
+          if (invalid.length > 0) {
+            toast.error(`${invalid.length} card(s) not found: ${invalid.slice(0, 5).join(', ')}${invalid.length > 5 ? ` and ${invalid.length - 5} more` : ''}. Please correct or remove them.`)
+            return
+          }
+        }
         await submitDeckWithUploadLink(token, {
           player: player.trim(),
           name: deckName.trim(),
@@ -154,7 +171,7 @@ export default function UploadDeck() {
     setShowUploadDeckModal(false)
     setUploadDeckListText('')
   }
-  const handleUploadDeckListSubmit = () => {
+  const handleUploadDeckListSubmit = async () => {
     if (!token) return
     const parsed = parseMoxfieldDeckList(uploadDeckListText)
     const mainboard = parsed.mainboard.filter((c) => c.card.trim())
@@ -164,18 +181,33 @@ export default function UploadDeck() {
     }
     const commanders = parsed.commanders.map((c) => c.card.trim()).filter(Boolean)
     const sideboard = parsed.sideboard.filter((c) => c.card.trim())
+    const uniqueNames = [
+      ...new Set([
+        ...commanders,
+        ...mainboard.map((c) => c.card),
+        ...sideboard.map((c) => c.card),
+      ]),
+    ].filter((n) => (n || '').trim())
     setUploadingDeck(true)
-    submitDecklistWithUploadLink(token, {
-      mainboard,
-      sideboard,
-      commanders: commanders.length > 0 ? commanders : undefined,
-    })
-      .then(() => {
-        closeUploadDeckModal()
-        toast.success('Deck list updated')
+    try {
+      const lookup = await getCardLookup(uniqueNames)
+      const invalid = uniqueNames.filter((n) => !lookup[n] || (lookup[n] as { error?: string }).error)
+      if (invalid.length > 0) {
+        toast.error(`${invalid.length} card(s) not found: ${invalid.slice(0, 5).join(', ')}${invalid.length > 5 ? ` and ${invalid.length - 5} more` : ''}. Please correct or remove them.`)
+        return
+      }
+      await submitDecklistWithUploadLink(token, {
+        mainboard,
+        sideboard,
+        commanders: commanders.length > 0 ? commanders : undefined,
       })
-      .catch((e) => toast.error(reportError(e)))
-      .finally(() => setUploadingDeck(false))
+      closeUploadDeckModal()
+      toast.success('Deck list updated')
+    } catch (e) {
+      toast.error(reportError(e))
+    } finally {
+      setUploadingDeck(false)
+    }
   }
 
   const toaster = (

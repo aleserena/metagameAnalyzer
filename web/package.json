@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "test": "vitest",
     "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "lint": "eslint src"
   },
   "dependencies": {
@@ -19,11 +20,13 @@
     "recharts": "^2.13.3"
   },
   "devDependencies": {
-    "@eslint/js":"^10.0.0","@testing-library/jest-dom": "^6.6.3",
+    "@eslint/js": "^10.0.0",
+    "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.0.1",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",
+    "@vitest/coverage-v8": "^2.1.9",
     "eslint": "^10.0.2",
     "globals": "^15.12.0",
     "jsdom": "^25.0.1",

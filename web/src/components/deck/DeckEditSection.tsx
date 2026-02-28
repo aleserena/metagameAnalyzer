@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useBlocker } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { updateDeck, getCardLookup, importDeckFromMoxfield } from '../../api'
-import { parseMoxfieldDeckList, formatMoxfieldDeckList } from '../../lib/deckListParser'
+import { parseMoxfieldDeckList, formatMoxfieldDeckList, stripSetAndFoiling } from '../../lib/deckListParser'
 import { useAuth } from '../../contexts/AuthContext'
 import type { Deck } from '../../types'
 import CardSearchInput from '../CardSearchInput'
@@ -33,10 +33,13 @@ export default function DeckEditSection({ deck, onUpdate, onCardsSaved }: DeckEd
 
   const isEDH = (deck?.format_id || '').toUpperCase() === 'EDH' || (deck?.format_id || '').toLowerCase() === 'cedh'
 
-  const originalDeckListText = useMemo(
-    () => (deck ? formatMoxfieldDeckList(deck.commanders || [], deck.mainboard || [], deck.sideboard || []) : ''),
-    [deck]
-  )
+  const originalDeckListText = useMemo(() => {
+    if (!deck) return ''
+    const commanders = (deck.commanders || []).map((c) => stripSetAndFoiling(c))
+    const mainboard = (deck.mainboard || []).map(({ qty, card }) => ({ qty, card: stripSetAndFoiling(card) }))
+    const sideboard = (deck.sideboard || []).map(({ qty, card }) => ({ qty, card: stripSetAndFoiling(card) }))
+    return formatMoxfieldDeckList(commanders, mainboard, sideboard)
+  }, [deck])
 
   const hasUnsavedEdits = useMemo(() => {
     if (!editing || !deck) return false
@@ -68,19 +71,24 @@ export default function DeckEditSection({ deck, onUpdate, onCardsSaved }: DeckEd
       setPlayer(deck.player || '')
       setRank(deck.rank || '')
       setArchetype(deck.archetype || '')
-      setDeckListText(formatMoxfieldDeckList(deck.commanders || [], deck.mainboard || [], deck.sideboard || []))
-      const cmd = deck.commanders || []
-      setCommander1(cmd[0] ?? '')
-      setCommander2(cmd[1] ?? '')
+      const commanders = (deck.commanders || []).map((c) => stripSetAndFoiling(c))
+      const mainboard = (deck.mainboard || []).map(({ qty, card }) => ({ qty, card: stripSetAndFoiling(card) }))
+      const sideboard = (deck.sideboard || []).map(({ qty, card }) => ({ qty, card: stripSetAndFoiling(card) }))
+      setDeckListText(formatMoxfieldDeckList(commanders, mainboard, sideboard))
+      setCommander1(commanders[0] ?? '')
+      setCommander2(commanders[1] ?? '')
     }
   }, [deck])
 
   if (user !== 'admin' || !deck) return null
 
   const startEdit = () => {
-    setDeckListText(formatMoxfieldDeckList(deck.commanders || [], deck.mainboard || [], deck.sideboard || []))
-    setCommander1(deck?.commanders?.[0] ?? '')
-    setCommander2(deck?.commanders?.[1] ?? '')
+    const commanders = (deck?.commanders || []).map((c) => stripSetAndFoiling(c))
+    const mainboard = (deck?.mainboard || []).map(({ qty, card }) => ({ qty, card: stripSetAndFoiling(card) }))
+    const sideboard = (deck?.sideboard || []).map(({ qty, card }) => ({ qty, card: stripSetAndFoiling(card) }))
+    setDeckListText(formatMoxfieldDeckList(commanders, mainboard, sideboard))
+    setCommander1(commanders[0] ?? '')
+    setCommander2(commanders[1] ?? '')
     setInvalidCards(null)
     setMoxfieldUrl('')
     setEditing(true)

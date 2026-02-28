@@ -254,7 +254,7 @@ export default function Matchups() {
       </div>
 
       {summary && (() => {
-        const listFiltered = summary.list.filter((row) => row.archetype !== row.opponent_archetype)
+        const listFiltered = summary.list.filter((row) => (row.archetype || '').toLowerCase() !== (row.opponent_archetype || '').toLowerCase())
         return (
           <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
             Showing matchups with ≥ {summary.min_matches} match(es). {listFiltered.length} pair(s). Same-archetype vs same-archetype excluded from list and shown as 50% in matrix. Record is <strong>Wins–Losses–Draws</strong> (e.g. 2–1–0).
@@ -289,7 +289,7 @@ export default function Matchups() {
       {error && <p style={{ color: 'var(--danger, #c00)' }}>{error}</p>}
 
       {!loading && !error && summary && viewMode === 'list' && (() => {
-        const listFiltered = summary.list.filter((row) => row.archetype !== row.opponent_archetype)
+        const listFiltered = summary.list.filter((row) => (row.archetype || '').toLowerCase() !== (row.opponent_archetype || '').toLowerCase())
         return (
           <div className="table-wrap-outer">
             <div className="table-wrap">
@@ -321,7 +321,10 @@ export default function Matchups() {
       })()}
 
       {!loading && !error && summary && viewMode === 'matrix' && (() => {
-        const singleRowIndex = selectedArchetypes.length === 1 ? summary.archetypes.indexOf(selectedArchetypes[0]) : -1
+        const singleRowIndex =
+          selectedArchetypes.length === 1
+            ? summary.archetypes.findIndex((a) => (a || '').toLowerCase() === (selectedArchetypes[0] || '').toLowerCase())
+            : -1
         const rowIndices = singleRowIndex >= 0 ? [singleRowIndex] : summary.archetypes.map((_, i) => i)
         const columnIndices = singleRowIndex >= 0
           ? summary.archetypes.map((_, j) => j).filter((j) => j !== singleRowIndex)
@@ -441,7 +444,7 @@ export default function Matchups() {
         )
       })()}
 
-      {!loading && !error && summary && summary.list.filter((row) => row.archetype !== row.opponent_archetype).length === 0 && (
+      {!loading && !error && summary && summary.list.filter((row) => (row.archetype || '').toLowerCase() !== (row.opponent_archetype || '').toLowerCase()).length === 0 && (
         <p style={{ color: 'var(--text-muted)' }}>No matchup data for the selected filters.</p>
       )}
     </div>

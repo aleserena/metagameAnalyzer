@@ -1,6 +1,49 @@
 """Shared fixtures for MTGTop8 tests."""
 
 import pytest
+from fastapi.testclient import TestClient
+
+# Import app and auth/DB dependencies for override fixture (done lazily to avoid import side effects in non-API tests)
+_app_ref = None
+_dep_refs = None
+
+
+def _get_app_and_deps():
+    global _app_ref, _dep_refs
+    if _app_ref is None:
+        from api.main import (
+            app,
+            require_admin,
+            require_database,
+            require_admin_or_event_edit,
+            require_admin_or_event_edit_deck,
+        )
+        _app_ref = app
+        _dep_refs = {
+            "require_admin": require_admin,
+            "require_database": require_database,
+            "require_admin_or_event_edit": require_admin_or_event_edit,
+            "require_admin_or_event_edit_deck": require_admin_or_event_edit_deck,
+        }
+    return _app_ref, _dep_refs
+
+
+@pytest.fixture
+def client_with_overrides():
+    """TestClient with require_admin, require_database, and event-edit deps overridden (no-op pass)."""
+    app, deps = _get_app_and_deps()
+    app.dependency_overrides[deps["require_admin"]] = lambda authorization=None: "admin"
+    app.dependency_overrides[deps["require_database"]] = lambda: None
+    app.dependency_overrides[deps["require_admin_or_event_edit"]] = (
+        lambda event_id, authorization=None, x_event_edit_token=None: "admin"
+    )
+    app.dependency_overrides[deps["require_admin_or_event_edit_deck"]] = (
+        lambda deck_id, authorization=None, x_event_edit_token=None: "admin"
+    )
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.clear()
 
 
 @pytest.fixture
