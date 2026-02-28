@@ -4,13 +4,17 @@ import sys
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from api.schemas.matchups import MatchupItem
 
 from api.db import (
     _swiss_rounds_for_players,
     create_event,
     list_event_ids_with_complete_matchups,
+    list_matchups_by_deck,
     list_missing_matchups_for_event,
     upsert_deck,
     upsert_matchups_for_deck,
@@ -18,6 +22,29 @@ from api.db import (
 
 
 # --- Unit tests (no DB) ---
+
+
+def test_matchup_item_rejects_empty_result():
+    """MatchupItem validation rejects empty result (would be NULL/invalid in DB)."""
+    with pytest.raises(ValidationError) as exc_info:
+        MatchupItem(opponent_player="Alice", result="")
+    assert "result" in str(exc_info.value).lower()
+
+
+def test_matchup_item_rejects_missing_opponent_when_not_bye_drop():
+    """MatchupItem requires opponent_player when result is not bye or drop."""
+    with pytest.raises(ValidationError) as exc_info:
+        MatchupItem(opponent_player="", result="win")
+    assert "opponent" in str(exc_info.value).lower()
+    with pytest.raises(ValidationError):
+        MatchupItem(opponent_player="   ", result="loss")
+
+
+def test_matchup_item_accepts_valid_and_bye_drop():
+    """MatchupItem accepts valid items and bye/drop without opponent."""
+    MatchupItem(opponent_player="Alice", result="win")
+    MatchupItem(opponent_player="Bye", result="bye")
+    MatchupItem(opponent_player="(drop)", result="drop")
 
 
 def test_swiss_rounds_for_players():
@@ -251,3 +278,31 @@ def test_list_missing_matchups_for_event_missing_returns_deck(db_session_rollbac
     assert (base + 3) in deck_ids_missing
     assert (base + 4) in deck_ids_missing
     assert (base + 1) not in deck_ids_missing
+
+
+def test_upsert_matchups_for_deck_skips_invalid_items(db_session_rollback):
+    """upsert_matchups_for_deck does not insert rows with empty opponent_player or empty result."""
+    session = db_session_rollback
+    eid = _TEST_EVENT_PREFIX + "skip_invalid"
+    base = _TEST_DECK_ID_BASE + 800
+    create_event(
+        session, event_name="SkipInvalid", date="01/01/25", format_id="EDH", origin="manual", event_id=eid
+    )
+    upsert_deck(session, _make_deck(base, eid, "P1"))
+    upsert_deck(session, _make_deck(base + 1, eid, "P2"))
+    session.flush()
+
+    upsert_matchups_for_deck(
+        session,
+        base,
+        [
+            {"opponent_player": "P2", "opponent_deck_id": base + 1, "result": "win"},
+            {"opponent_player": "", "opponent_deck_id": None, "result": "loss"},
+            {"opponent_player": "P2", "opponent_deck_id": base + 1, "result": ""},
+            {"opponent_player": "   ", "result": "draw"},
+        ],
+    )
+    session.flush()
+    rows = list_matchups_by_deck(session, base)
+    assert len(rows) == 1
+    assert rows[0]["opponent_player"] == "P2" and rows[0]["result"] == "win"
