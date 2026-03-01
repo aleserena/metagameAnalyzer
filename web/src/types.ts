@@ -9,6 +9,8 @@ export interface Deck {
   format_id: string
   name: string
   player: string
+  /** Stable player identity (API/DB); optional for backward compat. */
+  player_id?: number
   event_name: string
   date: string
   rank: string
@@ -141,6 +143,7 @@ export interface Event {
 
 export interface PlayerStats {
   player: string
+  player_id?: number
   wins: number
   top2: number
   top4: number

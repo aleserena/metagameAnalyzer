@@ -33,6 +33,7 @@ class Deck:
     sideboard: list[tuple[int, str]]
     commanders: list[str]  # for EDH
     archetype: str | None = None
+    player_id: int | None = None  # stable identity when loaded from API/DB
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize for JSON output."""
@@ -42,6 +43,7 @@ class Deck:
             "format_id": self.format_id,
             "name": self.name,
             "player": self.player,
+            "player_id": getattr(self, "player_id", None),
             "event_name": self.event_name,
             "date": self.date,
             "rank": self.rank,
@@ -77,4 +79,5 @@ class Deck:
             sideboard=sideboard,
             commanders=data.get("commanders", []),
             archetype=data.get("archetype"),
+            player_id=data.get("player_id"),
         )

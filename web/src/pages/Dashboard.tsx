@@ -190,7 +190,7 @@ export default function Dashboard() {
               {topPlayers.map((p, i) => (
                 <li key={p.player} style={{ padding: '0.5rem 0', borderBottom: '1px solid var(--border)', display: 'flex', gap: '0.5rem', alignItems: 'baseline' }}>
                   <span style={{ color: 'var(--text-muted)', minWidth: 18 }}>{i + 1}.</span>
-                  <Link to={`/players/${encodeURIComponent(p.player)}`} style={{ color: 'var(--accent)' }}>
+                  <Link to={`/players/${p.player_id != null ? p.player_id : encodeURIComponent(p.player)}`} style={{ color: 'var(--accent)' }}>
                     {p.player}
                   </Link>
                   <span style={{ color: 'var(--text-muted)', marginLeft: 'auto', fontSize: '0.875rem', whiteSpace: 'nowrap' }}>

@@ -231,7 +231,7 @@ export default function Players() {
                 <tr key={p.player}>
                   <td>{positionByPlayer.get(p.player) ?? '—'}</td>
                   <td>
-                    <Link to={`/players/${encodeURIComponent(p.player)}`} className="nav-link" style={{ padding: 0 }}>
+                    <Link to={`/players/${p.player_id != null ? p.player_id : encodeURIComponent(p.player)}`} className="nav-link" style={{ padding: 0 }}>
                       {p.player}
                     </Link>
                   </td>

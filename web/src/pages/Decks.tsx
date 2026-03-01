@@ -435,7 +435,7 @@ export default function Decks() {
                       </td>
                       <td
                         style={{ cursor: 'pointer', color: 'var(--accent)' }}
-                        onClick={(e) => { e.stopPropagation(); navigate(`/players/${encodeURIComponent(d.player)}`) }}
+                        onClick={(e) => { e.stopPropagation(); navigate(`/players/${d.player_id != null ? d.player_id : encodeURIComponent(d.player)}`) }}
                       >
                         {d.player}
                       </td>
