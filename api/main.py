@@ -2376,6 +2376,7 @@ def update_deck_matchups(deck_id: int, body: AdminMatchupsBody):
         raise HTTPException(status_code=400, detail="Deck has no event")
     with _db.session_scope() as session:
         matchup_rows = []
+        seen_opponent_round: set[tuple[str, int | None]] = set()
         for m in body.matchups or []:
             result_raw = (m.result or "draw").strip().lower()
             if result_raw in ("bye", "drop"):
@@ -2393,6 +2394,11 @@ def update_deck_matchups(deck_id: int, body: AdminMatchupsBody):
             opp_player = _normalize_player((m.opponent_player or "").strip())
             if not opp_player or opp_player == "(unknown)":
                 continue
+            round_num = getattr(m, "round", None)
+            key = (opp_player, round_num)
+            if key in seen_opponent_round:
+                continue
+            seen_opponent_round.add(key)
             opp_deck = _db.get_deck_by_event_and_player(session, event_id, opp_player)
             opp_deck_id = opp_deck.deck_id if opp_deck else None
             opp_archetype = getattr(opp_deck, "archetype", None) if opp_deck else None
@@ -2402,7 +2408,7 @@ def update_deck_matchups(deck_id: int, body: AdminMatchupsBody):
                 "opponent_archetype": opp_archetype,
                 "result": (m.result or "draw").strip(),
                 "result_note": None,
-                "round": None,
+                "round": round_num,
             })
         _db.upsert_matchups_for_deck(session, deck_id, matchup_rows)
     _load_decks_from_db()
@@ -3155,6 +3161,13 @@ def get_matchups_summary(
             continue
         filtered.append(r)
 
+    # One canonical display name per case-insensitive archetype to avoid duplicate matrix rows
+    canonical_archetype: dict[str, str] = {}
+    for r in filtered:
+        for raw in [(r.get("archetype") or "").strip(), (r.get("opponent_archetype") or "").strip()]:
+            if raw and raw.lower() not in ("bye", "drop"):
+                canonical_archetype.setdefault(raw.lower(), raw)
+
     def to_effective_wld(row):
         raw = (row.get("result") or "loss").strip().lower()
         if raw == "intentional_draw":
@@ -3170,7 +3183,11 @@ def get_matchups_summary(
             return (0, 1, 0)
         return (0, 0, 1)  # draw
 
+    def norm_arch(name: str) -> str:
+        return canonical_archetype.get((name or "").lower(), name or "(unknown)")
+
     def add_to_agg(arch: str, opp: str, w: int, l: int, d: int, is_intentional_draw: bool, matches: int):
+        arch, opp = norm_arch(arch), norm_arch(opp)
         for (a, o), (aw, al, ad) in [((arch, opp), (w, l, d)), ((opp, arch), (l, w, d))]:
             key = (a.lower(), o.lower())
             if key not in agg:
