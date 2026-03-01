@@ -7,7 +7,7 @@ import { useAuth } from '../../contexts/AuthContext'
 import type { Deck } from '../../types'
 import CardSearchInput from '../CardSearchInput'
 import Modal from '../Modal'
-import { getEDHArchetype } from '../../lib/deckUtils'
+import { getEDHArchetype, normalizeDeckListByLookup } from '../../lib/deckUtils'
 import { reportError } from '../../utils'
 
 export interface DeckEditSectionProps {
@@ -193,17 +193,23 @@ export default function DeckEditSection({ deck, onUpdate, onCardsSaved }: DeckEd
         setSaving(false)
         return
       }
+      const parsed = { commanders: commanderCards, mainboard, sideboard }
+      const { parsed: normalized, text: normalizedText } = normalizeDeckListByLookup(parsed, lookup)
+      if (normalizedText !== deckListText) setDeckListText(normalizedText)
+      const normCommanders = normalized.commanders.flatMap((c) =>
+        Array.from({ length: Math.max(1, c.qty) }, () => (c.card || '').trim())
+      ).filter(Boolean)
       const effectiveArchetype = isEDH
-        ? getEDHArchetype(commanders, lookup)
+        ? getEDHArchetype(normCommanders, lookup)
         : (archetype?.trim() || undefined)
       await updateDeck(deck.deck_id, {
         name: name || undefined,
         player: player || undefined,
         rank: rank || undefined,
         archetype: effectiveArchetype,
-        commanders,
-        mainboard,
-        sideboard,
+        commanders: normCommanders,
+        mainboard: normalized.mainboard,
+        sideboard: normalized.sideboard,
       })
       onUpdate({
         ...deck,
@@ -211,9 +217,9 @@ export default function DeckEditSection({ deck, onUpdate, onCardsSaved }: DeckEd
         player: player || deck.player,
         rank: rank || deck.rank,
         archetype: effectiveArchetype ?? deck.archetype ?? null,
-        commanders,
-        mainboard,
-        sideboard,
+        commanders: normCommanders,
+        mainboard: normalized.mainboard,
+        sideboard: normalized.sideboard,
       })
       setEditing(false)
       setInvalidCards(null)

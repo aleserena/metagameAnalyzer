@@ -466,6 +466,56 @@ export async function putMatchupsMinMatchesSetting(value: number): Promise<{ val
   })
 }
 
+export async function getMatchupsPlayersSummary(params?: {
+  format_id?: string
+  event_ids?: string
+  from_date?: string
+  to_date?: string
+}): Promise<{
+  players_list: Array<{
+    player: string
+    opponent_player: string
+    wins: number
+    losses: number
+    draws: number
+    intentional_draws: number
+    matches: number
+    win_rate: number
+  }>
+  players: string[]
+  players_matrix: (number | null)[][]
+  matchups_list: Array<{
+    player_a: string
+    player_b: string
+    result: string
+    event_id: string
+    date: string
+    round: number | null
+    archetype_a: string
+    archetype_b: string
+  }>
+  min_matches: number
+}> {
+  const search = new URLSearchParams()
+  if (params?.format_id) search.set('format_id', params.format_id)
+  if (params?.event_ids) search.set('event_ids', params.event_ids)
+  if (params?.from_date) search.set('date_from', params.from_date)
+  if (params?.to_date) search.set('date_to', params.to_date)
+  const q = search.toString()
+  return fetchApi(`/matchups/players-summary${q ? `?${q}` : ''}`)
+}
+
+export async function getMatchupsPlayersMinMatchesSetting(): Promise<{ value: number }> {
+  return fetchApi('/settings/matchups-players-min-matches')
+}
+
+export async function putMatchupsPlayersMinMatchesSetting(value: number): Promise<{ value: number }> {
+  return fetchApi('/settings/matchups-players-min-matches', {
+    method: 'PUT',
+    body: JSON.stringify({ value }),
+  })
+}
+
 /** Create a one-time event edit link (admin-only). Returns URL to event page with ?token= for editing event + decks (no delete event, no new links). */
 export async function createEventEditLink(eventId: string): Promise<{
   links: Array<{ token: string; url: string; expires_at: string | null }>

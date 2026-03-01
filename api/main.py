@@ -2807,6 +2807,19 @@ def put_matchups_min_matches_setting(body: MatchupsMinMatchesBody):
     return {"value": n}
 
 
+@app.get("/api/settings/matchups-players-min-matches", dependencies=[Depends(require_admin), Depends(require_database)])
+def get_matchups_players_min_matches_setting():
+    """Return minimum matches threshold for player matchup summary (admin)."""
+    return {"value": settings_service.get_matchups_players_min_matches()}
+
+
+@app.put("/api/settings/matchups-players-min-matches", dependencies=[Depends(require_admin), Depends(require_database)])
+def put_matchups_players_min_matches_setting(body: MatchupsMinMatchesBody):
+    """Set minimum matches threshold for player matchup summary (admin)."""
+    n = settings_service.set_matchups_players_min_matches(body.value)
+    return {"value": n}
+
+
 @app.post("/api/settings/clear-cache")
 def post_clear_scryfall_cache(_: str = Depends(require_admin)):
     """Clear Scryfall card lookup cache (in-memory and .scryfall_cache.json). Admin-only."""
@@ -3089,6 +3102,16 @@ def _is_intentional_draw_result(result: str) -> bool:
     return r in ("intentional_draw", "intentional_draw_win", "intentional_draw_loss")
 
 
+def _front_face_name(name: str) -> str:
+    """Dual-faced style 'Front // Back' -> 'Front'. Unifies e.g. Norman Osborn and Norman Osborn // Green Goblin."""
+    s = (name or "").strip()
+    if not s or s in ("Bye", "(drop)"):
+        return s or "(unknown)"
+    if " // " in s:
+        return s.split(" // ", 1)[0].strip() or s
+    return s
+
+
 def _matchup_result_consistent(result_a: str, result_b: str) -> bool:
     """True if the pair is consistent: one win + one loss, or both draw/intentional_draw. Bye/drop have no pair."""
     a = _matchup_result_to_canonical(result_a)
@@ -3334,6 +3357,146 @@ def get_matchups_summary(
         "list": list_out,
         "archetypes": archetypes_sorted,
         "matrix": matrix,
+        "min_matches": min_matches,
+    }
+
+
+@app.get("/api/matchups/players-summary", dependencies=[Depends(require_database)], tags=["Matchups"])
+def get_matchups_players_summary(
+    format_id: str | None = Query(None),
+    event_ids: str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+):
+    """Aggregated matchup summary by player. Optional filters; respects matchups_players_min_matches setting."""
+    with _db.session_scope() as session:
+        min_matches = _db.get_matchups_players_min_matches(session)
+        rows = _db.list_matchups_with_deck_and_players(session)
+
+    event_id_set = None
+    if event_ids:
+        event_id_set = {x.strip() for x in event_ids.split(",") if x.strip()}
+
+    filtered = []
+    for r in rows:
+        if format_id and (r.get("format_id") or "").strip().upper() != format_id.strip().upper():
+            continue
+        if event_id_set is not None and (r.get("event_id") or "").strip() not in event_id_set:
+            continue
+        if not _date_in_range(r.get("date") or "", date_from, date_to):
+            continue
+        if (r.get("result") or "").strip().lower() in ("bye", "drop"):
+            continue
+        filtered.append(r)
+
+    def to_effective_wld(row):
+        raw = (row.get("result") or "loss").strip().lower()
+        if raw == "intentional_draw":
+            return (0, 0, 1)
+        if raw == "intentional_draw_win":
+            return (1, 0, 0)
+        if raw == "intentional_draw_loss":
+            return (0, 1, 0)
+        canonical = _matchup_result_to_canonical(row.get("result") or "loss")
+        if canonical == "win":
+            return (1, 0, 0)
+        if canonical == "loss":
+            return (0, 1, 0)
+        return (0, 0, 1)
+
+    # Aggregate by (player, opponent_player). Use front-face name so "Norman Osborn" and
+    # "Norman Osborn // Green Goblin" are one row (dual-faced names unified across the app).
+    agg: dict[tuple[str, str], dict] = {}
+    for r in filtered:
+        if r.get("opponent_player_id") is None:
+            continue
+        player = (r.get("player") or "(unknown)").strip()
+        opp = (r.get("opponent_player") or "(unknown)").strip()
+        player_canonical = _front_face_name(player)
+        opp_canonical = _front_face_name(opp)
+        key = (player_canonical.lower(), opp_canonical.lower())
+        if key not in agg:
+            agg[key] = {
+                "wins": 0,
+                "losses": 0,
+                "draws": 0,
+                "intentional_draws": 0,
+                "matches": 0,
+                "player": player_canonical,
+                "opponent_player": opp_canonical,
+            }
+        wins, losses, draws = to_effective_wld(r)
+        agg[key]["wins"] += wins
+        agg[key]["losses"] += losses
+        agg[key]["draws"] += draws
+        if _is_intentional_draw_result(r.get("result") or ""):
+            agg[key]["intentional_draws"] += 1
+        agg[key]["matches"] += 1
+
+    # Canonical display names (first occurrence)
+    canonical_player: dict[str, str] = {}
+    for (pl, op), v in agg.items():
+        for raw in [v["player"], v["opponent_player"]]:
+            if raw and raw.lower() not in ("bye", "drop"):
+                canonical_player.setdefault(raw.lower(), raw)
+
+    def norm_player(name: str) -> str:
+        return canonical_player.get((name or "").lower(), name or "(unknown)")
+
+    players_list_out = []
+    for (_pl_lower, _op_lower), v in agg.items():
+        if v["matches"] < min_matches:
+            continue
+        wr = (v["wins"] + 0.5 * v["draws"]) / v["matches"] if v["matches"] else 0
+        players_list_out.append({
+            "player": norm_player(v["player"]),
+            "opponent_player": norm_player(v["opponent_player"]),
+            "wins": v["wins"],
+            "losses": v["losses"],
+            "draws": v["draws"],
+            "intentional_draws": v["intentional_draws"],
+            "matches": v["matches"],
+            "win_rate": round(wr, 4),
+        })
+
+    all_players_sorted = sorted(
+        {r["player"] for r in players_list_out} | {r["opponent_player"] for r in players_list_out}
+    )
+    players_matrix = []
+    for i, pa in enumerate(all_players_sorted):
+        row = []
+        for j, pb in enumerate(all_players_sorted):
+            if i == j:
+                row.append(None)
+                continue
+            key = (pa.lower(), pb.lower())
+            v = agg.get(key, {"matches": 0, "wins": 0, "draws": 0})
+            if v["matches"] < min_matches:
+                row.append(None)
+                continue
+            wr = (v["wins"] + 0.5 * v["draws"]) / v["matches"] if v["matches"] else None
+            row.append(round(wr, 4) if wr is not None else None)
+        players_matrix.append(row)
+
+    matchups_list_out = [
+        {
+            "player_a": _front_face_name(r.get("player") or "(unknown)"),
+            "player_b": _front_face_name(r.get("opponent_player") or "(unknown)"),
+            "result": r.get("result") or "",
+            "event_id": r.get("event_id") or "",
+            "date": r.get("date") or "",
+            "round": r.get("round"),
+            "archetype_a": r.get("archetype") or "",
+            "archetype_b": r.get("opponent_archetype") or "",
+        }
+        for r in filtered
+    ]
+
+    return {
+        "players_list": players_list_out,
+        "players": all_players_sorted,
+        "players_matrix": players_matrix,
+        "matchups_list": matchups_list_out,
         "min_matches": min_matches,
     }
 

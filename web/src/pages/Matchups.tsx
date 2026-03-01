@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { getMatchupsSummary } from '../api'
+import { getMatchupsSummary, getMatchupsPlayersSummary } from '../api'
 import EventSelector from '../components/EventSelector'
 import FiltersPanel from '../components/FiltersPanel'
 import { useEventMetadata } from '../hooks/useEventMetadata'
@@ -11,6 +11,24 @@ const DROPDOWN_MAX_HEIGHT = 240
 const DROPDOWN_GAP = 4
 
 type ViewMode = 'list' | 'matrix'
+type DataMode = 'archetypes' | 'players'
+
+const TOOLTIP_ESTIMATE = { width: 270, height: 100 }
+const TOOLTIP_PAD = 12
+
+/** Position tooltip so it stays inside the viewport (e.g. show above for bottom cells). */
+function getTooltipPosition(rect: DOMRect): { left: number; top: number; transform: string } {
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  const halfW = TOOLTIP_ESTIMATE.width / 2
+  const centerX = rect.left + rect.width / 2
+  const left = Math.max(TOOLTIP_PAD + halfW, Math.min(vw - TOOLTIP_PAD - halfW, centerX))
+  const showBelow = rect.bottom + 8 + TOOLTIP_ESTIMATE.height <= vh - TOOLTIP_PAD
+  if (showBelow) {
+    return { left, top: rect.bottom, transform: 'translate(-50%, 8px)' }
+  }
+  return { left, top: rect.top, transform: 'translate(-50%, calc(-100% - 8px))' }
+}
 
 /** Win rate 0–100 → heatmap color (red → yellow → green) with opacity for readability. */
 function heatmapColor(pct: number): string {
@@ -31,10 +49,14 @@ function heatmapColor(pct: number): string {
 export default function Matchups() {
   const { events, maxDate, lastEventDate, error: eventMetadataError } = useEventMetadata()
   const [summary, setSummary] = useState<Awaited<ReturnType<typeof getMatchupsSummary>> | null>(null)
+  const [playersSummary, setPlayersSummary] = useState<Awaited<ReturnType<typeof getMatchupsPlayersSummary>> | null>(null)
   const [loading, setLoading] = useState(true)
+  const [playersLoading, setPlayersLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [playersError, setPlayersError] = useState<string | null>(null)
   const [formatId, setFormatId] = useState('')
   const [eventIds, setEventIds] = useState<(number | string)[]>([])
+  const [dataMode, setDataMode] = useState<DataMode>('archetypes')
   const [selectedArchetypes, setSelectedArchetypes] = useState<string[]>([])
   const [archetypeOptions, setArchetypeOptions] = useState<string[]>([])
   const [archetypeOpen, setArchetypeOpen] = useState(false)
@@ -48,12 +70,18 @@ export default function Matchups() {
     opponent: string
     rect: DOMRect
   } | null>(null)
+  const [hoveredPlayerCell, setHoveredPlayerCell] = useState<{
+    player: string
+    opponent: string
+    rect: DOMRect
+  } | null>(null)
 
   useEffect(() => {
     if (eventMetadataError) toast.error(reportError(new Error(eventMetadataError)))
   }, [eventMetadataError])
 
   useEffect(() => {
+    if (dataMode !== 'archetypes') return
     setLoading(true)
     setError(null)
     getMatchupsSummary({
@@ -74,7 +102,23 @@ export default function Matchups() {
         setSummary(null)
       })
       .finally(() => setLoading(false))
-  }, [formatId, eventIds, selectedArchetypes])
+  }, [dataMode, formatId, eventIds, selectedArchetypes])
+
+  useEffect(() => {
+    if (dataMode !== 'players') return
+    setPlayersLoading(true)
+    setPlayersError(null)
+    getMatchupsPlayersSummary({
+      format_id: formatId || undefined,
+      event_ids: eventIds.length ? eventIds.map(String).join(',') : undefined,
+    })
+      .then((s) => setPlayersSummary(s))
+      .catch((e) => {
+        setPlayersError(reportError(e))
+        setPlayersSummary(null)
+      })
+      .finally(() => setPlayersLoading(false))
+  }, [dataMode, formatId, eventIds])
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -113,11 +157,22 @@ export default function Matchups() {
     return m
   }, [summary])
 
+  const playersByPair = useMemo(() => {
+    const m = new Map<string, (Awaited<ReturnType<typeof getMatchupsPlayersSummary>>['players_list'][number])>()
+    if (!playersSummary) return m
+    for (const row of playersSummary.players_list) {
+      m.set(`${row.player}|||${row.opponent_player}`, row)
+    }
+    return m
+  }, [playersSummary])
+
   return (
     <div className="page">
       <h1 className="page-title">Matchups</h1>
       <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
-        Archetype vs archetype win rates from event feedback. Only pairs with at least the minimum number of matches (set in Settings by admin) are shown.
+        {dataMode === 'archetypes'
+          ? 'Archetype vs archetype win rates from event feedback. Only pairs with at least the minimum number of matches (set in Settings by admin) are shown.'
+          : 'Player vs player win rates from event feedback. Only pairs with at least the minimum number of matches for players (set in Settings by admin) are shown.'}
       </p>
 
       <div className="table-wrap-outer" style={{ marginBottom: '1.5rem' }}>
@@ -138,6 +193,7 @@ export default function Matchups() {
                 ))}
               </select>
             </div>
+            {dataMode === 'archetypes' && (
             <div className="form-group event-selector-wrap" style={{ marginBottom: 0, width: '100%', maxWidth: 280, minWidth: 0 }} ref={archetypeRef}>
               <label htmlFor="matchups-archetype">Archetype</label>
               <div style={{ position: 'relative' }}>
@@ -241,6 +297,7 @@ export default function Matchups() {
                 )}
               </div>
             </div>
+            )}
             <EventSelector
               events={events}
               selectedIds={eventIds}
@@ -253,7 +310,7 @@ export default function Matchups() {
         </div>
       </div>
 
-      {summary && (() => {
+      {dataMode === 'archetypes' && summary && (() => {
         const listFiltered = summary.list.filter((row) => (row.archetype || '').toLowerCase() !== (row.opponent_archetype || '').toLowerCase())
         return (
           <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
@@ -261,34 +318,58 @@ export default function Matchups() {
           </p>
         )
       })()}
+      {dataMode === 'players' && playersSummary && (
+        <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
+          Showing player pairs with ≥ {playersSummary.min_matches} match(es). {playersSummary.players_list.length} pair(s). {playersSummary.matchups_list.length} individual match(es). Record is <strong>Wins–Losses–Draws</strong>.
+        </p>
+      )}
 
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
-        <button
-          type="button"
-          className={`btn ${viewMode === 'matrix' ? 'btn-primary' : ''}`}
-          onClick={() => setViewMode('matrix')}
-        >
-          Matrix
-        </button>
-        <button
-          type="button"
-          className={`btn ${viewMode === 'list' ? 'btn-primary' : ''}`}
-          onClick={() => setViewMode('list')}
-        >
-          List
-        </button>
+      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: '0.25rem', marginRight: '0.75rem' }}>
+          <button
+            type="button"
+            className={`btn ${dataMode === 'archetypes' ? 'btn-primary' : ''}`}
+            onClick={() => setDataMode('archetypes')}
+          >
+            Archetypes
+          </button>
+          <button
+            type="button"
+            className={`btn ${dataMode === 'players' ? 'btn-primary' : ''}`}
+            onClick={() => setDataMode('players')}
+          >
+            Players
+          </button>
+        </div>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <button
+            type="button"
+            className={`btn ${viewMode === 'matrix' ? 'btn-primary' : ''}`}
+            onClick={() => setViewMode('matrix')}
+          >
+            Matrix
+          </button>
+          <button
+            type="button"
+            className={`btn ${viewMode === 'list' ? 'btn-primary' : ''}`}
+            onClick={() => setViewMode('list')}
+          >
+            List
+          </button>
+        </div>
       </div>
 
-      {loading && (
+      {(loading && dataMode === 'archetypes') || (playersLoading && dataMode === 'players') ? (
         <>
           <Skeleton width="100%" height={120} style={{ marginBottom: '0.5rem' }} />
           <Skeleton width="100%" height={120} style={{ marginBottom: '0.5rem' }} />
           <Skeleton width="100%" height={120} />
         </>
-      )}
-      {error && <p style={{ color: 'var(--danger, #c00)' }}>{error}</p>}
+      ) : null}
+      {dataMode === 'archetypes' && error && <p style={{ color: 'var(--danger, #c00)' }}>{error}</p>}
+      {dataMode === 'players' && playersError && <p style={{ color: 'var(--danger, #c00)' }}>{playersError}</p>}
 
-      {!loading && !error && summary && viewMode === 'list' && (() => {
+      {dataMode === 'archetypes' && !loading && !error && summary && viewMode === 'list' && (() => {
         const listFiltered = summary.list.filter((row) => (row.archetype || '').toLowerCase() !== (row.opponent_archetype || '').toLowerCase())
         return (
           <div className="table-wrap-outer">
@@ -320,7 +401,7 @@ export default function Matchups() {
         )
       })()}
 
-      {!loading && !error && summary && viewMode === 'matrix' && (() => {
+      {dataMode === 'archetypes' && !loading && !error && summary && viewMode === 'matrix' && (() => {
         const singleRowIndex =
           selectedArchetypes.length === 1
             ? summary.archetypes.findIndex((a) => (a || '').toLowerCase() === (selectedArchetypes[0] || '').toLowerCase())
@@ -400,16 +481,15 @@ export default function Matchups() {
               const row = matchupsByPair.get(`${hoveredCell.archetype}|||${hoveredCell.opponent}`)
               if (!row) return null
               const drawPct = row.matches > 0 ? (row.draws / row.matches) * 100 : 0
-              const left = hoveredCell.rect.left + hoveredCell.rect.width / 2
-              const top = hoveredCell.rect.bottom
+              const pos = getTooltipPosition(hoveredCell.rect)
               return (
                 <div
                   role="tooltip"
                   style={{
                     position: 'fixed',
-                    left,
-                    top,
-                    transform: 'translate(-50%, 8px)',
+                    left: pos.left,
+                    top: pos.top,
+                    transform: pos.transform,
                     zIndex: 1000,
                     pointerEvents: 'none',
                     background: 'var(--bg-card)',
@@ -444,8 +524,155 @@ export default function Matchups() {
         )
       })()}
 
-      {!loading && !error && summary && summary.list.filter((row) => (row.archetype || '').toLowerCase() !== (row.opponent_archetype || '').toLowerCase()).length === 0 && (
+      {dataMode === 'players' && !playersLoading && !playersError && playersSummary && viewMode === 'list' && (
+        <div className="table-wrap-outer">
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Player A</th>
+                  <th scope="col">Player B</th>
+                  <th scope="col">Result</th>
+                  <th scope="col">Event</th>
+                  <th scope="col">Date</th>
+                  <th scope="col">Round</th>
+                  <th scope="col">Archetype A</th>
+                  <th scope="col">Archetype B</th>
+                </tr>
+              </thead>
+              <tbody>
+                {playersSummary.matchups_list.map((row, i) => (
+                  <tr key={i}>
+                    <td>{row.player_a}</td>
+                    <td>{row.player_b}</td>
+                    <td>{row.result}</td>
+                    <td>{row.event_id}</td>
+                    <td>{row.date}</td>
+                    <td>{row.round ?? '—'}</td>
+                    <td>{row.archetype_a || '—'}</td>
+                    <td>{row.archetype_b || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {dataMode === 'players' && !playersLoading && !playersError && playersSummary && viewMode === 'matrix' && (
+        <div className="card" style={{ overflow: 'auto' }}>
+          <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+            Rows = player, columns = opponent. Cell = row player&apos;s win rate vs column player. Heatmap: green = 100%, red = 0%.
+          </p>
+          {playersSummary.players.length === 0 ? (
+            <p style={{ color: 'var(--text-muted)' }}>No player matchup data for the selected filters.</p>
+          ) : (
+            <div style={{ minWidth: 400 }}>
+              <table style={{ borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+                <thead>
+                  <tr>
+                    <th style={{ padding: '0.35rem', textAlign: 'left', position: 'sticky', left: 0, background: 'var(--bg-card)' }} />
+                    {playersSummary.players.map((p) => (
+                      <th key={p} style={{ padding: '0.35rem', maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis' }} title={p}>
+                        {p.length > 12 ? p.slice(0, 11) + '…' : p}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {playersSummary.players.map((pa, i) => (
+                    <tr key={pa}>
+                      <td style={{ padding: '0.35rem', position: 'sticky', left: 0, background: 'var(--bg-card)', whiteSpace: 'nowrap', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis' }} title={pa}>
+                        {pa.length > 14 ? pa.slice(0, 13) + '…' : pa}
+                      </td>
+                      {playersSummary.players.map((pb, j) => {
+                        if (i === j) return <td key={pb} style={{ padding: '0.35rem', backgroundColor: 'rgba(128,128,128,0.2)' }} title="Same player"> </td>
+                        const cell = playersSummary.players_matrix[i]?.[j]
+                        if (cell == null) return <td key={pb} style={{ padding: '0.35rem', color: 'var(--text-muted)' }}>—</td>
+                        const pct = cell * 100
+                        const matchupRow = playersByPair.get(`${pa}|||${pb}`)
+                        return (
+                          <td
+                            key={pb}
+                            style={{ padding: '0.35rem', backgroundColor: heatmapColor(pct), cursor: matchupRow ? 'help' : 'default' }}
+                            onMouseEnter={(e) => {
+                              if (!matchupRow) return
+                              setHoveredPlayerCell({ player: pa, opponent: pb, rect: e.currentTarget.getBoundingClientRect() })
+                            }}
+                            onMouseMove={(e) => {
+                              if (!matchupRow) return
+                              setHoveredPlayerCell({ player: pa, opponent: pb, rect: e.currentTarget.getBoundingClientRect() })
+                            }}
+                            onMouseLeave={() => setHoveredPlayerCell(null)}
+                            onFocus={(e) => {
+                              if (!matchupRow) return
+                              setHoveredPlayerCell({ player: pa, opponent: pb, rect: e.currentTarget.getBoundingClientRect() })
+                            }}
+                            onBlur={() => setHoveredPlayerCell(null)}
+                            tabIndex={matchupRow ? 0 : -1}
+                            aria-label={matchupRow ? `${pa} vs ${pb}` : undefined}
+                          >
+                            {pct.toFixed(0)}%
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {hoveredPlayerCell && (() => {
+                const row = playersByPair.get(`${hoveredPlayerCell.player}|||${hoveredPlayerCell.opponent}`)
+                if (!row) return null
+                const drawPct = row.matches > 0 ? (row.draws / row.matches) * 100 : 0
+                const pos = getTooltipPosition(hoveredPlayerCell.rect)
+                return (
+                  <div
+                    role="tooltip"
+                    style={{
+                      position: 'fixed',
+                      left: pos.left,
+                      top: pos.top,
+                      transform: pos.transform,
+                      zIndex: 1000,
+                      pointerEvents: 'none',
+                      background: 'var(--bg-card)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      padding: '0.5rem 0.6rem',
+                      color: 'var(--text)',
+                      boxShadow: '0 10px 26px rgba(0,0,0,0.25)',
+                      minWidth: 220,
+                      maxWidth: 320,
+                      fontSize: '0.85rem',
+                      lineHeight: 1.25,
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, marginBottom: '0.35rem' }}>
+                      {row.player} vs {row.opponent_player}
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: '0.75rem', rowGap: '0.2rem' }}>
+                      <div style={{ color: 'var(--text-muted)' }}>Win %</div>
+                      <div style={{ textAlign: 'right' }}>{(row.win_rate * 100).toFixed(1)}%</div>
+                      <div style={{ color: 'var(--text-muted)' }}>Draw %</div>
+                      <div style={{ textAlign: 'right' }}>{drawPct.toFixed(1)}%</div>
+                      <div style={{ color: 'var(--text-muted)' }}>Record</div>
+                      <div style={{ textAlign: 'right' }}>{row.wins}–{row.losses}–{row.draws}</div>
+                      <div style={{ color: 'var(--text-muted)' }}>Matches</div>
+                      <div style={{ textAlign: 'right' }}>{row.matches}</div>
+                    </div>
+                  </div>
+                )
+              })()}
+            </div>
+          )}
+        </div>
+      )}
+
+      {dataMode === 'archetypes' && !loading && !error && summary && summary.list.filter((row) => (row.archetype || '').toLowerCase() !== (row.opponent_archetype || '').toLowerCase()).length === 0 && (
         <p style={{ color: 'var(--text-muted)' }}>No matchup data for the selected filters.</p>
+      )}
+      {dataMode === 'players' && !playersLoading && !playersError && playersSummary && playersSummary.players_list.length === 0 && playersSummary.matchups_list.length === 0 && (
+        <p style={{ color: 'var(--text-muted)' }}>No player matchup data for the selected filters.</p>
       )}
     </div>
   )

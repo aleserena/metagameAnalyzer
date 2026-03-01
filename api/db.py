@@ -23,7 +23,7 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Session, declarative_base, sessionmaker
+from sqlalchemy.orm import Session, aliased, declarative_base, sessionmaker
 
 logger = logging.getLogger(__name__)
 
@@ -1092,15 +1092,36 @@ def list_matchups_reported_against_player_id(session: Session, event_id: str, op
 # --- Repository helpers: players ---
 
 
+def _front_face_name(name: str) -> str:
+    """Dual-faced style 'Front // Back' -> 'Front'. Used so 'Norman Osborn' and 'Norman Osborn // Green Goblin' match."""
+    s = (name or "").strip()
+    if not s or s in ("Bye", "(drop)"):
+        return s or "(unknown)"
+    if " // " in s:
+        return s.split(" // ", 1)[0].strip() or s
+    return s
+
+
 def get_or_create_player(session: Session, display_name: str) -> tuple[int, str]:
-    """Resolve display name to player_id (create player if missing). Returns (player_id, display_name)."""
+    """Resolve display name to player_id (create player if missing). Returns (player_id, display_name).
+    Dual-faced names (X // Y) are stored as front face (X) so they unify with X across the app."""
     name = (display_name or "").strip() or "(unknown)"
+    canonical = _front_face_name(name)
+    row = session.query(PlayerRow).filter(PlayerRow.display_name == canonical).first()
+    if row:
+        if name != canonical:
+            alias_row = session.query(PlayerAliasRow).filter(PlayerAliasRow.alias == name).first()
+            if not alias_row:
+                session.add(PlayerAliasRow(alias=name, player_id=row.id))
+        return row.id, (row.display_name or "")
     row = session.query(PlayerRow).filter(PlayerRow.display_name == name).first()
     if row:
         return row.id, (row.display_name or "")
-    new_row = PlayerRow(display_name=name)
+    new_row = PlayerRow(display_name=canonical)
     session.add(new_row)
     session.flush()
+    if name != canonical:
+        session.add(PlayerAliasRow(alias=name, player_id=new_row.id))
     return new_row.id, (new_row.display_name or "")
 
 
@@ -1109,7 +1130,8 @@ def get_player_by_id(session: Session, player_id: int) -> PlayerRow | None:
 
 
 def resolve_name_to_player_id(session: Session, name: str) -> tuple[int | None, str]:
-    """Resolve a name (alias or display name) to (player_id, display_name). Uses aliases then players table."""
+    """Resolve a name (alias or display name) to (player_id, display_name). Uses aliases then players table.
+    Dual-faced names (X // Y) also match display_name X."""
     n = (name or "").strip()
     if not n or n in ("Bye", "(drop)"):
         return None, n
@@ -1121,6 +1143,11 @@ def resolve_name_to_player_id(session: Session, name: str) -> tuple[int | None, 
     player = session.query(PlayerRow).filter(PlayerRow.display_name == n).first()
     if player:
         return player.id, (player.display_name or "")
+    canonical = _front_face_name(n)
+    if canonical != n:
+        player = session.query(PlayerRow).filter(PlayerRow.display_name == canonical).first()
+        if player:
+            return player.id, (player.display_name or "")
     return None, n
 
 
@@ -1206,6 +1233,25 @@ def set_matchups_min_matches(session: Session, value: int) -> None:
     set_setting(session, MATCHUPS_MIN_MATCHES_KEY, max(0, value))
 
 
+MATCHUPS_PLAYERS_MIN_MATCHES_KEY = "matchups_players_min_matches"
+
+
+def get_matchups_players_min_matches(session: Session) -> int:
+    """Return the minimum number of matches to show a player pair (default 0)."""
+    v = get_setting(session, MATCHUPS_PLAYERS_MIN_MATCHES_KEY)
+    if v is None:
+        return 0
+    if isinstance(v, list) and len(v) > 0 and isinstance(v[0], int):
+        return max(0, v[0])
+    if isinstance(v, int):
+        return max(0, v)
+    return 0
+
+
+def set_matchups_players_min_matches(session: Session, value: int) -> None:
+    set_setting(session, MATCHUPS_PLAYERS_MIN_MATCHES_KEY, max(0, value))
+
+
 def list_matchups_with_deck_info(session: Session) -> list[dict]:
     """All matchups with their deck's archetype, format_id, date, event_id (for summary aggregation)."""
     rows = (
@@ -1226,4 +1272,40 @@ def list_matchups_with_deck_info(session: Session) -> list[dict]:
             "result_note": m.result_note or "",
         }
         for m, d in rows
+    ]
+
+
+def list_matchups_with_deck_and_players(session: Session) -> list[dict]:
+    """All matchups with deck's player_id, opponent_player_id, canonical player names (from players table),
+    archetypes, event_id, date, round. Uses canonical display_name so aliases (e.g. Tomas vs Tomás Duarte Romero)
+    map to one row per player."""
+    PlayerDeck = aliased(PlayerRow)
+    PlayerOpp = aliased(PlayerRow)
+    rows = (
+        session.query(MatchupRow, DeckRow, PlayerDeck, PlayerOpp)
+        .join(DeckRow, MatchupRow.deck_id == DeckRow.deck_id)
+        .join(PlayerDeck, DeckRow.player_id == PlayerDeck.id)
+        .outerjoin(PlayerOpp, MatchupRow.opponent_player_id == PlayerOpp.id)
+        .all()
+    )
+    return [
+        {
+            "deck_id": m.deck_id,
+            "opponent_deck_id": m.opponent_deck_id,
+            "player_id": d.player_id,
+            "opponent_player_id": PlayerOpp.id if PlayerOpp.id is not None else None,
+            "player": (p_deck.display_name or "").strip() or "(unknown)",
+            "opponent_player": (
+                (p_opp.display_name or "").strip() if p_opp else (m.opponent_player or "").strip()
+            ) or "(unknown)",
+            "archetype": (d.archetype or "").strip() or "(unknown)",
+            "opponent_archetype": (m.opponent_archetype or "").strip() or "(unknown)",
+            "format_id": d.format_id or "",
+            "event_id": d.event_id,
+            "date": d.date or "",
+            "result": m.result or "loss",
+            "result_note": m.result_note or "",
+            "round": m.round,
+        }
+        for m, d, p_deck, p_opp in rows
     ]

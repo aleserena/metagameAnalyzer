@@ -11,6 +11,8 @@ import {
   putRankWeights,
   getMatchupsMinMatchesSetting,
   putMatchupsMinMatchesSetting,
+  getMatchupsPlayersMinMatchesSetting,
+  putMatchupsPlayersMinMatchesSetting,
   clearScryfallCache,
   clearDecks,
   getUploadLinks,
@@ -50,6 +52,9 @@ export default function Settings() {
   const [matchupsMinMatches, setMatchupsMinMatches] = useState(0)
   const [loadingMatchupsMin, setLoadingMatchupsMin] = useState(true)
   const [savingMatchupsMin, setSavingMatchupsMin] = useState(false)
+  const [matchupsPlayersMinMatches, setMatchupsPlayersMinMatches] = useState(0)
+  const [loadingMatchupsPlayersMin, setLoadingMatchupsPlayersMin] = useState(true)
+  const [savingMatchupsPlayersMin, setSavingMatchupsPlayersMin] = useState(false)
 
   useEffect(() => {
     getPlayerAliases()
@@ -91,6 +96,13 @@ export default function Settings() {
       .finally(() => setLoadingMatchupsMin(false))
   }, [])
 
+  useEffect(() => {
+    getMatchupsPlayersMinMatchesSetting()
+      .then((r) => setMatchupsPlayersMinMatches(r.value))
+      .catch(() => setMatchupsPlayersMinMatches(0))
+      .finally(() => setLoadingMatchupsPlayersMin(false))
+  }, [])
+
   const handleSaveMatchupsMinMatches = () => {
     setSavingMatchupsMin(true)
     putMatchupsMinMatchesSetting(matchupsMinMatches)
@@ -100,6 +112,17 @@ export default function Settings() {
       })
       .catch((e) => toast.error(reportError(e)))
       .finally(() => setSavingMatchupsMin(false))
+  }
+
+  const handleSaveMatchupsPlayersMinMatches = () => {
+    setSavingMatchupsPlayersMin(true)
+    putMatchupsPlayersMinMatchesSetting(matchupsPlayersMinMatches)
+      .then((r) => {
+        setMatchupsPlayersMinMatches(r.value)
+        toast.success('Player matchups minimum matches saved')
+      })
+      .catch((e) => toast.error(reportError(e)))
+      .finally(() => setSavingMatchupsPlayersMin(false))
   }
 
   const handleAddAlias = () => {
@@ -338,6 +361,35 @@ export default function Settings() {
               disabled={savingMatchupsMin}
             >
               {savingMatchupsMin ? 'Saving...' : 'Save'}
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div className="chart-container" style={{ maxWidth: 600, marginBottom: '2rem' }}>
+        <h2 style={{ margin: '0 0 1rem', fontSize: '1.25rem' }}>Matchups (players): minimum matches</h2>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1rem' }}>
+          On the Matchups page (Players view), only player pairs with at least this many reported matches are shown.
+        </p>
+        {loadingMatchupsPlayersMin ? (
+          <p style={{ color: 'var(--text-muted)' }}>Loading...</p>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <input
+              type="number"
+              min={0}
+              value={matchupsPlayersMinMatches}
+              onChange={(e) => setMatchupsPlayersMinMatches(Math.max(0, parseInt(e.target.value, 10) || 0))}
+              style={{ width: 72, padding: '0.35rem 0.5rem' }}
+            />
+            <button
+              type="button"
+              className="btn"
+              style={{ padding: '0.35rem 0.75rem' }}
+              onClick={handleSaveMatchupsPlayersMinMatches}
+              disabled={savingMatchupsPlayersMin}
+            >
+              {savingMatchupsPlayersMin ? 'Saving...' : 'Save'}
             </button>
           </div>
         )}

@@ -82,6 +82,32 @@ def _fetch_paper_printing(card_name: str) -> dict | None:
     return None
 
 
+def _search_by_flavor_name(typed_name: str) -> dict | None:
+    """Search Scryfall for a card whose flavor_name matches typed_name. Returns card object or None."""
+    if not (typed_name or typed_name.strip()):
+        return None
+    time.sleep(REQUEST_DELAY)
+    try:
+        # Search cards that have a flavor name and match the typed string (fulltext may match flavor_name)
+        q = f'has:flavorname "{typed_name}" game:paper'
+        r = requests.get(
+            SCRYFALL_SEARCH,
+            params={"q": q, "unique": "cards"},
+            timeout=15,
+        )
+        r.raise_for_status()
+        data = r.json()
+        cards = data.get("data", []) or []
+        normalized = typed_name.strip()
+        for card in cards:
+            fn = card.get("flavor_name") or ""
+            if fn.strip().lower() == normalized.lower():
+                return card
+    except Exception:
+        pass
+    return None
+
+
 def _card_is_paper(card: dict) -> bool:
     """True if this printing is available in paper."""
     games = card.get("games") or []
@@ -210,6 +236,21 @@ def lookup_cards(card_names: list[str]) -> dict[str, dict]:
             result[orig_name] = entry
             _card_cache[orig_name] = entry
             _card_cache[card.get("name", "")] = entry
+
+    # Second pass: for names still not found, search by flavor_name (e.g. Universes Within names)
+    still_missing = [n for n in names if n not in result or result.get(n, {}).get("error")]
+    for orig_name in still_missing:
+        card = _search_by_flavor_name(orig_name)
+        if not card:
+            continue
+        if not _card_is_paper(card):
+            paper_card = _fetch_paper_printing(card.get("name", ""))
+            if paper_card:
+                card = paper_card
+        entry = _build_entry(card)
+        result[orig_name] = entry
+        _card_cache[orig_name] = entry
+        _card_cache[card.get("name", "")] = entry
 
     _save_cache()
     return result
