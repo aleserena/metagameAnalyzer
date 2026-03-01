@@ -319,6 +319,16 @@ def _normalize_player(name: str) -> str:
     return _player_aliases.get(n, n)
 
 
+def _resolve_deck_player(session, d: dict) -> None:
+    """Set d['player_id'] and d['player'] (display name) from d['player'] (name). Resolve via aliases/players; create player if missing."""
+    name = (d.get("player") or "").strip() or "(unknown)"
+    pid, display = _db.resolve_name_to_player_id(session, name)
+    if pid is None:
+        pid, display = _db.get_or_create_player(session, name)
+    d["player_id"] = pid
+    d["player"] = display
+
+
 _load_player_aliases()
 
 
@@ -443,7 +453,7 @@ def _load_decks_from_db() -> None:
 
 
 def _persist_decks_to_db(decks: list[dict], origin: str = None) -> None:
-    """Write decks to DB (upsert each). Then reload _decks from DB."""
+    """Write decks to DB (upsert each). Resolve player name to player_id before each upsert. Then reload _decks from DB."""
     if not _database_available() or _db is None:
         return
     if origin is None:
@@ -451,6 +461,8 @@ def _persist_decks_to_db(decks: list[dict], origin: str = None) -> None:
     try:
         with _db.session_scope() as session:
             for d in decks:
+                if "player_id" not in d:
+                    _resolve_deck_player(session, d)
                 _db.upsert_deck(session, d, origin=origin)
         _load_decks_from_db()
     except Exception as e:
@@ -1259,23 +1271,24 @@ def merge_preview(
         "player_count": merged["player_count"],
     }
 
-    # Player/deck pairing: same canonical player in both events -> merge decks
+    # Player/deck pairing: same player_id in both events -> merge decks
     deck_pairs: list[DeckPairPreview] = []
     decks_keep_only: list[dict] = []
     decks_remove_only: list[dict] = []
     with _db.session_scope() as session:
         decks_keep = _db.get_decks_by_event(session, keep.event_id)
         decks_remove = _db.get_decks_by_event(session, remove.event_id)
-        keep_by_canonical: dict[str, dict] = {}
+        keep_by_player_id: dict[int, dict] = {}
         for d in decks_keep:
-            c = _normalize_player(d.get("player") or "")
-            keep_by_canonical[c] = d
+            pid = d.get("player_id")
+            if pid is not None:
+                keep_by_player_id[pid] = d
         paired_keep_ids: set[int] = set()
         paired_remove_ids: set[int] = set()
         for d in decks_remove:
-            c = _normalize_player(d.get("player") or "")
-            if c in keep_by_canonical:
-                k = keep_by_canonical[c]
+            pid = d.get("player_id")
+            if pid is not None and pid in keep_by_player_id:
+                k = keep_by_player_id[pid]
                 paired_keep_ids.add(k["deck_id"])
                 paired_remove_ids.add(d["deck_id"])
                 pair_conflicts = _deck_merge_conflicts(k, d)
@@ -1517,6 +1530,7 @@ def import_event(body: EventExportData):
                 if not deck_data.get("format_id"):
                     deck_data["format_id"] = event_dict.get("format_id", "") or "EDH"
 
+                _resolve_deck_player(session, deck_data)
                 deck_row = _db.dict_to_deck_row(deck_data, origin=_db.ORIGIN_MANUAL)
                 session.add(deck_row)
 
@@ -1615,16 +1629,17 @@ def merge_events(body: MergeEventsBody):
         with _db.session_scope() as session:
             decks_keep = _db.get_decks_by_event(session, keep_row.event_id)
             decks_remove = _db.get_decks_by_event(session, remove_row.event_id)
-        keep_by_canonical = {}
+        keep_by_player_id = {}
         for d in decks_keep:
-            c = _normalize_player(d.get("player") or "")
-            keep_by_canonical[c] = d
+            pid = d.get("player_id")
+            if pid is not None:
+                keep_by_player_id[pid] = d
         auto_pairs: list[tuple[dict, dict]] = []
         paired_remove_ids: set[int] = set()
         for d in decks_remove:
-            c = _normalize_player(d.get("player") or "")
-            if c in keep_by_canonical:
-                auto_pairs.append((keep_by_canonical[c], d))
+            pid = d.get("player_id")
+            if pid is not None and pid in keep_by_player_id:
+                auto_pairs.append((keep_by_player_id[pid], d))
                 paired_remove_ids.add(d["deck_id"])
         all_pairs: list[tuple[int, int]] = [(k["deck_id"], r["deck_id"]) for k, r in auto_pairs]
         for pm in body.player_merges:
@@ -1754,6 +1769,7 @@ async def upload_decks_to_event(
             out.append(d)
         with _db.session_scope() as session:
             for d in out:
+                _resolve_deck_player(session, d)
                 _db.upsert_deck(session, d, origin=_db.ORIGIN_MANUAL)
         _load_decks_from_db()
         return {"event_id": event_id, "loaded": len(out), "message": f"Uploaded {len(out)} decks"}
@@ -1799,6 +1815,7 @@ def add_blank_deck_to_event(event_id: str):
             "mainboard": [],
             "sideboard": [],
         }
+        _resolve_deck_player(session, blank)
         _db.upsert_deck(session, blank, origin=_db.ORIGIN_MANUAL)
     _load_decks_from_db()
     return {"event_id": event_id, "deck_id": deck_id, "message": "Deck added"}
@@ -2097,6 +2114,7 @@ def _submit_create_with_upload_link(session, row, ev, event_name: str, body: Sub
         "sideboard": sideboard,
     }
     deck_list = _normalize_split_cards([deck])
+    _resolve_deck_player(session, deck_list[0])
     _db.upsert_deck(session, deck_list[0], origin=_db.ORIGIN_MANUAL)
     return deck_id
 
@@ -2136,6 +2154,7 @@ def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
             current["sideboard"] = sideboard
             current["commanders"] = commanders
             deck_list = _normalize_split_cards([current])
+            _resolve_deck_player(session, deck_list[0])
             _db.upsert_deck(session, deck_list[0], origin=current.get("origin", _db.ORIGIN_MANUAL))
             _db.mark_upload_link_used(session, token)
             _load_decks_from_db()
@@ -2282,23 +2301,22 @@ def update_deck_endpoint(deck_id: int, body: UpdateDeckBody):
     # EDH: if no commander present, use first mainboard card as commander
     if (current.get("format_id") or "").upper() == "EDH" and not current.get("commanders") and current.get("mainboard"):
         current["commanders"] = [current["mainboard"][0]["card"]]
-    # No duplicate player per event: another deck in same event cannot have the same player
+    # No duplicate player per event: another deck in same event cannot have the same player_id
     event_id = current.get("event_id")
-    if event_id and (body.player is not None or current.get("player")):
-        new_player = _normalize_player((current.get("player") or "").strip())
-        if new_player and new_player != "(unknown)":
-            with _db.session_scope() as session:
-                event_decks = _db.get_decks_by_event(session, event_id)
-                for d in event_decks:
-                    if d.get("deck_id") != deck_id:
-                        other_player = _normalize_player((d.get("player") or "").strip())
-                        if other_player == new_player:
+    try:
+        with _db.session_scope() as session:
+            if "player_id" not in current:
+                _resolve_deck_player(session, current)
+            if event_id and (body.player is not None or current.get("player")):
+                new_pid = current.get("player_id")
+                if new_pid is not None:
+                    event_decks = _db.get_decks_by_event(session, event_id)
+                    for d in event_decks:
+                        if d.get("deck_id") != deck_id and d.get("player_id") == new_pid:
                             raise HTTPException(
                                 status_code=400,
                                 detail="Player already in this event. Each player can only have one deck per event.",
                             )
-    try:
-        with _db.session_scope() as session:
             _db.upsert_deck(session, current, origin=current.get("origin", _db.ORIGIN_MTGTOP8))
         _load_decks_from_db()
         return {"deck_id": deck_id, "message": "updated"}
@@ -3439,13 +3457,53 @@ def get_players(
     date_from: str | None = Query(None, description="Filter from date (DD/MM/YY)"),
     date_to: str | None = Query(None, description="Filter to date (DD/MM/YY)"),
 ):
-    """Player leaderboard (wins, top-2, top-4, points). Merges aliased players."""
+    """Player leaderboard (wins, top-2, top-4, points). Merges aliased players. Includes player_id for stable links."""
     if not _decks:
         return {"players": []}
     filtered = _filter_decks_by_date(_decks, date_from, date_to)
     decks = [Deck.from_dict(d) for d in filtered]
     rank_weights = settings_service.get_rank_weights()
-    return {"players": player_leaderboard(decks, normalize_player=_normalize_player, rank_weights=rank_weights)}
+    players = player_leaderboard(decks, normalize_player=_normalize_player, rank_weights=rank_weights)
+    for p in players:
+        canonical = p.get("player") or ""
+        p["player_id"] = next((d.get("player_id") for d in filtered if _normalize_player(d.get("player") or "") == canonical), None)
+    return {"players": players}
+
+
+@app.get("/api/players/id/{player_id:int}")
+def get_player_detail_by_id(player_id: int):
+    """Player stats and their decks by stable player_id."""
+    player_decks = [d for d in _decks if d.get("player_id") == player_id]
+    if not player_decks:
+        raise HTTPException(status_code=404, detail="Player not found")
+    canonical = (player_decks[0].get("player") or "").strip()
+    decks = [Deck.from_dict(d) for d in player_decks]
+    rank_weights = settings_service.get_rank_weights()
+    stats_list = player_leaderboard(decks, rank_weights=rank_weights)
+    if not stats_list:
+        raise HTTPException(status_code=404, detail="Player not found")
+    stat = stats_list[0]
+    deck_summaries = [
+        {"deck_id": d.get("deck_id"), "name": d.get("name"), "event_name": d.get("event_name"), "date": d.get("date"), "rank": d.get("rank")}
+        for d in player_decks
+    ]
+    deck_summaries.sort(key=lambda x: _deck_sort_key(x))
+    out = {
+        "player": canonical,
+        "player_id": player_id,
+        "wins": stat["wins"],
+        "top2": stat["top2"],
+        "top4": stat["top4"],
+        "top8": stat["top8"],
+        "points": stat["points"],
+        "deck_count": stat["deck_count"],
+        "decks": deck_summaries,
+    }
+    if _database_available():
+        with _db.session_scope() as session:
+            email = _db.get_player_email(session, canonical)
+            out["has_email"] = bool(email and email.strip())
+    return out
 
 
 @app.get("/api/players/{player_name:path}")
@@ -3467,8 +3525,10 @@ def get_player_detail(player_name: str):
         for d in player_decks
     ]
     deck_summaries.sort(key=lambda x: _deck_sort_key(x))
+    pid = player_decks[0].get("player_id") if player_decks else None
     out = {
         "player": canonical,
+        "player_id": pid,
         "wins": stat["wins"],
         "top2": stat["top2"],
         "top4": stat["top4"],
@@ -3745,6 +3805,7 @@ async def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
                                     _db.DeckRow.origin == _db.ORIGIN_MTGTOP8,
                                 ).delete(synchronize_session=False)
                             for d in deck_dicts:
+                                _resolve_deck_player(session, d)
                                 _db.upsert_deck(session, d, origin=_db.ORIGIN_MTGTOP8)
                         else:
                             # Default: create events only if missing, upsert decks by deck_id
@@ -3768,6 +3829,7 @@ async def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
                                             location=ev_location,
                                         )
                             for d in deck_dicts:
+                                _resolve_deck_player(session, d)
                                 _db.upsert_deck(session, d, origin=_db.ORIGIN_MTGTOP8)
                     _load_decks_from_db()
                     duration = time.time() - start_time

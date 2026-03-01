@@ -43,7 +43,7 @@ const router = createBrowserRouter(
         { path: 'decks/compare', element: <DeckCompare /> },
         { path: 'decks/:deckId', element: <DeckDetail /> },
         { path: 'players', element: <Players /> },
-        { path: 'players/:playerName', element: <PlayerDetail /> },
+        { path: 'players/:playerId', element: <PlayerDetail /> },
         { path: 'feedback', element: <Feedback /> },
         {
           path: 'scrape',

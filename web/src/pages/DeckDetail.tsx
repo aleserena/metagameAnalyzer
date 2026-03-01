@@ -299,7 +299,7 @@ export default function DeckDetail() {
           <div>
             <div className="label">Player</div>
             <div>
-              <Link to={`/players/${encodeURIComponent(deck.player)}`} style={{ color: 'var(--accent)' }}>
+              <Link to={`/players/${deck.player_id != null ? deck.player_id : encodeURIComponent(deck.player)}`} style={{ color: 'var(--accent)' }}>
                 {deck.player}
               </Link>
             </div>

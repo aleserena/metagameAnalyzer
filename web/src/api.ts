@@ -681,6 +681,7 @@ export async function getPlayers(dateFrom?: string | null, dateTo?: string | nul
 
 export interface PlayerDetail {
   player: string
+  player_id?: number
   wins: number
   top2: number
   top4: number
@@ -694,6 +695,10 @@ export interface PlayerDetail {
 
 export async function getPlayerDetail(playerName: string): Promise<PlayerDetail> {
   return fetchApi(`/players/${encodeURIComponent(playerName)}`)
+}
+
+export async function getPlayerDetailById(playerId: number): Promise<PlayerDetail> {
+  return fetchApi(`/players/id/${playerId}`)
 }
 
 export async function getPlayerAliases(): Promise<{ aliases: Record<string, string> }> {

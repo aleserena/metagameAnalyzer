@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { getPlayerDetail, getSimilarPlayers, addPlayerAlias, getPlayerAliases, putPlayerEmail, sendPlayerMissingDeckLinks } from '../api'
+import { getPlayerDetail, getPlayerDetailById, getSimilarPlayers, addPlayerAlias, getPlayerAliases, putPlayerEmail, sendPlayerMissingDeckLinks } from '../api'
 import type { PlayerDetail as PlayerDetailData } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import { useFetch } from '../hooks/useFetch'
@@ -11,12 +11,18 @@ import PageSkeleton from '../components/PageSkeleton'
 import { reportError } from '../utils'
 
 export default function PlayerDetail() {
-  const { playerName } = useParams<{ playerName: string }>()
+  const { playerId: playerIdParam } = useParams<{ playerId: string }>()
   const navigate = useNavigate()
   const { user } = useAuth()
+  const id = playerIdParam != null ? parseInt(playerIdParam, 10) : NaN
+  const isId = !Number.isNaN(id) && String(id) === playerIdParam
   const { data, loading, error, refetch } = useFetch<PlayerDetailData>(
-    () => (playerName ? getPlayerDetail(decodeURIComponent(playerName)) : Promise.reject(new Error('Missing player name'))),
-    [playerName ?? '']
+    () => {
+      if (!playerIdParam) return Promise.reject(new Error('Missing player'))
+      if (isId) return getPlayerDetailById(id)
+      return getPlayerDetail(decodeURIComponent(playerIdParam))
+    },
+    [playerIdParam ?? '', isId, id]
   )
   const [similarPlayers, setSimilarPlayers] = useState<string[]>([])
   const [aliases, setAliases] = useState<Record<string, string>>({})
@@ -29,6 +35,15 @@ export default function PlayerDetail() {
   useEffect(() => {
     if (error) toast.error(reportError(new Error(error)))
   }, [error])
+
+  // When loaded by name, replace URL with stable ID so bookmark/share uses /players/123
+  useEffect(() => {
+    if (!data?.player_id || !playerIdParam) return
+    const currentIsId = !Number.isNaN(parseInt(playerIdParam, 10)) && String(parseInt(playerIdParam, 10)) === playerIdParam
+    if (!currentIsId && playerIdParam !== String(data.player_id)) {
+      navigate(`/players/${data.player_id}`, { replace: true })
+    }
+  }, [data?.player_id, playerIdParam, navigate])
 
   useEffect(() => {
     if (!data?.player) return

@@ -1081,7 +1081,7 @@ export default function EventDetail() {
                           </td>
                           <td>
                             {cellStr(d.player) ? (
-                              <Link to={`/players/${encodeURIComponent(cellStr(d.player))}`} style={{ color: 'var(--accent)' }}>
+                              <Link to={`/players/${d.player_id != null ? d.player_id : encodeURIComponent(cellStr(d.player))}`} style={{ color: 'var(--accent)' }}>
                                 {cellStr(d.player)}
                               </Link>
                             ) : (
