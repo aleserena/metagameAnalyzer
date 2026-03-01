@@ -4,6 +4,7 @@ import { Toaster } from 'react-hot-toast'
 import toast from 'react-hot-toast'
 import { getUploadLinkInfo, getCardLookup, submitDeckWithUploadLink, submitFeedbackWithUploadLink, submitDecklistWithUploadLink } from '../api'
 import { parseMoxfieldDeckList, formatMoxfieldDeckList } from '../lib/deckListParser'
+import { normalizeDeckListByLookup } from '../lib/deckUtils'
 import { isBye, isDrop, MATCHUP_RESULT_OPTIONS, matchupItemToRow } from '../lib/matchups'
 import { reportError } from '../utils'
 import CardSearchInput from '../components/CardSearchInput'
@@ -131,6 +132,9 @@ export default function UploadDeck() {
             ...sideboard.map((c) => c.card),
           ]),
         ].filter((n) => (n || '').trim())
+        let mainboardToSubmit = parsed.mainboard
+        let sideboardToSubmit = parsed.sideboard
+        let commandersToSubmit = commanders
         if (uniqueNames.length > 0) {
           const lookup = await getCardLookup(uniqueNames)
           const invalid = uniqueNames.filter((n) => !lookup[n] || (lookup[n] as { error?: string }).error)
@@ -138,14 +142,19 @@ export default function UploadDeck() {
             toast.error(`${invalid.length} card(s) not found: ${invalid.slice(0, 5).join(', ')}${invalid.length > 5 ? ` and ${invalid.length - 5} more` : ''}. Please correct or remove them.`)
             return
           }
+          const { parsed: normalized, text: normalizedText } = normalizeDeckListByLookup(parsed, lookup)
+          if (normalizedText !== deckListText) setDeckListText(normalizedText)
+          mainboardToSubmit = normalized.mainboard
+          sideboardToSubmit = normalized.sideboard
+          commandersToSubmit = normalized.commanders.map((c) => c.card.trim()).filter(Boolean)
         }
         await submitDeckWithUploadLink(token, {
           player: player.trim(),
           name: deckName.trim(),
           rank: rank.trim(),
-          mainboard: parsed.mainboard,
-          sideboard: parsed.sideboard,
-          commanders,
+          mainboard: mainboardToSubmit,
+          sideboard: sideboardToSubmit,
+          commanders: commandersToSubmit,
         })
         setSubmitted(true)
         toast.success(info.mode === 'update' ? 'Deck updated successfully.' : 'Deck submitted successfully.')
@@ -196,10 +205,13 @@ export default function UploadDeck() {
         toast.error(`${invalid.length} card(s) not found: ${invalid.slice(0, 5).join(', ')}${invalid.length > 5 ? ` and ${invalid.length - 5} more` : ''}. Please correct or remove them.`)
         return
       }
+      const { parsed: normalized, text: normalizedText } = normalizeDeckListByLookup(parsed, lookup)
+      if (normalizedText !== uploadDeckListText) setUploadDeckListText(normalizedText)
+      const normCmd = normalized.commanders.map((c) => c.card.trim()).filter(Boolean)
       await submitDecklistWithUploadLink(token, {
-        mainboard,
-        sideboard,
-        commanders: commanders.length > 0 ? commanders : undefined,
+        mainboard: normalized.mainboard,
+        sideboard: normalized.sideboard,
+        commanders: normCmd.length > 0 ? normCmd : undefined,
       })
       closeUploadDeckModal()
       toast.success('Deck list updated')

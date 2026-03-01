@@ -3,6 +3,18 @@ const GENERIC_ERROR_MESSAGE = 'There was an issue with the application, please r
 /** Default request timeout (ms). Used by API and auth fetches. */
 export const REQUEST_TIMEOUT_MS = 30_000
 
+/**
+ * Normalize string for accent-insensitive substring matching (e.g. "matias" matches "Matías").
+ * Lowercases and strips combining marks (NFD then remove \p{M}).
+ */
+export function normalizeSearchForFilter(s: string): string {
+  if (!s || typeof s !== 'string') return ''
+  return s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+}
+
 /** Longer timeout for initial page load (backend may be cold-starting). */
 export const REQUEST_TIMEOUT_LOAD_MS = 60_000
 

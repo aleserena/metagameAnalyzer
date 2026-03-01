@@ -1,6 +1,33 @@
 import type { CardLookupResult } from '../api'
+import type { ParsedDeckList } from './deckListParser'
+import { formatMoxfieldDeckList } from './deckListParser'
 
 export const WUBRG_ORDER = ['W', 'U', 'B', 'R', 'G'] as const
+
+/**
+ * Replace card names in a parsed deck with canonical names from lookup when the card
+ * was found by flavor_name (or alias); returns normalized parsed deck and formatted text.
+ */
+export function normalizeDeckListByLookup(
+  parsed: ParsedDeckList,
+  lookup: Record<string, CardLookupResult>
+): { parsed: ParsedDeckList; text: string } {
+  const canon = (card: string): string => {
+    const entry = lookup[card]
+    if (entry?.name && entry.name !== card) return entry.name
+    return card
+  }
+  const commanders = parsed.commanders.map((c) => ({ ...c, card: canon(c.card) }))
+  const mainboard = parsed.mainboard.map((c) => ({ ...c, card: canon(c.card) }))
+  const sideboard = parsed.sideboard.map((c) => ({ ...c, card: canon(c.card) }))
+  const normalized: ParsedDeckList = { commanders, mainboard, sideboard }
+  const text = formatMoxfieldDeckList(
+    commanders.map((c) => c.card),
+    mainboard,
+    sideboard
+  )
+  return { parsed: normalized, text }
+}
 
 /**
  * Canonical card name for equality/comparison (double-faced = front face, case-insensitive).

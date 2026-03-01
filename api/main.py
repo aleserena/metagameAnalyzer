@@ -698,6 +698,7 @@ def list_decks(
     deck_name: str | None = Query(None, description="Filter by deck name (substring)"),
     archetype: str | None = Query(None, description="Filter by archetype (substring)"),
     player: str | None = Query(None, description="Filter by player name (substring)"),
+    player_id: int | None = Query(None, description="Filter by player ID (exact)"),
     card: str | None = Query(None, description="Filter by card name (substring, commander, mainboard or sideboard)"),
     colors: str | None = Query(
         None,
@@ -733,6 +734,8 @@ def list_decks(
             if p_norm in _normalize_search(d.get("player") or "")
             or p_norm in _normalize_search(_normalize_player(d.get("player") or ""))
         ]
+    if player_id is not None:
+        filtered = [d for d in filtered if d.get("player_id") == player_id]
     if card:
         card_norm = _normalize_search(card)
         filtered = [
@@ -1379,6 +1382,7 @@ def export_event(event_id: str):
     decks: list[dict] = []
     matchups: list[dict] = []
     player_emails: dict[str, str] = {}
+    players_list: list[dict] = []
 
     if _database_available():
         try:
@@ -1406,6 +1410,22 @@ def export_event(event_id: str):
                 }
                 if players:
                     player_emails = _db.get_emails_for_players(session, list(players))
+
+                # Collect distinct player_ids from decks and matchups for optional players array
+                player_ids: set[int] = set()
+                for d in decks:
+                    pid = d.get("player_id")
+                    if pid is not None:
+                        player_ids.add(pid)
+                for m in matchups:
+                    pid = m.get("opponent_player_id")
+                    if pid is not None:
+                        player_ids.add(pid)
+                players_list.clear()
+                for pid in sorted(player_ids):
+                    row = _db.get_player_by_id(session, pid)
+                    if row:
+                        players_list.append({"id": row.id, "display_name": row.display_name or ""})
         except HTTPException:
             raise
         except Exception as e:
@@ -1426,6 +1446,7 @@ def export_event(event_id: str):
         decks=decks,
         matchups=matchups,
         player_emails=player_emails,
+        players=players_list,
     )
     filename = f"event-{event_dict['event_id']}.json"
     return JSONResponse(
@@ -2786,6 +2807,19 @@ def put_matchups_min_matches_setting(body: MatchupsMinMatchesBody):
     return {"value": n}
 
 
+@app.get("/api/settings/matchups-players-min-matches", dependencies=[Depends(require_admin), Depends(require_database)])
+def get_matchups_players_min_matches_setting():
+    """Return minimum matches threshold for player matchup summary (admin)."""
+    return {"value": settings_service.get_matchups_players_min_matches()}
+
+
+@app.put("/api/settings/matchups-players-min-matches", dependencies=[Depends(require_admin), Depends(require_database)])
+def put_matchups_players_min_matches_setting(body: MatchupsMinMatchesBody):
+    """Set minimum matches threshold for player matchup summary (admin)."""
+    n = settings_service.set_matchups_players_min_matches(body.value)
+    return {"value": n}
+
+
 @app.post("/api/settings/clear-cache")
 def post_clear_scryfall_cache(_: str = Depends(require_admin)):
     """Clear Scryfall card lookup cache (in-memory and .scryfall_cache.json). Admin-only."""
@@ -2850,7 +2884,7 @@ def send_player_missing_deck_links(player_name: str, request: Request):
     name = (player_name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Player name required")
-    canonical = _normalize_player(name)
+    canonical = _resolve_player_name_to_canonical(name)
     players_to_match = [canonical] + [k for k, v in _player_aliases.items() if v == canonical]
     base_url = _upload_link_base_url(request)
     with _db.session_scope() as session:
@@ -3066,6 +3100,16 @@ def _is_intentional_draw_result(result: str) -> bool:
     """True if result is any intentional-draw variant (stored as distinct state; used as win/loss/draw in calcs)."""
     r = (result or "").strip().lower()
     return r in ("intentional_draw", "intentional_draw_win", "intentional_draw_loss")
+
+
+def _front_face_name(name: str) -> str:
+    """Dual-faced style 'Front // Back' -> 'Front'. Unifies e.g. Norman Osborn and Norman Osborn // Green Goblin."""
+    s = (name or "").strip()
+    if not s or s in ("Bye", "(drop)"):
+        return s or "(unknown)"
+    if " // " in s:
+        return s.split(" // ", 1)[0].strip() or s
+    return s
 
 
 def _matchup_result_consistent(result_a: str, result_b: str) -> bool:
@@ -3317,6 +3361,146 @@ def get_matchups_summary(
     }
 
 
+@app.get("/api/matchups/players-summary", dependencies=[Depends(require_database)], tags=["Matchups"])
+def get_matchups_players_summary(
+    format_id: str | None = Query(None),
+    event_ids: str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+):
+    """Aggregated matchup summary by player. Optional filters; respects matchups_players_min_matches setting."""
+    with _db.session_scope() as session:
+        min_matches = _db.get_matchups_players_min_matches(session)
+        rows = _db.list_matchups_with_deck_and_players(session)
+
+    event_id_set = None
+    if event_ids:
+        event_id_set = {x.strip() for x in event_ids.split(",") if x.strip()}
+
+    filtered = []
+    for r in rows:
+        if format_id and (r.get("format_id") or "").strip().upper() != format_id.strip().upper():
+            continue
+        if event_id_set is not None and (r.get("event_id") or "").strip() not in event_id_set:
+            continue
+        if not _date_in_range(r.get("date") or "", date_from, date_to):
+            continue
+        if (r.get("result") or "").strip().lower() in ("bye", "drop"):
+            continue
+        filtered.append(r)
+
+    def to_effective_wld(row):
+        raw = (row.get("result") or "loss").strip().lower()
+        if raw == "intentional_draw":
+            return (0, 0, 1)
+        if raw == "intentional_draw_win":
+            return (1, 0, 0)
+        if raw == "intentional_draw_loss":
+            return (0, 1, 0)
+        canonical = _matchup_result_to_canonical(row.get("result") or "loss")
+        if canonical == "win":
+            return (1, 0, 0)
+        if canonical == "loss":
+            return (0, 1, 0)
+        return (0, 0, 1)
+
+    # Aggregate by (player, opponent_player). Use front-face name so "Norman Osborn" and
+    # "Norman Osborn // Green Goblin" are one row (dual-faced names unified across the app).
+    agg: dict[tuple[str, str], dict] = {}
+    for r in filtered:
+        if r.get("opponent_player_id") is None:
+            continue
+        player = (r.get("player") or "(unknown)").strip()
+        opp = (r.get("opponent_player") or "(unknown)").strip()
+        player_canonical = _front_face_name(player)
+        opp_canonical = _front_face_name(opp)
+        key = (player_canonical.lower(), opp_canonical.lower())
+        if key not in agg:
+            agg[key] = {
+                "wins": 0,
+                "losses": 0,
+                "draws": 0,
+                "intentional_draws": 0,
+                "matches": 0,
+                "player": player_canonical,
+                "opponent_player": opp_canonical,
+            }
+        wins, losses, draws = to_effective_wld(r)
+        agg[key]["wins"] += wins
+        agg[key]["losses"] += losses
+        agg[key]["draws"] += draws
+        if _is_intentional_draw_result(r.get("result") or ""):
+            agg[key]["intentional_draws"] += 1
+        agg[key]["matches"] += 1
+
+    # Canonical display names (first occurrence)
+    canonical_player: dict[str, str] = {}
+    for (pl, op), v in agg.items():
+        for raw in [v["player"], v["opponent_player"]]:
+            if raw and raw.lower() not in ("bye", "drop"):
+                canonical_player.setdefault(raw.lower(), raw)
+
+    def norm_player(name: str) -> str:
+        return canonical_player.get((name or "").lower(), name or "(unknown)")
+
+    players_list_out = []
+    for (_pl_lower, _op_lower), v in agg.items():
+        if v["matches"] < min_matches:
+            continue
+        wr = (v["wins"] + 0.5 * v["draws"]) / v["matches"] if v["matches"] else 0
+        players_list_out.append({
+            "player": norm_player(v["player"]),
+            "opponent_player": norm_player(v["opponent_player"]),
+            "wins": v["wins"],
+            "losses": v["losses"],
+            "draws": v["draws"],
+            "intentional_draws": v["intentional_draws"],
+            "matches": v["matches"],
+            "win_rate": round(wr, 4),
+        })
+
+    all_players_sorted = sorted(
+        {r["player"] for r in players_list_out} | {r["opponent_player"] for r in players_list_out}
+    )
+    players_matrix = []
+    for i, pa in enumerate(all_players_sorted):
+        row = []
+        for j, pb in enumerate(all_players_sorted):
+            if i == j:
+                row.append(None)
+                continue
+            key = (pa.lower(), pb.lower())
+            v = agg.get(key, {"matches": 0, "wins": 0, "draws": 0})
+            if v["matches"] < min_matches:
+                row.append(None)
+                continue
+            wr = (v["wins"] + 0.5 * v["draws"]) / v["matches"] if v["matches"] else None
+            row.append(round(wr, 4) if wr is not None else None)
+        players_matrix.append(row)
+
+    matchups_list_out = [
+        {
+            "player_a": _front_face_name(r.get("player") or "(unknown)"),
+            "player_b": _front_face_name(r.get("opponent_player") or "(unknown)"),
+            "result": r.get("result") or "",
+            "event_id": r.get("event_id") or "",
+            "date": r.get("date") or "",
+            "round": r.get("round"),
+            "archetype_a": r.get("archetype") or "",
+            "archetype_b": r.get("opponent_archetype") or "",
+        }
+        for r in filtered
+    ]
+
+    return {
+        "players_list": players_list_out,
+        "players": all_players_sorted,
+        "players_matrix": players_matrix,
+        "matchups_list": matchups_list_out,
+        "min_matches": min_matches,
+    }
+
+
 @app.get("/api/events/{event_id}/missing-matchups", dependencies=[Depends(require_admin), Depends(require_database)])
 def get_missing_matchups(event_id: str):
     """List players (decks) in this event that have fewer matchups than expected (admin).
@@ -3456,17 +3640,22 @@ def get_similar_players(
 def get_players(
     date_from: str | None = Query(None, description="Filter from date (DD/MM/YY)"),
     date_to: str | None = Query(None, description="Filter to date (DD/MM/YY)"),
+    player_id: int | None = Query(None, description="Filter to a single player by ID (exact)"),
 ):
     """Player leaderboard (wins, top-2, top-4, points). Merges aliased players. Includes player_id for stable links."""
     if not _decks:
         return {"players": []}
     filtered = _filter_decks_by_date(_decks, date_from, date_to)
+    if player_id is not None:
+        filtered = [d for d in filtered if d.get("player_id") == player_id]
     decks = [Deck.from_dict(d) for d in filtered]
     rank_weights = settings_service.get_rank_weights()
     players = player_leaderboard(decks, normalize_player=_normalize_player, rank_weights=rank_weights)
     for p in players:
         canonical = p.get("player") or ""
         p["player_id"] = next((d.get("player_id") for d in filtered if _normalize_player(d.get("player") or "") == canonical), None)
+    if player_id is not None:
+        players = [p for p in players if p.get("player_id") == player_id]
     return {"players": players}
 
 
@@ -3506,11 +3695,28 @@ def get_player_detail_by_id(player_id: int):
     return out
 
 
+def _resolve_player_name_to_canonical(name: str) -> str:
+    """Resolve a requested player name (e.g. from URL) to the canonical display name, accent-insensitive.
+    So 'matias' finds the player whose canonical name is 'Matías'."""
+    if not name or not name.strip():
+        return name or ""
+    name = name.strip()
+    canonicals = {_normalize_player(d.get("player") or "") for d in _decks if (d.get("player") or "").strip()}
+    canonical = _normalize_player(name)
+    if canonical in canonicals:
+        return canonical
+    name_norm = _normalize_search(name)
+    for c in canonicals:
+        if _normalize_search(c) == name_norm:
+            return c
+    return canonical
+
+
 @app.get("/api/players/{player_name:path}")
 def get_player_detail(player_name: str):
-    """Player stats and their decks. Merges aliased players (e.g. Pablo Tomas Pesci = Tomas Pesci)."""
+    """Player stats and their decks. Merges aliased players (e.g. Pablo Tomas Pesci = Tomas Pesci). Accent-insensitive: matias finds Matías."""
     name = unquote(player_name).strip()
-    canonical = _normalize_player(name)
+    canonical = _resolve_player_name_to_canonical(name)
     player_decks = [d for d in _decks if _normalize_player(d.get("player") or "") == canonical]
     if not player_decks:
         raise HTTPException(status_code=404, detail="Player not found")

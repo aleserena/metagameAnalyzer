@@ -91,3 +91,21 @@ def set_matchups_min_matches(value: int) -> int:
         _db.set_matchups_min_matches(session, value)
     return value
 
+
+def get_matchups_players_min_matches() -> int:
+    """Return minimum matches threshold for player matchup summary (0 when DB is unavailable)."""
+    if not _db_available():
+        return 0
+    with _db.session_scope() as session:
+        return _db.get_matchups_players_min_matches(session)
+
+
+def set_matchups_players_min_matches(value: int) -> int:
+    """Persist minimum matches threshold for player matchup summary (no-op when DB is unavailable)."""
+    value = max(0, int(value))
+    if not _db_available():
+        return value
+    with _db.session_scope() as session:
+        _db.set_matchups_players_min_matches(session, value)
+    return value
+

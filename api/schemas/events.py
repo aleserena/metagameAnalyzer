@@ -100,6 +100,13 @@ class ScrapeBody(BaseModel):
     force_replace: bool = False
 
 
+class EventExportPlayer(BaseModel):
+    """Player reference in event export (id, display_name)."""
+
+    id: int
+    display_name: str
+
+
 class EventExportData(BaseModel):
     """Payload for exporting/importing a single event and all related data."""
 
@@ -108,4 +115,5 @@ class EventExportData(BaseModel):
     decks: list[dict] = Field(default_factory=list)
     matchups: list[dict] = Field(default_factory=list)
     player_emails: dict[str, str] = Field(default_factory=dict)
+    players: list[EventExportPlayer] = Field(default_factory=list)
 

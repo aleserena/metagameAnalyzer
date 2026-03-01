@@ -6,7 +6,7 @@ import { useEventMetadata } from '../hooks/useEventMetadata'
 import type { PlayerStats } from '../types'
 import Skeleton from '../components/Skeleton'
 import { useFetch } from '../hooks/useFetch'
-import { getDateRangeFromPreset, reportError } from '../utils'
+import { getDateRangeFromPreset, normalizeSearchForFilter, reportError } from '../utils'
 import type { DatePreset } from '../utils'
 
 type SortKey = 'player' | 'wins' | 'top2' | 'top4' | 'top8' | 'points' | 'deck_count'
@@ -58,9 +58,9 @@ export default function Players() {
   const positionByPlayer = new Map<string, number>()
   sorted.forEach((p, i) => positionByPlayer.set(p.player, i + 1))
 
-  const nameFilterLower = nameFilter.trim().toLowerCase()
-  const filtered = nameFilterLower
-    ? sorted.filter((p) => p.player.toLowerCase().includes(nameFilterLower))
+  const nameFilterNorm = normalizeSearchForFilter(nameFilter.trim())
+  const filtered = nameFilterNorm
+    ? sorted.filter((p) => normalizeSearchForFilter(p.player).includes(nameFilterNorm))
     : sorted
 
   if (loading) {

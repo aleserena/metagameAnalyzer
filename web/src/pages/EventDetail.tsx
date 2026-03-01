@@ -38,6 +38,7 @@ import PageError from '../components/PageError'
 import PageSkeleton from '../components/PageSkeleton'
 import CardSearchInput from '../components/CardSearchInput'
 import { parseMoxfieldDeckList, formatMoxfieldDeckList } from '../lib/deckListParser'
+import { normalizeDeckListByLookup } from '../lib/deckUtils'
 import { isBye, isDrop, matchupItemToRow } from '../lib/matchups'
 import { reportError, ddMmYyToIso, isoToDdMmYy } from '../utils'
 
@@ -497,10 +498,13 @@ export default function EventDetail() {
         toast.error(`${invalid.length} card(s) not found. Please correct or remove them.`)
         return
       }
+      const { parsed: normalized, text: normalizedText } = normalizeDeckListByLookup(parsed, lookup)
+      if (normalizedText !== uploadDeckListText) setUploadDeckListText(normalizedText)
+      const normCmd = normalized.commanders.map((c) => c.card.trim()).filter(Boolean)
       await updateDeck(uploadDeckForDeckId, {
-        mainboard,
-        sideboard,
-        commanders: commanders.length > 0 ? commanders : undefined,
+        mainboard: normalized.mainboard,
+        sideboard: normalized.sideboard,
+        commanders: normCmd.length > 0 ? normCmd : undefined,
       })
       refetch()
       closeUploadDeckModal()
