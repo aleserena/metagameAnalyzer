@@ -306,3 +306,30 @@ def test_upsert_matchups_for_deck_skips_invalid_items(db_session_rollback):
     rows = list_matchups_by_deck(session, base)
     assert len(rows) == 1
     assert rows[0]["opponent_player"] == "P2" and rows[0]["result"] == "win"
+    assert "opponent_player_id" in rows[0]
+    assert rows[0]["opponent_player_id"] is not None
+
+
+def test_list_matchups_by_deck_includes_opponent_player_id(db_session_rollback):
+    """list_matchups_by_deck returns rows with opponent_player_id (resolved from opponent_player)."""
+    session = db_session_rollback
+    eid = _TEST_EVENT_PREFIX + "opp_id"
+    base = _TEST_DECK_ID_BASE + 900
+    create_event(
+        session, event_name="OppId", date="01/01/25", format_id="ST", origin="manual", event_id=eid, player_count=2
+    )
+    upsert_deck(session, _make_deck(base, eid, "Alpha"))
+    upsert_deck(session, _make_deck(base + 1, eid, "Beta"))
+    session.flush()
+    upsert_matchups_for_deck(
+        session,
+        base,
+        [{"opponent_player": "Beta", "opponent_deck_id": base + 1, "result": "win"}],
+    )
+    session.flush()
+    rows = list_matchups_by_deck(session, base)
+    assert len(rows) == 1
+    assert "opponent_player_id" in rows[0]
+    assert rows[0]["opponent_player_id"] is not None
+    assert rows[0]["opponent_player"] == "Beta"
+    assert rows[0]["result"] == "win"

@@ -698,6 +698,7 @@ def list_decks(
     deck_name: str | None = Query(None, description="Filter by deck name (substring)"),
     archetype: str | None = Query(None, description="Filter by archetype (substring)"),
     player: str | None = Query(None, description="Filter by player name (substring)"),
+    player_id: int | None = Query(None, description="Filter by player ID (exact)"),
     card: str | None = Query(None, description="Filter by card name (substring, commander, mainboard or sideboard)"),
     colors: str | None = Query(
         None,
@@ -733,6 +734,8 @@ def list_decks(
             if p_norm in _normalize_search(d.get("player") or "")
             or p_norm in _normalize_search(_normalize_player(d.get("player") or ""))
         ]
+    if player_id is not None:
+        filtered = [d for d in filtered if d.get("player_id") == player_id]
     if card:
         card_norm = _normalize_search(card)
         filtered = [
@@ -1379,6 +1382,7 @@ def export_event(event_id: str):
     decks: list[dict] = []
     matchups: list[dict] = []
     player_emails: dict[str, str] = {}
+    players_list: list[dict] = []
 
     if _database_available():
         try:
@@ -1406,6 +1410,22 @@ def export_event(event_id: str):
                 }
                 if players:
                     player_emails = _db.get_emails_for_players(session, list(players))
+
+                # Collect distinct player_ids from decks and matchups for optional players array
+                player_ids: set[int] = set()
+                for d in decks:
+                    pid = d.get("player_id")
+                    if pid is not None:
+                        player_ids.add(pid)
+                for m in matchups:
+                    pid = m.get("opponent_player_id")
+                    if pid is not None:
+                        player_ids.add(pid)
+                players_list.clear()
+                for pid in sorted(player_ids):
+                    row = _db.get_player_by_id(session, pid)
+                    if row:
+                        players_list.append({"id": row.id, "display_name": row.display_name or ""})
         except HTTPException:
             raise
         except Exception as e:
@@ -1426,6 +1446,7 @@ def export_event(event_id: str):
         decks=decks,
         matchups=matchups,
         player_emails=player_emails,
+        players=players_list,
     )
     filename = f"event-{event_dict['event_id']}.json"
     return JSONResponse(
@@ -2850,7 +2871,7 @@ def send_player_missing_deck_links(player_name: str, request: Request):
     name = (player_name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Player name required")
-    canonical = _normalize_player(name)
+    canonical = _resolve_player_name_to_canonical(name)
     players_to_match = [canonical] + [k for k, v in _player_aliases.items() if v == canonical]
     base_url = _upload_link_base_url(request)
     with _db.session_scope() as session:
@@ -3456,17 +3477,22 @@ def get_similar_players(
 def get_players(
     date_from: str | None = Query(None, description="Filter from date (DD/MM/YY)"),
     date_to: str | None = Query(None, description="Filter to date (DD/MM/YY)"),
+    player_id: int | None = Query(None, description="Filter to a single player by ID (exact)"),
 ):
     """Player leaderboard (wins, top-2, top-4, points). Merges aliased players. Includes player_id for stable links."""
     if not _decks:
         return {"players": []}
     filtered = _filter_decks_by_date(_decks, date_from, date_to)
+    if player_id is not None:
+        filtered = [d for d in filtered if d.get("player_id") == player_id]
     decks = [Deck.from_dict(d) for d in filtered]
     rank_weights = settings_service.get_rank_weights()
     players = player_leaderboard(decks, normalize_player=_normalize_player, rank_weights=rank_weights)
     for p in players:
         canonical = p.get("player") or ""
         p["player_id"] = next((d.get("player_id") for d in filtered if _normalize_player(d.get("player") or "") == canonical), None)
+    if player_id is not None:
+        players = [p for p in players if p.get("player_id") == player_id]
     return {"players": players}
 
 
@@ -3506,11 +3532,28 @@ def get_player_detail_by_id(player_id: int):
     return out
 
 
+def _resolve_player_name_to_canonical(name: str) -> str:
+    """Resolve a requested player name (e.g. from URL) to the canonical display name, accent-insensitive.
+    So 'matias' finds the player whose canonical name is 'Matías'."""
+    if not name or not name.strip():
+        return name or ""
+    name = name.strip()
+    canonicals = {_normalize_player(d.get("player") or "") for d in _decks if (d.get("player") or "").strip()}
+    canonical = _normalize_player(name)
+    if canonical in canonicals:
+        return canonical
+    name_norm = _normalize_search(name)
+    for c in canonicals:
+        if _normalize_search(c) == name_norm:
+            return c
+    return canonical
+
+
 @app.get("/api/players/{player_name:path}")
 def get_player_detail(player_name: str):
-    """Player stats and their decks. Merges aliased players (e.g. Pablo Tomas Pesci = Tomas Pesci)."""
+    """Player stats and their decks. Merges aliased players (e.g. Pablo Tomas Pesci = Tomas Pesci). Accent-insensitive: matias finds Matías."""
     name = unquote(player_name).strip()
-    canonical = _normalize_player(name)
+    canonical = _resolve_player_name_to_canonical(name)
     player_decks = [d for d in _decks if _normalize_player(d.get("player") or "") == canonical]
     if not player_decks:
         raise HTTPException(status_code=404, detail="Player not found")

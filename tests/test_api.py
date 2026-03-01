@@ -99,6 +99,71 @@ def test_get_decks_filter_player(client, sample_decks):
     assert any("Jeremy" in (d.get("player") or "") for d in data["decks"])
 
 
+def test_get_decks_filter_player_ignores_accents(client, sample_decks):
+    """GET /api/decks?player=... matches player names accent-insensitive (e.g. matias finds Matías)."""
+    # Add a deck with accented name so we have Matías in the list
+    deck_matias = dict(sample_decks[0])
+    deck_matias["deck_id"] = 999001
+    deck_matias["player"] = "Matías"
+    deck_matias["player_id"] = 101
+    api_main._decks = list(sample_decks) + [deck_matias]
+    r = client.get("/api/decks?player=matias")
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data["decks"]) >= 1
+    assert any(d.get("player") == "Matías" for d in data["decks"])
+
+
+def test_get_player_detail_ignores_accents(client, sample_decks):
+    """GET /api/players/{name} finds player by accent-insensitive name (e.g. matias finds Matías)."""
+    deck_matias = dict(sample_decks[0])
+    deck_matias["deck_id"] = 999002
+    deck_matias["player"] = "Matías"
+    deck_matias["player_id"] = 102
+    api_main._decks = list(sample_decks) + [deck_matias]
+    with patch.object(api_main, "_database_available", return_value=False):
+        r = client.get("/api/players/matias")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["player"] == "Matías"
+    assert data["player_id"] == 102
+
+
+def test_get_decks_filter_player_id(client, sample_decks):
+    """GET /api/decks?player_id=X returns only decks for that player."""
+    r = client.get("/api/decks?player_id=1")
+    assert r.status_code == 200
+    data = r.json()
+    assert all(d.get("player_id") == 1 for d in data["decks"])
+    assert len(data["decks"]) == 1
+    assert data["decks"][0]["player_id"] == 1
+    r2 = client.get("/api/decks?player_id=2")
+    assert r2.status_code == 200
+    data2 = r2.json()
+    assert all(d.get("player_id") == 2 for d in data2["decks"])
+    assert len(data2["decks"]) == 1
+
+
+def test_get_decks_response_includes_player_id(client, sample_decks):
+    """GET /api/decks returns decks with player_id when present."""
+    r = client.get("/api/decks")
+    assert r.status_code == 200
+    data = r.json()
+    for d in data["decks"]:
+        assert "player_id" in d
+    assert any(d.get("player_id") == 1 for d in data["decks"])
+    assert any(d.get("player_id") == 2 for d in data["decks"])
+
+
+def test_get_deck_detail_includes_player_id(client, sample_decks):
+    """GET /api/decks/{id} returns deck with player_id when present."""
+    deck_id = sample_decks[0]["deck_id"]
+    r = client.get(f"/api/decks/{deck_id}")
+    assert r.status_code == 200
+    assert "player_id" in r.json()
+    assert r.json()["player_id"] == 1
+
+
 def test_get_decks_filter_card(client, sample_decks):
     """GET /api/decks filters by card name (mainboard/sideboard/commanders)."""
     r = client.get("/api/decks?card=Lightning")
