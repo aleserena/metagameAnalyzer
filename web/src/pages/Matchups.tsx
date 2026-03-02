@@ -60,11 +60,18 @@ export default function Matchups() {
   const [selectedArchetypes, setSelectedArchetypes] = useState<string[]>([])
   const [archetypeOptions, setArchetypeOptions] = useState<string[]>([])
   const [archetypeOpen, setArchetypeOpen] = useState(false)
+  const [selectedPlayers, setSelectedPlayers] = useState<string[]>([])
+  const [playerOptions, setPlayerOptions] = useState<string[]>([])
+  const [playerOpen, setPlayerOpen] = useState(false)
   const [viewMode, setViewMode] = useState<ViewMode>('matrix')
   const archetypeRef = useRef<HTMLDivElement>(null)
   const archetypeButtonRef = useRef<HTMLButtonElement>(null)
+  const playerRef = useRef<HTMLDivElement>(null)
+  const playerButtonRef = useRef<HTMLButtonElement>(null)
   const [archetypeFlipAbove, setArchetypeFlipAbove] = useState(false)
   const [archetypeMaxHeight, setArchetypeMaxHeight] = useState(DROPDOWN_MAX_HEIGHT)
+  const [playerFlipAbove, setPlayerFlipAbove] = useState(false)
+  const [playerMaxHeight, setPlayerMaxHeight] = useState(DROPDOWN_MAX_HEIGHT)
   const [hoveredCell, setHoveredCell] = useState<{
     archetype: string
     opponent: string
@@ -111,22 +118,31 @@ export default function Matchups() {
     getMatchupsPlayersSummary({
       format_id: formatId || undefined,
       event_ids: eventIds.length ? eventIds.map(String).join(',') : undefined,
+      player: selectedPlayers.length ? selectedPlayers : undefined,
     })
-      .then((s) => setPlayersSummary(s))
+      .then((s) => {
+        setPlayersSummary(s)
+        setPlayerOptions((prev) => {
+          const fromSummary = s?.players ?? []
+          if (fromSummary.length === 0) return prev
+          return [...new Set([...prev, ...fromSummary])].sort()
+        })
+      })
       .catch((e) => {
         setPlayersError(reportError(e))
         setPlayersSummary(null)
       })
       .finally(() => setPlayersLoading(false))
-  }, [dataMode, formatId, eventIds])
+  }, [dataMode, formatId, eventIds, selectedPlayers])
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (archetypeRef.current && !archetypeRef.current.contains(e.target as Node)) setArchetypeOpen(false)
+      if (playerRef.current && !playerRef.current.contains(e.target as Node)) setPlayerOpen(false)
     }
-    if (archetypeOpen) document.addEventListener('click', handler)
+    if (archetypeOpen || playerOpen) document.addEventListener('click', handler)
     return () => document.removeEventListener('click', handler)
-  }, [archetypeOpen])
+  }, [archetypeOpen, playerOpen])
 
   useEffect(() => {
     if (!archetypeOpen || !archetypeButtonRef.current) return
@@ -139,8 +155,28 @@ export default function Matchups() {
     setArchetypeMaxHeight(Math.min(DROPDOWN_MAX_HEIGHT, Math.max(100, available)))
   }, [archetypeOpen])
 
+  useEffect(() => {
+    if (!playerOpen || !playerButtonRef.current) return
+    const rect = playerButtonRef.current.getBoundingClientRect()
+    const spaceBelow = window.innerHeight - rect.bottom - DROPDOWN_GAP
+    const spaceAbove = rect.top - DROPDOWN_GAP
+    const shouldFlip = spaceBelow < DROPDOWN_MAX_HEIGHT && spaceAbove > spaceBelow
+    setPlayerFlipAbove(shouldFlip)
+    const available = shouldFlip ? spaceAbove : spaceBelow
+    setPlayerMaxHeight(Math.min(DROPDOWN_MAX_HEIGHT, Math.max(100, available)))
+  }, [playerOpen])
+
   const toggleArchetype = (name: string) => {
     setSelectedArchetypes((prev) => {
+      const next = new Set(prev)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return [...next]
+    })
+  }
+
+  const togglePlayer = (name: string) => {
+    setSelectedPlayers((prev) => {
       const next = new Set(prev)
       if (next.has(name)) next.delete(name)
       else next.add(name)
@@ -298,6 +334,111 @@ export default function Matchups() {
               </div>
             </div>
             )}
+            {dataMode === 'players' && (
+            <div className="form-group event-selector-wrap" style={{ marginBottom: 0, width: '100%', maxWidth: 280, minWidth: 0 }} ref={playerRef}>
+              <label htmlFor="matchups-player">Player</label>
+              <div style={{ position: 'relative' }}>
+                <button
+                  ref={playerButtonRef}
+                  id="matchups-player"
+                  type="button"
+                  onClick={() => setPlayerOpen((o) => !o)}
+                  aria-expanded={playerOpen}
+                  aria-haspopup="listbox"
+                  aria-label="Select players"
+                  style={{
+                    width: '100%',
+                    minWidth: 0,
+                    padding: '0.5rem 0.75rem',
+                    background: 'var(--bg)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 6,
+                    color: 'var(--text)',
+                    fontSize: '1rem',
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {selectedPlayers.length === 0
+                    ? 'All players'
+                    : selectedPlayers.length === 1
+                      ? selectedPlayers[0]
+                      : `${selectedPlayers.length} players selected`}
+                </button>
+                {playerOpen && (
+                  <div
+                    className="events-dropdown"
+                    role="listbox"
+                    aria-multiselectable
+                    aria-label="Players"
+                    style={{
+                      position: 'absolute',
+                      left: 0,
+                      width: 280,
+                      ...(playerFlipAbove
+                        ? { bottom: '100%', marginBottom: DROPDOWN_GAP, marginTop: 0 }
+                        : { top: '100%', marginTop: DROPDOWN_GAP }),
+                      maxHeight: playerMaxHeight,
+                      overflowY: 'auto',
+                      background: 'var(--bg-card)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 6,
+                      zIndex: 100,
+                      padding: '0.35rem',
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        gap: '0.75rem',
+                        marginBottom: '0.35rem',
+                        paddingBottom: '0.35rem',
+                        borderBottom: '1px solid var(--border)',
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setSelectedPlayers([])}
+                        style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.8rem' }}
+                      >
+                        Clear
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedPlayers([...playerOptions])}
+                        style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.8rem' }}
+                      >
+                        Select all
+                      </button>
+                    </div>
+                    {playerOptions.map((name) => (
+                      <label
+                        key={name}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.25rem',
+                          padding: '0.2rem 0',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedPlayers.includes(name)}
+                          onChange={() => togglePlayer(name)}
+                          style={{ flexShrink: 0 }}
+                        />
+                        <span style={{ fontSize: '0.9rem', wordBreak: 'break-word', minWidth: 0, flex: 1 }}>{name}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+            )}
             <EventSelector
               events={events}
               selectedIds={eventIds}
@@ -318,11 +459,14 @@ export default function Matchups() {
           </p>
         )
       })()}
-      {dataMode === 'players' && playersSummary && (
-        <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
-          Showing player pairs with ≥ {playersSummary.min_matches} match(es). {playersSummary.players_list.length} pair(s). {playersSummary.matchups_list.length} individual match(es). Record is <strong>Wins–Losses–Draws</strong>.
-        </p>
-      )}
+      {dataMode === 'players' && playersSummary && (() => {
+        const listFiltered = playersSummary.players_list.filter((row) => (row.player || '').toLowerCase() !== (row.opponent_player || '').toLowerCase())
+        return (
+          <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
+            Showing player pairs with ≥ {playersSummary.min_matches} match(es). {listFiltered.length} pair(s). Same-player vs same-player excluded from list. Record is <strong>Wins–Losses–Draws</strong> (e.g. 2–1–0).
+          </p>
+        )
+      })()}
 
       <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: '0.25rem', marginRight: '0.75rem' }}>
@@ -524,42 +668,48 @@ export default function Matchups() {
         )
       })()}
 
-      {dataMode === 'players' && !playersLoading && !playersError && playersSummary && viewMode === 'list' && (
-        <div className="table-wrap-outer">
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th scope="col">Player A</th>
-                  <th scope="col">Player B</th>
-                  <th scope="col">Result</th>
-                  <th scope="col">Event</th>
-                  <th scope="col">Date</th>
-                  <th scope="col">Round</th>
-                  <th scope="col">Archetype A</th>
-                  <th scope="col">Archetype B</th>
-                </tr>
-              </thead>
-              <tbody>
-                {playersSummary.matchups_list.map((row, i) => (
-                  <tr key={i}>
-                    <td>{row.player_a}</td>
-                    <td>{row.player_b}</td>
-                    <td>{row.result}</td>
-                    <td>{row.event_id}</td>
-                    <td>{row.date}</td>
-                    <td>{row.round ?? '—'}</td>
-                    <td>{row.archetype_a || '—'}</td>
-                    <td>{row.archetype_b || '—'}</td>
+      {dataMode === 'players' && !playersLoading && !playersError && playersSummary && viewMode === 'list' && (() => {
+        const listFiltered = playersSummary.players_list.filter((row) => (row.player || '').toLowerCase() !== (row.opponent_player || '').toLowerCase())
+        return (
+          <div className="table-wrap-outer">
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Player A</th>
+                    <th scope="col">Player B</th>
+                    <th scope="col" title="Wins – Losses – Draws">Record (W–L–D)</th>
+                    <th scope="col">Win rate</th>
+                    <th scope="col">Matches</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {listFiltered.map((row, i) => (
+                    <tr key={i}>
+                      <td>{row.player}</td>
+                      <td>{row.opponent_player}</td>
+                      <td title="Wins – Losses – Draws">{row.wins}–{row.losses}–{row.draws}</td>
+                      <td>{(row.win_rate * 100).toFixed(1)}%</td>
+                      <td>{row.matches}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
 
-      {dataMode === 'players' && !playersLoading && !playersError && playersSummary && viewMode === 'matrix' && (
+      {dataMode === 'players' && !playersLoading && !playersError && playersSummary && viewMode === 'matrix' && (() => {
+        const singleRowIndex =
+          selectedPlayers.length === 1
+            ? playersSummary.players.findIndex((p) => (p || '').toLowerCase() === (selectedPlayers[0] || '').toLowerCase())
+            : -1
+        const rowIndices = singleRowIndex >= 0 ? [singleRowIndex] : playersSummary.players.map((_, i) => i)
+        const columnIndices = singleRowIndex >= 0
+          ? playersSummary.players.map((_, j) => j).filter((j) => j !== singleRowIndex)
+          : playersSummary.players.map((_, j) => j)
+        return (
         <div className="card" style={{ overflow: 'auto' }}>
           <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
             Rows = player, columns = opponent. Cell = row player&apos;s win rate vs column player. Heatmap: green = 100%, red = 0%.
@@ -572,52 +722,59 @@ export default function Matchups() {
                 <thead>
                   <tr>
                     <th style={{ padding: '0.35rem', textAlign: 'left', position: 'sticky', left: 0, background: 'var(--bg-card)' }} />
-                    {playersSummary.players.map((p) => (
-                      <th key={p} style={{ padding: '0.35rem', maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis' }} title={p}>
-                        {p.length > 12 ? p.slice(0, 11) + '…' : p}
-                      </th>
-                    ))}
+                    {columnIndices.map((j) => {
+                      const p = playersSummary.players[j]
+                      return (
+                        <th key={p} style={{ padding: '0.35rem', maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis' }} title={p}>
+                          {p.length > 12 ? p.slice(0, 11) + '…' : p}
+                        </th>
+                      )
+                    })}
                   </tr>
                 </thead>
                 <tbody>
-                  {playersSummary.players.map((pa, i) => (
-                    <tr key={pa}>
-                      <td style={{ padding: '0.35rem', position: 'sticky', left: 0, background: 'var(--bg-card)', whiteSpace: 'nowrap', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis' }} title={pa}>
-                        {pa.length > 14 ? pa.slice(0, 13) + '…' : pa}
-                      </td>
-                      {playersSummary.players.map((pb, j) => {
-                        if (i === j) return <td key={pb} style={{ padding: '0.35rem', backgroundColor: 'rgba(128,128,128,0.2)' }} title="Same player"> </td>
-                        const cell = playersSummary.players_matrix[i]?.[j]
-                        if (cell == null) return <td key={pb} style={{ padding: '0.35rem', color: 'var(--text-muted)' }}>—</td>
-                        const pct = cell * 100
-                        const matchupRow = playersByPair.get(`${pa}|||${pb}`)
-                        return (
-                          <td
-                            key={pb}
-                            style={{ padding: '0.35rem', backgroundColor: heatmapColor(pct), cursor: matchupRow ? 'help' : 'default' }}
-                            onMouseEnter={(e) => {
-                              if (!matchupRow) return
-                              setHoveredPlayerCell({ player: pa, opponent: pb, rect: e.currentTarget.getBoundingClientRect() })
-                            }}
-                            onMouseMove={(e) => {
-                              if (!matchupRow) return
-                              setHoveredPlayerCell({ player: pa, opponent: pb, rect: e.currentTarget.getBoundingClientRect() })
-                            }}
-                            onMouseLeave={() => setHoveredPlayerCell(null)}
-                            onFocus={(e) => {
-                              if (!matchupRow) return
-                              setHoveredPlayerCell({ player: pa, opponent: pb, rect: e.currentTarget.getBoundingClientRect() })
-                            }}
-                            onBlur={() => setHoveredPlayerCell(null)}
-                            tabIndex={matchupRow ? 0 : -1}
-                            aria-label={matchupRow ? `${pa} vs ${pb}` : undefined}
-                          >
-                            {pct.toFixed(0)}%
-                          </td>
-                        )
-                      })}
-                    </tr>
-                  ))}
+                  {rowIndices.map((i) => {
+                    const pa = playersSummary.players[i]
+                    return (
+                      <tr key={pa}>
+                        <td style={{ padding: '0.35rem', position: 'sticky', left: 0, background: 'var(--bg-card)', whiteSpace: 'nowrap', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis' }} title={pa}>
+                          {pa.length > 14 ? pa.slice(0, 13) + '…' : pa}
+                        </td>
+                        {columnIndices.map((j) => {
+                          const pb = playersSummary.players[j]
+                          if (i === j) return <td key={pb} style={{ padding: '0.35rem', backgroundColor: 'rgba(128,128,128,0.2)' }} title="Same player"> </td>
+                          const cell = playersSummary.players_matrix[i]?.[j]
+                          if (cell == null) return <td key={pb} style={{ padding: '0.35rem', color: 'var(--text-muted)' }}>—</td>
+                          const pct = cell * 100
+                          const matchupRow = playersByPair.get(`${pa}|||${pb}`)
+                          return (
+                            <td
+                              key={pb}
+                              style={{ padding: '0.35rem', backgroundColor: heatmapColor(pct), cursor: matchupRow ? 'help' : 'default' }}
+                              onMouseEnter={(e) => {
+                                if (!matchupRow) return
+                                setHoveredPlayerCell({ player: pa, opponent: pb, rect: e.currentTarget.getBoundingClientRect() })
+                              }}
+                              onMouseMove={(e) => {
+                                if (!matchupRow) return
+                                setHoveredPlayerCell({ player: pa, opponent: pb, rect: e.currentTarget.getBoundingClientRect() })
+                              }}
+                              onMouseLeave={() => setHoveredPlayerCell(null)}
+                              onFocus={(e) => {
+                                if (!matchupRow) return
+                                setHoveredPlayerCell({ player: pa, opponent: pb, rect: e.currentTarget.getBoundingClientRect() })
+                              }}
+                              onBlur={() => setHoveredPlayerCell(null)}
+                              tabIndex={matchupRow ? 0 : -1}
+                              aria-label={matchupRow ? `${pa} vs ${pb}` : undefined}
+                            >
+                              {pct.toFixed(0)}%
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
               {hoveredPlayerCell && (() => {
@@ -666,12 +823,13 @@ export default function Matchups() {
             </div>
           )}
         </div>
-      )}
+        )
+      })()}
 
       {dataMode === 'archetypes' && !loading && !error && summary && summary.list.filter((row) => (row.archetype || '').toLowerCase() !== (row.opponent_archetype || '').toLowerCase()).length === 0 && (
         <p style={{ color: 'var(--text-muted)' }}>No matchup data for the selected filters.</p>
       )}
-      {dataMode === 'players' && !playersLoading && !playersError && playersSummary && playersSummary.players_list.length === 0 && playersSummary.matchups_list.length === 0 && (
+      {dataMode === 'players' && !playersLoading && !playersError && playersSummary && playersSummary.players_list.length === 0 && (
         <p style={{ color: 'var(--text-muted)' }}>No player matchup data for the selected filters.</p>
       )}
     </div>
