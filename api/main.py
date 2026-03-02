@@ -3367,6 +3367,7 @@ def get_matchups_players_summary(
     event_ids: str | None = Query(None),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
+    player: list[str] | None = Query(None),
 ):
     """Aggregated matchup summary by player. Optional filters; respects matchups_players_min_matches setting."""
     with _db.session_scope() as session:
@@ -3410,9 +3411,9 @@ def get_matchups_players_summary(
     for r in filtered:
         if r.get("opponent_player_id") is None:
             continue
-        player = (r.get("player") or "(unknown)").strip()
+        pname = (r.get("player") or "(unknown)").strip()
         opp = (r.get("opponent_player") or "(unknown)").strip()
-        player_canonical = _front_face_name(player)
+        player_canonical = _front_face_name(pname)
         opp_canonical = _front_face_name(opp)
         key = (player_canonical.lower(), opp_canonical.lower())
         if key not in agg:
@@ -3491,6 +3492,43 @@ def get_matchups_players_summary(
         }
         for r in filtered
     ]
+
+    # Optional filter by player name(s): keep only pairs where at least one side is in the selection
+    if player and len(player) > 0:
+        selected_lower = {p.strip().lower() for p in player if p and p.strip()}
+        if selected_lower:
+            players_list_out = [
+                r for r in players_list_out
+                if (r["player"] or "").lower() in selected_lower or (r["opponent_player"] or "").lower() in selected_lower
+            ]
+            all_players_sorted = sorted(
+                {r["player"] for r in players_list_out} | {r["opponent_player"] for r in players_list_out}
+            )
+            players_matrix = []
+            for i, pa in enumerate(all_players_sorted):
+                row = []
+                for j, pb in enumerate(all_players_sorted):
+                    if i == j:
+                        row.append(None)
+                        continue
+                    key = (pa.lower(), pb.lower())
+                    v = agg.get(key, {"matches": 0, "wins": 0, "draws": 0})
+                    if v["matches"] < min_matches:
+                        row.append(None)
+                        continue
+                    wr = (v["wins"] + 0.5 * v["draws"]) / v["matches"] if v["matches"] else None
+                    row.append(round(wr, 4) if wr is not None else None)
+                players_matrix.append(row)
+            filtered_pairs_lower = {
+                ((r["player"] or "").lower(), (r["opponent_player"] or "").lower()) for r in players_list_out
+            }
+            matchups_list_out = [
+                m for m in matchups_list_out
+                if (
+                    ((m["player_a"] or "").strip().lower(), (m["player_b"] or "").strip().lower()) in filtered_pairs_lower
+                    or ((m["player_b"] or "").strip().lower(), (m["player_a"] or "").strip().lower()) in filtered_pairs_lower
+                )
+            ]
 
     return {
         "players_list": players_list_out,
