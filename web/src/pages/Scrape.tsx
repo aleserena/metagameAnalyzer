@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useBlocker } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { getToken } from '../contexts/AuthContext'
-import { stopScrape } from '../api'
+import { API_BASE, stopScrape } from '../api'
 import Modal from '../components/Modal'
 import { reportError } from '../utils'
 import { FORMATS, META_EDH } from '../config'
@@ -53,7 +53,7 @@ export default function Scrape() {
 
     try {
       const token = getToken()
-      const res = await fetch('/api/scrape', {
+      const res = await fetch(`${API_BASE}/scrape`, {
         method: 'POST',
         signal,
         headers: {

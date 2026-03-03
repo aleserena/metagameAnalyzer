@@ -2,7 +2,7 @@ import type { Deck, MetagameReport, Event, PlayerStats, SimilarDeck, ArchetypeDe
 import { getToken } from './contexts/AuthContext'
 import { fetchWithTimeout } from './utils'
 
-const API_BASE = '/api'
+export const API_BASE = '/api/v1'
 const EVENT_EDIT_TOKEN_KEY = 'event_edit_token'
 
 function getAuthHeaders(): Record<string, string> {
