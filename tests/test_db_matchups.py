@@ -333,3 +333,9 @@ def test_list_matchups_by_deck_includes_opponent_player_id(db_session_rollback):
     assert rows[0]["opponent_player_id"] is not None
     assert rows[0]["opponent_player"] == "Beta"
     assert rows[0]["result"] == "win"
+    # Inverse row is stored for the opponent so both sides appear in the matrix
+    opp_rows = list_matchups_by_deck(session, base + 1)
+    assert len(opp_rows) == 1
+    assert opp_rows[0]["opponent_player"] == "Alpha"
+    assert opp_rows[0]["result"] == "loss"
+    assert opp_rows[0]["opponent_deck_id"] == base
