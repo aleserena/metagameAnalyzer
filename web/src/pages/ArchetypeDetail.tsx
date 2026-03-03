@@ -152,6 +152,11 @@ export default function ArchetypeDetail() {
     return colors.length ? `{${colors.join('}{')}}` : ''
   })()
 
+  const matchupRowsFiltered = matchupRows.filter(
+    (row) =>
+      (row.opponent_archetype || '').trim().toLowerCase() !== (detail.archetype || '').trim().toLowerCase()
+  )
+
   return (
     <div style={{ opacity: loading ? 0.6 : 1, transition: 'opacity 0.2s' }}>
       <button type="button" className="btn" style={{ marginBottom: '1rem' }} onClick={() => navigate(-1)}>
@@ -204,39 +209,6 @@ export default function ArchetypeDetail() {
               </li>
             ))}
           </ul>
-        </div>
-      )}
-
-      {matchupRows.length > 0 && (
-        <div style={{ marginBottom: '1.5rem' }}>
-          <h3 style={{ margin: '0 0 0.75rem' }}>Matchup performance</h3>
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '0.5rem' }}>
-            From event feedback. <Link to="/matchups">View full matchups</Link>
-          </p>
-          <div className="table-wrap-outer">
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th scope="col">Opponent archetype</th>
-                    <th scope="col">Record</th>
-                    <th scope="col">Win rate</th>
-                    <th scope="col">Matches</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {matchupRows.map((row, i) => (
-                    <tr key={i}>
-                      <td>{row.opponent_archetype}</td>
-                      <td>{row.wins}–{row.losses}–{row.draws}</td>
-                      <td>{(row.win_rate * 100).toFixed(1)}%</td>
-                      <td>{row.matches}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
         </div>
       )}
 
@@ -453,6 +425,39 @@ export default function ArchetypeDetail() {
           }
         />
       </div>
+
+      {matchupRowsFiltered.length > 0 && (
+        <div style={{ marginTop: '1.5rem' }}>
+          <h3 style={{ margin: '0 0 0.75rem' }}>Matchup performance</h3>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '0.5rem' }}>
+            From event feedback. Same-archetype matchups excluded. <Link to="/matchups">View full matchups</Link>
+          </p>
+          <div className="table-wrap-outer">
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Opponent archetype</th>
+                    <th scope="col">Record</th>
+                    <th scope="col">Win rate</th>
+                    <th scope="col">Matches</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {matchupRowsFiltered.map((row, i) => (
+                    <tr key={i}>
+                      <td>{row.opponent_archetype}</td>
+                      <td>{row.wins}–{row.losses}–{row.draws}</td>
+                      <td>{(row.win_rate * 100).toFixed(1)}%</td>
+                      <td>{row.matches}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
