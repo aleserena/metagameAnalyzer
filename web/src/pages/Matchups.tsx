@@ -64,6 +64,7 @@ export default function Matchups() {
   const [playerOptions, setPlayerOptions] = useState<string[]>([])
   const [playerOpen, setPlayerOpen] = useState(false)
   const [viewMode, setViewMode] = useState<ViewMode>('matrix')
+  const [sortByWinRate, setSortByWinRate] = useState(false)
   const archetypeRef = useRef<HTMLDivElement>(null)
   const archetypeButtonRef = useRef<HTMLButtonElement>(null)
   const playerRef = useRef<HTMLDivElement>(null)
@@ -200,6 +201,48 @@ export default function Matchups() {
       m.set(`${row.player}|||${row.opponent_player}`, row)
     }
     return m
+  }, [playersSummary])
+
+  const archetypeOverallWinRate = useMemo(() => {
+    const map = new Map<string, number>()
+    if (!summary) return map
+    const agg = new Map<string, { wins: number; draws: number; matches: number }>()
+    for (const row of summary.list) {
+      const a = (row.archetype || '').trim()
+      if (!a) continue
+      const prev = agg.get(a) ?? { wins: 0, draws: 0, matches: 0 }
+      prev.wins += row.wins
+      prev.draws += row.draws
+      prev.matches += row.matches
+      agg.set(a, prev)
+    }
+    for (const [a, v] of agg.entries()) {
+      const denom = v.matches || 0
+      const wr = denom ? (v.wins + 0.5 * v.draws) / denom : 0
+      map.set(a, wr)
+    }
+    return map
+  }, [summary])
+
+  const playersOverallWinRate = useMemo(() => {
+    const map = new Map<string, number>()
+    if (!playersSummary) return map
+    const agg = new Map<string, { wins: number; draws: number; matches: number }>()
+    for (const row of playersSummary.players_list) {
+      const p = (row.player || '').trim()
+      if (!p) continue
+      const prev = agg.get(p) ?? { wins: 0, draws: 0, matches: 0 }
+      prev.wins += row.wins
+      prev.draws += row.draws
+      prev.matches += row.matches
+      agg.set(p, prev)
+    }
+    for (const [p, v] of agg.entries()) {
+      const denom = v.matches || 0
+      const wr = denom ? (v.wins + 0.5 * v.draws) / denom : 0
+      map.set(p, wr)
+    }
+    return map
   }, [playersSummary])
 
   return (
@@ -485,7 +528,7 @@ export default function Matchups() {
             Players
           </button>
         </div>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <button
             type="button"
             className={`btn ${viewMode === 'matrix' ? 'btn-primary' : ''}`}
@@ -500,6 +543,14 @@ export default function Matchups() {
           >
             List
           </button>
+          <label style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+            <input
+              type="checkbox"
+              checked={sortByWinRate}
+              onChange={(e) => setSortByWinRate(e.target.checked)}
+            />
+            Sort rows by win rate
+          </label>
         </div>
       </div>
 
@@ -514,7 +565,14 @@ export default function Matchups() {
       {dataMode === 'players' && playersError && <p style={{ color: 'var(--danger, #c00)' }}>{playersError}</p>}
 
       {dataMode === 'archetypes' && !loading && !error && summary && viewMode === 'list' && (() => {
-        const listFiltered = summary.list.filter((row) => (row.archetype || '').toLowerCase() !== (row.opponent_archetype || '').toLowerCase())
+        const listFiltered = summary.list
+          .filter((row) => (row.archetype || '').toLowerCase() !== (row.opponent_archetype || '').toLowerCase())
+          .slice()
+          .sort((a, b) => {
+            if (!sortByWinRate) return 0
+            if (b.win_rate !== a.win_rate) return b.win_rate - a.win_rate
+            return b.matches - a.matches
+          })
         return (
           <div className="table-wrap-outer">
             <div className="table-wrap">
@@ -550,10 +608,32 @@ export default function Matchups() {
           selectedArchetypes.length === 1
             ? summary.archetypes.findIndex((a) => (a || '').toLowerCase() === (selectedArchetypes[0] || '').toLowerCase())
             : -1
-        const rowIndices = singleRowIndex >= 0 ? [singleRowIndex] : summary.archetypes.map((_, i) => i)
-        const columnIndices = singleRowIndex >= 0
+        let rowIndices = singleRowIndex >= 0 ? [singleRowIndex] : summary.archetypes.map((_, i) => i)
+        let columnIndices = singleRowIndex >= 0
           ? summary.archetypes.map((_, j) => j).filter((j) => j !== singleRowIndex)
           : summary.archetypes.map((_, j) => j)
+
+        if (sortByWinRate) {
+          // When a single archetype is selected, sort columns by that row's win rate.
+          if (singleRowIndex >= 0) {
+            columnIndices = [...columnIndices].sort((i, j) => {
+              const wi = summary.matrix[singleRowIndex]?.[i] ?? 0
+              const wj = summary.matrix[singleRowIndex]?.[j] ?? 0
+              return (wj ?? 0) - (wi ?? 0)
+            })
+          } else {
+            const cmp = (i: number, j: number) => {
+              const ai = summary.archetypes[i]
+              const aj = summary.archetypes[j]
+              const wi = archetypeOverallWinRate.get(ai) ?? 0
+              const wj = archetypeOverallWinRate.get(aj) ?? 0
+              if (wj !== wi) return wj - wi
+              return ai.localeCompare(aj)
+            }
+            rowIndices = [...rowIndices].sort(cmp)
+            columnIndices = [...columnIndices].sort(cmp)
+          }
+        }
         return (
           <div className="card" style={{ overflow: 'auto' }}>
             <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
@@ -669,7 +749,14 @@ export default function Matchups() {
       })()}
 
       {dataMode === 'players' && !playersLoading && !playersError && playersSummary && viewMode === 'list' && (() => {
-        const listFiltered = playersSummary.players_list.filter((row) => (row.player || '').toLowerCase() !== (row.opponent_player || '').toLowerCase())
+        const listFiltered = playersSummary.players_list
+          .filter((row) => (row.player || '').toLowerCase() !== (row.opponent_player || '').toLowerCase())
+          .slice()
+          .sort((a, b) => {
+            if (!sortByWinRate) return 0
+            if (b.win_rate !== a.win_rate) return b.win_rate - a.win_rate
+            return b.matches - a.matches
+          })
         return (
           <div className="table-wrap-outer">
             <div className="table-wrap">
@@ -705,10 +792,31 @@ export default function Matchups() {
           selectedPlayers.length === 1
             ? playersSummary.players.findIndex((p) => (p || '').toLowerCase() === (selectedPlayers[0] || '').toLowerCase())
             : -1
-        const rowIndices = singleRowIndex >= 0 ? [singleRowIndex] : playersSummary.players.map((_, i) => i)
-        const columnIndices = singleRowIndex >= 0
+        let rowIndices = singleRowIndex >= 0 ? [singleRowIndex] : playersSummary.players.map((_, i) => i)
+        let columnIndices = singleRowIndex >= 0
           ? playersSummary.players.map((_, j) => j).filter((j) => j !== singleRowIndex)
           : playersSummary.players.map((_, j) => j)
+
+        if (sortByWinRate) {
+          if (singleRowIndex >= 0) {
+            columnIndices = [...columnIndices].sort((i, j) => {
+              const wi = playersSummary.players_matrix[singleRowIndex]?.[i] ?? 0
+              const wj = playersSummary.players_matrix[singleRowIndex]?.[j] ?? 0
+              return (wj ?? 0) - (wi ?? 0)
+            })
+          } else {
+            const cmp = (i: number, j: number) => {
+              const pi = playersSummary.players[i]
+              const pj = playersSummary.players[j]
+              const wi = playersOverallWinRate.get(pi) ?? 0
+              const wj = playersOverallWinRate.get(pj) ?? 0
+              if (wj !== wi) return wj - wi
+              return pi.localeCompare(pj)
+            }
+            rowIndices = [...rowIndices].sort(cmp)
+            columnIndices = [...columnIndices].sort(cmp)
+          }
+        }
         return (
         <div className="card" style={{ overflow: 'auto' }}>
           <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
