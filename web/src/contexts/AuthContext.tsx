@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useState } from 'rea
 import { fetchWithTimeout, REQUEST_TIMEOUT_LOAD_MS } from '../utils'
 
 const STORAGE_KEY = 'admin_token'
-const API_BASE = '/api'
+const API_BASE = '/api/v1'
 
 type User = 'admin' | null
 

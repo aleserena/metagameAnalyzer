@@ -20,7 +20,7 @@ describe('api', () => {
     })
 
     expect(mockFetch).toHaveBeenCalledWith(
-      expect.stringContaining('/api/decks'),
+      expect.stringContaining('/api/v1/decks'),
       expect.any(Object)
     )
     const url = (mockFetch.mock.calls[0][0] as string)
@@ -80,7 +80,7 @@ describe('api', () => {
     const result = await clearScryfallCache()
 
     expect(mockFetch).toHaveBeenCalledWith(
-      expect.stringContaining('/api/settings/clear-cache'),
+      expect.stringContaining('/api/v1/settings/clear-cache'),
       expect.objectContaining({ method: 'POST' })
     )
     expect(result).toEqual({ message: 'Scryfall cache cleared' })
@@ -96,7 +96,7 @@ describe('api', () => {
     const result = await clearDecks()
 
     expect(mockFetch).toHaveBeenCalledWith(
-      expect.stringContaining('/api/settings/clear-decks'),
+      expect.stringContaining('/api/v1/settings/clear-decks'),
       expect.objectContaining({ method: 'POST' })
     )
     expect(result).toEqual({ message: 'Decks cleared' })

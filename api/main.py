@@ -176,6 +176,30 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
+def _get_build_id() -> str:
+    """Short SHA from Railway or GIT_COMMIT_SHA; 'dev' if unset."""
+    sha = os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA", "")
+    if sha:
+        return sha[:7]
+    return "dev"
+
+
+def _get_db_env() -> str:
+    """DB environment: DB_ENV if set and valid, else 'postgres' when DB available, else 'json'."""
+    if _database_available():
+        env = os.getenv("DB_ENV", "").strip().lower()
+        if env in ("dev", "staging", "prod"):
+            return env
+        return "postgres"
+    return "json"
+
+
+@app.get("/api/v1/info", tags=["Info"])
+def get_info():
+    """Public endpoint: build identifier (short SHA) and DB environment for footer display."""
+    return {"build_id": _get_build_id(), "db_env": _get_db_env()}
+
+
 # Admin auth: single user, password from env, JWT for session
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 JWT_SECRET = os.getenv("JWT_SECRET", ADMIN_PASSWORD or "dev-secret-change-in-production")
@@ -574,7 +598,7 @@ def _filter_decks_for_query(
     return _filter_decks_by_date(decks, date_from, date_to)
 
 
-@app.post("/api/auth/login")
+@app.post("/api/v1/auth/login")
 def auth_login(body: LoginBody):
     """Login as admin. Returns JWT if password matches ADMIN_PASSWORD."""
     if not ADMIN_PASSWORD:
@@ -584,7 +608,7 @@ def auth_login(body: LoginBody):
     return {"token": _create_admin_token(), "user": "admin"}
 
 
-@app.get("/api/auth/me")
+@app.get("/api/v1/auth/me")
 def auth_me(authorization: str | None = Header(None, alias="Authorization")):
     """Return current user if valid Bearer token, else 401."""
     if not authorization or not authorization.startswith("Bearer "):
@@ -601,7 +625,7 @@ GITHUB_REPO = os.getenv("GITHUB_REPO", "").strip()  # e.g. aleserena/metagameAna
 _FEEDBACK_LABELS = {"bug", "enhancement", "question"}
 
 
-@app.post("/api/feedback")
+@app.post("/api/v1/feedback")
 def post_feedback(body: SiteFeedbackBody):
     """Create a GitHub issue from feedback form. Requires GITHUB_TOKEN and GITHUB_REPO."""
     # Honeypot: if filled, treat as bot and return fake success (do not create issue)
@@ -653,7 +677,7 @@ def post_feedback(body: SiteFeedbackBody):
         raise HTTPException(status_code=502, detail="Could not create issue. Try again later.")
 
 
-@app.post("/api/cards/lookup")
+@app.post("/api/v1/cards/lookup")
 def cards_lookup(body: CardLookupBody):
     """Look up card metadata and images from Scryfall."""
     if not body.names:
@@ -661,7 +685,7 @@ def cards_lookup(body: CardLookupBody):
     return lookup_cards(body.names)
 
 
-@app.get("/api/cards/search")
+@app.get("/api/v1/cards/search")
 def cards_search(q: str = Query("", description="Card name prefix for autocomplete")):
     """Return card names matching the query prefix (Scryfall autocomplete)."""
     data = autocomplete_cards(q)
@@ -690,7 +714,7 @@ def _deck_sort_key_by(sort: str, order: str):
     return key, reverse if sort in ("player", "name") else False
 
 
-@app.get("/api/decks")
+@app.get("/api/v1/decks")
 def list_decks(
     event_id: str | None = Query(None, description="Filter by event ID (single, for backward compatibility)"),
     event_ids: str | None = Query(None, description="Filter by event IDs (comma-separated)"),
@@ -809,7 +833,7 @@ def list_decks(
     return {"decks": page, "total": total, "skip": skip, "limit": limit}
 
 
-@app.get("/api/decks/compare")
+@app.get("/api/v1/decks/compare")
 def compare_decks(ids: str = Query(..., description="Comma-separated deck IDs")):
     """Get multiple decks by ID for comparison."""
     try:
@@ -869,7 +893,7 @@ def _deck_duplicate_info(deck_id: int) -> dict | None:
     return None
 
 
-@app.get("/api/decks/duplicates")
+@app.get("/api/v1/decks/duplicates")
 def list_duplicate_decks(
     event_ids: str | None = Query(None, description="Limit to events (comma-separated)"),
 ):
@@ -902,7 +926,7 @@ def list_duplicate_decks(
     return {"duplicates": result}
 
 
-@app.get("/api/decks/{deck_id}")
+@app.get("/api/v1/decks/{deck_id}")
 def get_deck(deck_id: int):
     """Get single deck by ID."""
     d = _get_deck_by_id(deck_id)
@@ -916,7 +940,7 @@ def get_deck(deck_id: int):
     return out
 
 
-@app.get("/api/decks/{deck_id}/similar")
+@app.get("/api/v1/decks/{deck_id}/similar")
 def get_similar_decks(
     deck_id: int,
     limit: int = Query(10, ge=1, le=20),
@@ -932,7 +956,7 @@ def get_similar_decks(
     return {"similar": similar_decks(deck, all_decks, limit=limit)}
 
 
-@app.get("/api/decks/{deck_id}/analysis")
+@app.get("/api/v1/decks/{deck_id}/analysis")
 def get_deck_analysis(deck_id: int):
     """Deck analysis: mana curve, color distribution, lands distribution."""
     deck_dict = _get_deck_by_id(deck_id)
@@ -954,7 +978,7 @@ def get_deck_analysis(deck_id: int):
     return deck_analysis(deck, merged)
 
 
-@app.get("/api/date-range")
+@app.get("/api/v1/date-range")
 def get_date_range():
     """Return min/max dates and the latest event date from loaded decks."""
     if not _decks:
@@ -968,7 +992,7 @@ def get_date_range():
     return {"min_date": sorted_keys[0], "max_date": max_date, "last_event_date": max_date}
 
 
-@app.get("/api/format-info")
+@app.get("/api/v1/format-info")
 def get_format_info():
     """Return the format(s) detected from loaded decks."""
     if not _decks:
@@ -993,7 +1017,7 @@ def _compute_events_list() -> list[dict]:
     return _events_from_decks(_decks)
 
 
-@app.get("/api/events", response_model=dict)
+@app.get("/api/v1/events", response_model=dict)
 def list_events():
     """List unique events from current data (from DB events table when DB used, else from decks). Cached until events/decks change."""
     global _events_cache
@@ -1006,7 +1030,7 @@ def list_events():
 # --- Admin-only: events and deck management (DB required for create/update/delete) ---
 
 
-@app.post("/api/events", dependencies=[Depends(require_admin), Depends(require_database)], response_model=EventResponse)
+@app.post("/api/v1/events", dependencies=[Depends(require_admin), Depends(require_database)], response_model=EventResponse)
 def create_event(body: CreateEventBody):
     """Create a new event (admin-only). Manual events get IDs in a separate namespace from MTGTop8."""
     if not body.player_count or body.player_count < 1:
@@ -1033,7 +1057,7 @@ def create_event(body: CreateEventBody):
         raise HTTPException(status_code=500, detail="Failed to create event")
 
 
-@app.get("/api/events/event-ids-with-discrepancies", dependencies=[Depends(require_admin), Depends(require_database)])
+@app.get("/api/v1/events/event-ids-with-discrepancies", dependencies=[Depends(require_admin), Depends(require_database)])
 def get_event_ids_with_discrepancies():
     """Return event_ids that have at least one matchup discrepancy (admin)."""
     with _db.session_scope() as session:
@@ -1065,7 +1089,7 @@ def get_event_ids_with_discrepancies():
     return {"event_ids": event_ids_with_discrepancies}
 
 
-@app.get("/api/events/event-ids-with-missing-decks", dependencies=[Depends(require_admin), Depends(require_database)])
+@app.get("/api/v1/events/event-ids-with-missing-decks", dependencies=[Depends(require_admin), Depends(require_database)])
 def get_event_ids_with_missing_decks():
     """Return event_ids where deck count < player_count (admin)."""
     with _db.session_scope() as session:
@@ -1073,7 +1097,7 @@ def get_event_ids_with_missing_decks():
     return {"event_ids": event_ids}
 
 
-@app.get("/api/events/event-ids-with-missing-matchups", dependencies=[Depends(require_admin), Depends(require_database)])
+@app.get("/api/v1/events/event-ids-with-missing-matchups", dependencies=[Depends(require_admin), Depends(require_database)])
 def get_event_ids_with_missing_matchups():
     """Return event_ids where every deck has the expected matchups (admin). Events NOT in this list have missing matchups."""
     with _db.session_scope() as session:
@@ -1191,7 +1215,7 @@ def _deck_merge_conflicts(deck_keep: dict, deck_remove: dict) -> list[MergeConfl
 
 
 @app.get(
-    "/api/events/merge-preview",
+    "/api/v1/events/merge-preview",
     dependencies=[Depends(require_admin), Depends(require_database)],
     response_model=MergePreviewResponse,
 )
@@ -1354,7 +1378,7 @@ def merge_preview(
     )
 
 
-@app.get("/api/events/{event_id}", response_model=EventResponse)
+@app.get("/api/v1/events/{event_id}", response_model=EventResponse)
 def get_event_by_id(event_id: str):
     """Get a single event by ID. Returns 404 if not found."""
     if _database_available():
@@ -1373,7 +1397,7 @@ def get_event_by_id(event_id: str):
 
 
 @app.get(
-    "/api/events/{event_id}/export",
+    "/api/v1/events/{event_id}/export",
     dependencies=[Depends(require_admin_or_event_edit)],
 )
 def export_event(event_id: str):
@@ -1455,7 +1479,7 @@ def export_event(event_id: str):
     )
 
 
-@app.put("/api/events/{event_id}", dependencies=[Depends(require_admin_or_event_edit), Depends(require_database)])
+@app.put("/api/v1/events/{event_id}", dependencies=[Depends(require_admin_or_event_edit), Depends(require_database)])
 def update_event_endpoint(
     event_id: str,
     event_name: str | None = Query(None),
@@ -1481,7 +1505,7 @@ def update_event_endpoint(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/events/{event_id}", dependencies=[Depends(require_admin), Depends(require_database)])
+@app.delete("/api/v1/events/{event_id}", dependencies=[Depends(require_admin), Depends(require_database)])
 def delete_event_endpoint(event_id: str):
     """Delete an event and all its decks (admin-only)."""
     try:
@@ -1500,7 +1524,7 @@ def delete_event_endpoint(event_id: str):
 
 
 @app.post(
-    "/api/events/import",
+    "/api/v1/events/import",
     dependencies=[Depends(require_admin), Depends(require_database)],
 )
 def import_event(body: EventExportData):
@@ -1605,7 +1629,7 @@ def import_event(body: EventExportData):
 
 
 @app.post(
-    "/api/events/merge",
+    "/api/v1/events/merge",
     dependencies=[Depends(require_admin), Depends(require_database)],
 )
 def merge_events(body: MergeEventsBody):
@@ -1750,7 +1774,7 @@ def merge_events(body: MergeEventsBody):
         raise HTTPException(status_code=500, detail="Failed to merge events.")
 
 
-@app.post("/api/events/{event_id}/decks", dependencies=[Depends(require_admin), Depends(require_database)])
+@app.post("/api/v1/events/{event_id}/decks", dependencies=[Depends(require_admin), Depends(require_database)])
 async def upload_decks_to_event(
     event_id: str,
     body: UploadDecksBody | None = None,
@@ -1799,7 +1823,7 @@ async def upload_decks_to_event(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/events/{event_id}/decks/add", dependencies=[Depends(require_admin_or_event_edit), Depends(require_database)])
+@app.post("/api/v1/events/{event_id}/decks/add", dependencies=[Depends(require_admin_or_event_edit), Depends(require_database)])
 def add_blank_deck_to_event(event_id: str):
     """Add one blank deck to an event (admin-only). One deck per player per event; placeholder player used if blank."""
     with _db.session_scope() as session:
@@ -1909,7 +1933,7 @@ def _get_validated_upload_link(
     return row, ev
 
 
-@app.post("/api/events/{event_id}/upload-links", dependencies=[Depends(require_admin), Depends(require_database)])
+@app.post("/api/v1/events/{event_id}/upload-links", dependencies=[Depends(require_admin), Depends(require_database)])
 def create_upload_links(event_id: str, request: Request, body: CreateUploadLinksBody | None = None):
     """Create one or more one-time upload links for an event (admin-only). Pass deck_id to create a link that updates that deck."""
     body = body or CreateUploadLinksBody()
@@ -1983,7 +2007,7 @@ def create_upload_links(event_id: str, request: Request, body: CreateUploadLinks
         return {"links": links}
 
 
-@app.get("/api/upload/{token}", dependencies=[Depends(require_database)])
+@app.get("/api/v1/upload/{token}", dependencies=[Depends(require_database)])
 def get_upload_link_info(token: str):
     """Return event info for a valid one-time upload link (public). For update links, also return current deck."""
     with _db.session_scope() as session:
@@ -2071,7 +2095,7 @@ def get_upload_link_info(token: str):
         return out
 
 
-@app.get("/api/event-edit/{token}", dependencies=[Depends(require_database)])
+@app.get("/api/v1/event-edit/{token}", dependencies=[Depends(require_database)])
 def get_event_edit_link_info(token: str):
     """Validate a one-time event-edit link, mark it as used, and return event_id. Public (no auth)."""
     with _db.session_scope() as session:
@@ -2140,7 +2164,7 @@ def _submit_create_with_upload_link(session, row, ev, event_name: str, body: Sub
     return deck_id
 
 
-@app.post("/api/upload/{token}", dependencies=[Depends(require_database)])
+@app.post("/api/v1/upload/{token}", dependencies=[Depends(require_database)])
 def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
     """Submit or update a deck using a one-time upload link (public). Update links modify the linked deck."""
     _validate_deck_payload(body)
@@ -2192,7 +2216,7 @@ def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
             )
 
 
-@app.post("/api/upload/{token}/feedback", dependencies=[Depends(require_database)])
+@app.post("/api/v1/upload/{token}/feedback", dependencies=[Depends(require_database)])
 def submit_feedback_with_upload_link(token: str, body: EventFeedbackBody):
     """Submit event feedback (archetype + matchups) via one-time feedback link. Deck must exist; deck list not required."""
     if not (body.archetype or "").strip():
@@ -2252,7 +2276,7 @@ def submit_feedback_with_upload_link(token: str, body: EventFeedbackBody):
     return {"deck_id": deck_id, "message": "Feedback submitted successfully"}
 
 
-@app.post("/api/upload/{token}/decklist", dependencies=[Depends(require_database)])
+@app.post("/api/v1/upload/{token}/decklist", dependencies=[Depends(require_database)])
 def submit_decklist_with_upload_link(token: str, body: DeckListBody):
     """Update deck list (mainboard/sideboard/commanders) via one-time feedback link. Does not mark the link as used."""
     with _db.session_scope() as session:
@@ -2288,7 +2312,7 @@ def submit_decklist_with_upload_link(token: str, body: DeckListBody):
     return {"deck_id": deck_id, "message": "Deck list updated"}
 
 
-@app.put("/api/decks/{deck_id}", dependencies=[Depends(require_admin_or_event_edit_deck), Depends(require_database)])
+@app.put("/api/v1/decks/{deck_id}", dependencies=[Depends(require_admin_or_event_edit_deck), Depends(require_database)])
 def update_deck_endpoint(deck_id: int, body: UpdateDeckBody):
     """Update deck metadata (admin-only)."""
     deck_dict = _get_deck_by_id(deck_id)
@@ -2346,7 +2370,7 @@ def update_deck_endpoint(deck_id: int, body: UpdateDeckBody):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/decks/{deck_id}", dependencies=[Depends(require_admin_or_event_edit_deck), Depends(require_database)])
+@app.delete("/api/v1/decks/{deck_id}", dependencies=[Depends(require_admin_or_event_edit_deck), Depends(require_database)])
 def delete_deck_endpoint(deck_id: int):
     """Delete a single deck (admin-only)."""
     try:
@@ -2363,7 +2387,7 @@ def delete_deck_endpoint(deck_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/decks/{deck_id}/matchups", dependencies=[Depends(require_admin_or_event_edit_deck), Depends(require_database)])
+@app.get("/api/v1/decks/{deck_id}/matchups", dependencies=[Depends(require_admin_or_event_edit_deck), Depends(require_database)])
 def get_deck_matchups(deck_id: int):
     """List matchups for a deck (admin or event-edit). Also returns opponent_reported_matchups:
     matchups others reported vs this deck's player (inverted: their win = our loss), for prepopulating the form."""
@@ -2402,7 +2426,7 @@ def get_deck_matchups(deck_id: int):
     return {"matchups": rows, "opponent_reported_matchups": opponent_reported_matchups}
 
 
-@app.put("/api/decks/{deck_id}/matchups", dependencies=[Depends(require_admin_or_event_edit_deck), Depends(require_database)])
+@app.put("/api/v1/decks/{deck_id}/matchups", dependencies=[Depends(require_admin_or_event_edit_deck), Depends(require_database)])
 def update_deck_matchups(deck_id: int, body: AdminMatchupsBody):
     """Replace all matchups for a deck (admin or event-edit)."""
     deck_dict = _get_deck_by_id(deck_id)
@@ -2486,7 +2510,7 @@ def _parse_moxfield_commanders(obj) -> list[str]:
     return [e["card"] for e in entries for _ in range(e["qty"])]
 
 
-@app.post("/api/decks/import-moxfield", dependencies=[Depends(require_admin)])
+@app.post("/api/v1/decks/import-moxfield", dependencies=[Depends(require_admin)])
 def import_moxfield_deck(body: ImportMoxfieldBody):
     """Fetch a public Moxfield deck by URL and return commanders, mainboard, sideboard for the editor."""
     url = (body.url or "").strip()
@@ -2546,7 +2570,7 @@ def import_moxfield_deck(body: ImportMoxfieldBody):
         raise HTTPException(status_code=502, detail="Invalid response from Moxfield")
 
 
-@app.get("/api/metagame")
+@app.get("/api/v1/metagame")
 def get_metagame(
     placement_weighted: bool = Query(False),
     ignore_lands: bool = Query(False),
@@ -2707,7 +2731,7 @@ def get_metagame(
     return result
 
 
-@app.get("/api/archetypes/{archetype_name:path}")
+@app.get("/api/v1/archetypes/{archetype_name:path}")
 def get_archetype_detail(
     archetype_name: str,
     date_from: str | None = Query(None, description="Filter from date (DD/MM/YY)"),
@@ -2770,64 +2794,64 @@ def get_archetype_detail(
     }
 
 
-@app.get("/api/settings/ignore-lands-cards")
+@app.get("/api/v1/settings/ignore-lands-cards")
 def get_ignore_lands_cards(_: str = Depends(require_admin)):
     """Return list of card names excluded when 'Ignore lands' is checked (admin-only)."""
     return {"cards": settings_service.get_ignore_lands_cards()}
 
 
-@app.put("/api/settings/ignore-lands-cards")
+@app.put("/api/v1/settings/ignore-lands-cards")
 def put_ignore_lands_cards(body: IgnoreLandsCardsBody, _: str = Depends(require_admin)):
     """Update list of cards excluded when 'Ignore lands' is checked (admin-only)."""
     return {"cards": settings_service.set_ignore_lands_cards(body.cards)}
 
 
-@app.get("/api/settings/rank-weights")
+@app.get("/api/v1/settings/rank-weights")
 def get_rank_weights(_: str = Depends(require_admin)):
     """Return points per placement (1st, 2nd, 3-4, etc.). Admin-only."""
     return {"weights": settings_service.get_rank_weights()}
 
 
-@app.put("/api/settings/rank-weights")
+@app.put("/api/v1/settings/rank-weights")
 def put_rank_weights(body: RankWeightsBody, _: str = Depends(require_admin)):
     """Update points per placement (admin-only)."""
     return {"weights": settings_service.set_rank_weights(body.weights)}
 
 
-@app.get("/api/settings/matchups-min-matches", dependencies=[Depends(require_admin), Depends(require_database)])
+@app.get("/api/v1/settings/matchups-min-matches", dependencies=[Depends(require_admin), Depends(require_database)])
 def get_matchups_min_matches_setting():
     """Return minimum matches threshold for matchup summary (admin)."""
     return {"value": settings_service.get_matchups_min_matches()}
 
 
-@app.put("/api/settings/matchups-min-matches", dependencies=[Depends(require_admin), Depends(require_database)])
+@app.put("/api/v1/settings/matchups-min-matches", dependencies=[Depends(require_admin), Depends(require_database)])
 def put_matchups_min_matches_setting(body: MatchupsMinMatchesBody):
     """Set minimum matches threshold for matchup summary (admin)."""
     n = settings_service.set_matchups_min_matches(body.value)
     return {"value": n}
 
 
-@app.get("/api/settings/matchups-players-min-matches", dependencies=[Depends(require_admin), Depends(require_database)])
+@app.get("/api/v1/settings/matchups-players-min-matches", dependencies=[Depends(require_admin), Depends(require_database)])
 def get_matchups_players_min_matches_setting():
     """Return minimum matches threshold for player matchup summary (admin)."""
     return {"value": settings_service.get_matchups_players_min_matches()}
 
 
-@app.put("/api/settings/matchups-players-min-matches", dependencies=[Depends(require_admin), Depends(require_database)])
+@app.put("/api/v1/settings/matchups-players-min-matches", dependencies=[Depends(require_admin), Depends(require_database)])
 def put_matchups_players_min_matches_setting(body: MatchupsMinMatchesBody):
     """Set minimum matches threshold for player matchup summary (admin)."""
     n = settings_service.set_matchups_players_min_matches(body.value)
     return {"value": n}
 
 
-@app.post("/api/settings/clear-cache")
+@app.post("/api/v1/settings/clear-cache")
 def post_clear_scryfall_cache(_: str = Depends(require_admin)):
     """Clear Scryfall card lookup cache (in-memory and .scryfall_cache.json). Admin-only."""
     clear_scryfall_cache()
     return {"message": "Scryfall cache cleared"}
 
 
-@app.post("/api/settings/clear-decks", dependencies=[Depends(require_database)])
+@app.post("/api/v1/settings/clear-decks", dependencies=[Depends(require_database)])
 def post_clear_decks(_: str = Depends(require_admin)):
     """Clear all decks in the database. Admin-only. Requires PostgreSQL."""
     global _decks
@@ -2837,7 +2861,7 @@ def post_clear_decks(_: str = Depends(require_admin)):
     return {"message": "Decks cleared"}
 
 
-@app.get("/api/settings/upload-links")
+@app.get("/api/v1/settings/upload-links")
 def get_settings_upload_links(_: str = Depends(require_admin), __: None = Depends(require_database)):
     """List all one-time upload links (admin-only). Requires database."""
     with _db.session_scope() as session:
@@ -2845,7 +2869,7 @@ def get_settings_upload_links(_: str = Depends(require_admin), __: None = Depend
     return {"links": links}
 
 
-@app.delete("/api/settings/upload-links")
+@app.delete("/api/v1/settings/upload-links")
 def delete_settings_upload_links(
     used_only: bool = Query(False, description="If true, only delete links that have been used"),
     _: str = Depends(require_admin),
@@ -2857,7 +2881,7 @@ def delete_settings_upload_links(
     return {"deleted": deleted, "message": f"Cleared {deleted} link(s)"}
 
 
-@app.put("/api/player-emails", dependencies=[Depends(require_admin), Depends(require_database)])
+@app.put("/api/v1/player-emails", dependencies=[Depends(require_admin), Depends(require_database)])
 def put_player_email(body: PlayerEmailBody):
     """Set or replace the email for a player (admin-only). Empty email deletes. Response never contains email."""
     player = (body.player or "").strip()
@@ -2869,7 +2893,7 @@ def put_player_email(body: PlayerEmailBody):
     return {"ok": True}
 
 
-@app.post("/api/players/{player_name:path}/send-missing-deck-links", dependencies=[Depends(require_admin), Depends(require_database)])
+@app.post("/api/v1/players/{player_name:path}/send-missing-deck-links", dependencies=[Depends(require_admin), Depends(require_database)])
 def send_player_missing_deck_links(player_name: str, request: Request):
     """Email one-time deck upload links for all of this player's missing (empty) decks. Uses DB-stored email. 503 if email not configured."""
     try:
@@ -2931,7 +2955,7 @@ def send_player_missing_deck_links(player_name: str, request: Request):
         return {"sent": 1}
 
 
-@app.post("/api/events/{event_id}/send-missing-deck-links", dependencies=[Depends(require_admin), Depends(require_database)])
+@app.post("/api/v1/events/{event_id}/send-missing-deck-links", dependencies=[Depends(require_admin), Depends(require_database)])
 def send_missing_deck_links(event_id: str, request: Request):
     """Email one-time deck links to players with missing (empty) decks. Uses DB-stored emails only. 503 if email not configured."""
     try:
@@ -2987,7 +3011,7 @@ def send_missing_deck_links(event_id: str, request: Request):
         return {"sent": sent, "failed": failed}
 
 
-@app.post("/api/events/{event_id}/send-feedback-links", dependencies=[Depends(require_admin), Depends(require_database)])
+@app.post("/api/v1/events/{event_id}/send-feedback-links", dependencies=[Depends(require_admin), Depends(require_database)])
 def send_feedback_links(event_id: str, request: Request):
     """Email one feedback link per deck to each player (DB-stored emails only). 503 if email not configured."""
     try:
@@ -3031,7 +3055,7 @@ def send_feedback_links(event_id: str, request: Request):
         return {"sent": sent}
 
 
-@app.post("/api/events/{event_id}/send-feedback-link-to-player", dependencies=[Depends(require_admin), Depends(require_database)])
+@app.post("/api/v1/events/{event_id}/send-feedback-link-to-player", dependencies=[Depends(require_admin), Depends(require_database)])
 def send_feedback_link_to_player(event_id: str, request: Request, body: SendFeedbackLinkToPlayerBody):
     """Email one feedback link to a single player for this event. Invalidates any previous feedback link for that player's deck. 503 if email not configured."""
     try:
@@ -3175,7 +3199,7 @@ def _date_in_range(deck_date_str: str, from_date: str | None, to_date: str | Non
     return True
 
 
-@app.get("/api/matchups/summary", dependencies=[Depends(require_database)], tags=["Matchups"])
+@app.get("/api/v1/matchups/summary", dependencies=[Depends(require_database)], tags=["Matchups"])
 def get_matchups_summary(
     format_id: str | None = Query(None),
     event_ids: str | None = Query(None),
@@ -3361,12 +3385,13 @@ def get_matchups_summary(
     }
 
 
-@app.get("/api/matchups/players-summary", dependencies=[Depends(require_database)], tags=["Matchups"])
+@app.get("/api/v1/matchups/players-summary", dependencies=[Depends(require_database)], tags=["Matchups"])
 def get_matchups_players_summary(
     format_id: str | None = Query(None),
     event_ids: str | None = Query(None),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
+    player: list[str] | None = Query(None),
 ):
     """Aggregated matchup summary by player. Optional filters; respects matchups_players_min_matches setting."""
     with _db.session_scope() as session:
@@ -3410,9 +3435,9 @@ def get_matchups_players_summary(
     for r in filtered:
         if r.get("opponent_player_id") is None:
             continue
-        player = (r.get("player") or "(unknown)").strip()
+        pname = (r.get("player") or "(unknown)").strip()
         opp = (r.get("opponent_player") or "(unknown)").strip()
-        player_canonical = _front_face_name(player)
+        player_canonical = _front_face_name(pname)
         opp_canonical = _front_face_name(opp)
         key = (player_canonical.lower(), opp_canonical.lower())
         if key not in agg:
@@ -3492,6 +3517,43 @@ def get_matchups_players_summary(
         for r in filtered
     ]
 
+    # Optional filter by player name(s): keep only pairs where at least one side is in the selection
+    if player and len(player) > 0:
+        selected_lower = {p.strip().lower() for p in player if p and p.strip()}
+        if selected_lower:
+            players_list_out = [
+                r for r in players_list_out
+                if (r["player"] or "").lower() in selected_lower or (r["opponent_player"] or "").lower() in selected_lower
+            ]
+            all_players_sorted = sorted(
+                {r["player"] for r in players_list_out} | {r["opponent_player"] for r in players_list_out}
+            )
+            players_matrix = []
+            for i, pa in enumerate(all_players_sorted):
+                row = []
+                for j, pb in enumerate(all_players_sorted):
+                    if i == j:
+                        row.append(None)
+                        continue
+                    key = (pa.lower(), pb.lower())
+                    v = agg.get(key, {"matches": 0, "wins": 0, "draws": 0})
+                    if v["matches"] < min_matches:
+                        row.append(None)
+                        continue
+                    wr = (v["wins"] + 0.5 * v["draws"]) / v["matches"] if v["matches"] else None
+                    row.append(round(wr, 4) if wr is not None else None)
+                players_matrix.append(row)
+            filtered_pairs_lower = {
+                ((r["player"] or "").lower(), (r["opponent_player"] or "").lower()) for r in players_list_out
+            }
+            matchups_list_out = [
+                m for m in matchups_list_out
+                if (
+                    ((m["player_a"] or "").strip().lower(), (m["player_b"] or "").strip().lower()) in filtered_pairs_lower
+                    or ((m["player_b"] or "").strip().lower(), (m["player_a"] or "").strip().lower()) in filtered_pairs_lower
+                )
+            ]
+
     return {
         "players_list": players_list_out,
         "players": all_players_sorted,
@@ -3501,7 +3563,7 @@ def get_matchups_players_summary(
     }
 
 
-@app.get("/api/events/{event_id}/missing-matchups", dependencies=[Depends(require_admin), Depends(require_database)])
+@app.get("/api/v1/events/{event_id}/missing-matchups", dependencies=[Depends(require_admin), Depends(require_database)])
 def get_missing_matchups(event_id: str):
     """List players (decks) in this event that have fewer matchups than expected (admin).
     Expected = number of decks in event minus one."""
@@ -3513,7 +3575,7 @@ def get_missing_matchups(event_id: str):
     return {"missing": missing}
 
 
-@app.get("/api/events/{event_id}/matchup-discrepancies", dependencies=[Depends(require_admin), Depends(require_database)])
+@app.get("/api/v1/events/{event_id}/matchup-discrepancies", dependencies=[Depends(require_admin), Depends(require_database)])
 def get_matchup_discrepancies(event_id: str):
     """List matchup pairs where both players reported and results disagree (admin)."""
     with _db.session_scope() as session:
@@ -3561,7 +3623,7 @@ def get_matchup_discrepancies(event_id: str):
         return {"discrepancies": discrepancies}
 
 
-@app.patch("/api/matchups/{matchup_id}", dependencies=[Depends(require_admin), Depends(require_database)])
+@app.patch("/api/v1/matchups/{matchup_id}", dependencies=[Depends(require_admin), Depends(require_database)])
 def patch_matchup(matchup_id: int, body: PatchMatchupBody):
     """Update a matchup result (admin fix for discrepancies or one-sided reports)."""
     with _db.session_scope() as session:
@@ -3577,13 +3639,13 @@ def patch_matchup(matchup_id: int, body: PatchMatchupBody):
     return {"ok": True}
 
 
-@app.get("/api/player-aliases")
+@app.get("/api/v1/player-aliases")
 def get_player_aliases():
     """List player alias mappings (alias -> canonical)."""
     return {"aliases": _player_aliases}
 
 
-@app.post("/api/player-aliases")
+@app.post("/api/v1/player-aliases")
 def add_player_alias(body: PlayerAliasBody, _: str = Depends(require_admin)):
     """Merge player: map alias to canonical name. E.g. {'alias': 'Pablo Tomas Pesci', 'canonical': 'Tomas Pesci'}."""
     alias = body.alias.strip()
@@ -3595,7 +3657,7 @@ def add_player_alias(body: PlayerAliasBody, _: str = Depends(require_admin)):
     return {"aliases": _player_aliases}
 
 
-@app.delete("/api/player-aliases/{alias:path}")
+@app.delete("/api/v1/player-aliases/{alias:path}")
 def remove_player_alias(alias: str, _: str = Depends(require_admin)):
     """Remove a player alias."""
     a = unquote(alias).strip()
@@ -3611,7 +3673,7 @@ def remove_player_alias(alias: str, _: str = Depends(require_admin)):
     return {"aliases": _player_aliases}
 
 
-@app.get("/api/players/similar")
+@app.get("/api/v1/players/similar")
 def get_similar_players(
     name: str = Query(..., description="Player name to find similar"),
     limit: int = Query(10, ge=1, le=50),
@@ -3636,7 +3698,7 @@ def get_similar_players(
     return {"similar": [n for n in sorted_names if score(n) < 99][:limit]}
 
 
-@app.get("/api/players")
+@app.get("/api/v1/players")
 def get_players(
     date_from: str | None = Query(None, description="Filter from date (DD/MM/YY)"),
     date_to: str | None = Query(None, description="Filter to date (DD/MM/YY)"),
@@ -3659,7 +3721,7 @@ def get_players(
     return {"players": players}
 
 
-@app.get("/api/players/id/{player_id:int}")
+@app.get("/api/v1/players/id/{player_id:int}")
 def get_player_detail_by_id(player_id: int):
     """Player stats and their decks by stable player_id."""
     player_decks = [d for d in _decks if d.get("player_id") == player_id]
@@ -3712,7 +3774,7 @@ def _resolve_player_name_to_canonical(name: str) -> str:
     return canonical
 
 
-@app.get("/api/players/{player_name:path}")
+@app.get("/api/v1/players/{player_name:path}")
 def get_player_detail(player_name: str):
     """Player stats and their decks. Merges aliased players (e.g. Pablo Tomas Pesci = Tomas Pesci). Accent-insensitive: matias finds Matías."""
     name = unquote(player_name).strip()
@@ -3750,7 +3812,7 @@ def get_player_detail(player_name: str):
     return out
 
 
-@app.post("/api/load", dependencies=[Depends(require_database)])
+@app.post("/api/v1/load", dependencies=[Depends(require_database)])
 def load_decks(
     body: LoadBody | None = None,
     file: UploadFile | None = File(None),
@@ -3822,7 +3884,7 @@ def load_decks(
     return {"loaded": len(_decks), "message": f"Loaded {len(_decks)} decks"}
 
 
-@app.get("/api/export")
+@app.get("/api/v1/export")
 def export_decks(_: str = Depends(require_admin)):
     """Download current scraped/loaded data as JSON (same format as load accepts)."""
     if not _decks:
@@ -3835,14 +3897,14 @@ def export_decks(_: str = Depends(require_admin)):
     )
 
 
-@app.post("/api/analyze")
+@app.post("/api/v1/analyze")
 def run_analyze():
     """Re-run analysis (no-op, metagame is computed on demand)."""
     _invalidate_metagame()
     return {"message": "Analysis will be recomputed on next /api/metagame request"}
 
 
-@app.post("/api/scrape")
+@app.post("/api/v1/scrape")
 async def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
     """Trigger scrape with SSE progress streaming."""
     import queue
@@ -4070,7 +4132,7 @@ async def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-@app.post("/api/scrape/stop")
+@app.post("/api/v1/scrape/stop")
 def stop_scrape(_: str = Depends(require_admin)):
     """Request the current scrape to stop. Takes effect after the next progress check."""
     global _scrape_cancel_event
