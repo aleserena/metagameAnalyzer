@@ -3334,15 +3334,8 @@ def get_matchups_summary(
         arch = (r.get("archetype") or "(unknown)").strip()
         opp = (r.get("opponent_archetype") or "(unknown)").strip()
         w, l, d = to_effective_wld(r)
-        key = (arch.lower(), opp.lower())
-        if key not in agg:
-            agg[key] = {"wins": 0, "losses": 0, "draws": 0, "intentional_draws": 0, "matches": 0, "archetype": arch, "opponent_archetype": opp}
-        agg[key]["wins"] += w
-        agg[key]["losses"] += l
-        agg[key]["draws"] += d
-        if _is_intentional_draw_result(r.get("result") or ""):
-            agg[key]["intentional_draws"] += 1
-        agg[key]["matches"] += 1
+        is_id = _is_intentional_draw_result(r.get("result") or "")
+        add_to_agg(arch, opp, w, l, d, is_id, matches=1)
 
     list_out = []
     for (_arch_lower, _opp_lower), v in agg.items():

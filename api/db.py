@@ -849,14 +849,35 @@ def count_effective_matchups_for_deck(session: Session, deck_id: int) -> int:
     return as_deck + as_opponent
 
 
+def _invert_matchup_result(result: str) -> str:
+    """Return the opponent's result: win<->loss, intentional_draw_win<->intentional_draw_loss, draw and intentional_draw unchanged."""
+    r = (result or "").strip().lower()
+    if r in ("win", "2-1", "1-0"):
+        return "loss"
+    if r in ("loss", "1-2", "0-1"):
+        return "win"
+    if r == "intentional_draw_win":
+        return "intentional_draw_loss"
+    if r == "intentional_draw_loss":
+        return "intentional_draw_win"
+    return result  # draw, intentional_draw, id, etc.
+
+
 def upsert_matchups_for_deck(
     session: Session,
     deck_id: int,
     matchups: list[dict],
 ) -> None:
     """Replace all matchups for this deck. Each item: opponent_player, opponent_player_id?, opponent_deck_id?, result, ...
-    Sets opponent_player_id from item or by resolving opponent_player (name). Bye/drop: opponent_player_id NULL."""
+    Sets opponent_player_id from item or by resolving opponent_player (name). Bye/drop: opponent_player_id NULL.
+    When opponent_deck_id is set (real opponent), also upserts the inverse row for the opponent so both sides
+    of the matchup are stored (if A beats B, B is recorded as having lost to A)."""
     session.query(MatchupRow).filter(MatchupRow.deck_id == deck_id).delete()
+    deck_row = session.query(DeckRow).filter(DeckRow.deck_id == deck_id).first()
+    my_player = (deck_row.player or "").strip() or "(unknown)" if deck_row else "(unknown)"
+    my_player_id = deck_row.player_id if deck_row else None
+    my_archetype = getattr(deck_row, "archetype", None) if deck_row else None
+
     for m in matchups:
         opponent_player = (m.get("opponent_player") or "").strip()
         result = (m.get("result") or "").strip()
@@ -872,17 +893,39 @@ def upsert_matchups_for_deck(
                 opponent_player = disp
         elif opponent_player in ("Bye", "(drop)"):
             opp_pid = None
+        opponent_deck_id = m.get("opponent_deck_id")
+        round_num = m.get("round")
+
         row = MatchupRow(
             deck_id=deck_id,
             opponent_player_id=opp_pid,
             opponent_player=opponent_player or "Bye",
-            opponent_deck_id=m.get("opponent_deck_id"),
+            opponent_deck_id=opponent_deck_id,
             opponent_archetype=m.get("opponent_archetype"),
             result=result,
             result_note=(m.get("result_note") or "").strip() or None,
-            round=m.get("round"),
+            round=round_num,
         )
         session.add(row)
+
+        # Store inverse for the opponent so both sides appear in the matrix and matchup counts are complete.
+        if opponent_deck_id is not None and result.lower() not in ("bye", "drop"):
+            session.query(MatchupRow).filter(
+                MatchupRow.deck_id == opponent_deck_id,
+                MatchupRow.opponent_deck_id == deck_id,
+                MatchupRow.round == round_num,
+            ).delete()
+            inverse = MatchupRow(
+                deck_id=opponent_deck_id,
+                opponent_player_id=my_player_id,
+                opponent_player=my_player,
+                opponent_deck_id=deck_id,
+                opponent_archetype=my_archetype,
+                result=_invert_matchup_result(result),
+                result_note=None,
+                round=round_num,
+            )
+            session.add(inverse)
 
 
 def get_matchup(session: Session, matchup_id: int) -> MatchupRow | None:
