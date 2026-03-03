@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Event } from '../types'
-import { dateInRange, getDateRangeFromPreset } from '../utils'
+import { dateInRange, dateSortKey, getDateRangeFromPreset } from '../utils'
 import type { DatePreset } from '../utils'
 
 export interface EventSelectorProps {
@@ -28,6 +28,12 @@ export default function EventSelector({
   const [maxHeight, setMaxHeight] = useState(DROPDOWN_MAX_HEIGHT)
   const ref = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
+
+  /** Events sorted by date descending (most recent first) for the picker list */
+  const sortedEvents = useMemo(
+    () => [...events].sort((a, b) => dateSortKey(b.date).localeCompare(dateSortKey(a.date))),
+    [events]
+  )
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -210,7 +216,7 @@ export default function EventSelector({
                 Select all
               </button>
             </div>
-            {events.map((e) => (
+            {sortedEvents.map((e) => (
               <label
                 key={e.event_id}
                 style={{
