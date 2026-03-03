@@ -29,15 +29,26 @@ def client():
 
 
 def test_health(client):
-    """GET /api/health returns ok."""
-    r = client.get("/api/health")
+    """GET /api/v1/health returns ok."""
+    r = client.get("/api/v1/health")
     assert r.status_code == 200
     assert r.json() == {"status": "ok"}
 
 
+def test_info(client):
+    """GET /api/v1/info returns build_id and db_env."""
+    r = client.get("/api/v1/info")
+    assert r.status_code == 200
+    data = r.json()
+    assert "build_id" in data
+    assert "db_env" in data
+    assert data["build_id"] in ("dev",) or len(data["build_id"]) == 7
+    assert data["db_env"] in ("dev", "staging", "prod", "postgres", "json")
+
+
 def test_get_decks_pagination(client, sample_decks):
-    """GET /api/decks returns paginated results."""
-    r = client.get("/api/decks?skip=0&limit=1")
+    """GET /api/v1/decks returns paginated results."""
+    r = client.get("/api/v1/decks?skip=0&limit=1")
     assert r.status_code == 200
     data = r.json()
     assert "decks" in data
@@ -48,19 +59,19 @@ def test_get_decks_pagination(client, sample_decks):
 
 
 def test_get_decks_filter_event_id(client, sample_decks):
-    """GET /api/decks filters by event_id (single)."""
+    """GET /api/v1/decks filters by event_id (single)."""
     event_id = sample_decks[0]["event_id"]
-    r = client.get(f"/api/decks?event_id={event_id}")
+    r = client.get(f"/api/v1/decks?event_id={event_id}")
     assert r.status_code == 200
     data = r.json()
     assert all(d["event_id"] == event_id for d in data["decks"])
 
 
 def test_get_decks_filter_event_ids(client, sample_decks):
-    """GET /api/decks filters by event_ids (multiple)."""
+    """GET /api/v1/decks filters by event_ids (multiple)."""
     ids = [d["event_id"] for d in sample_decks]
     event_ids = ",".join(str(i) for i in ids)
-    r = client.get(f"/api/decks?event_ids={event_ids}")
+    r = client.get(f"/api/v1/decks?event_ids={event_ids}")
     assert r.status_code == 200
     data = r.json()
     assert len(data["decks"]) == len(sample_decks)
@@ -68,8 +79,8 @@ def test_get_decks_filter_event_ids(client, sample_decks):
 
 
 def test_get_decks_filter_deck_name(client, sample_decks):
-    """GET /api/decks filters by deck_name substring."""
-    r = client.get("/api/decks?deck_name=Spider")
+    """GET /api/v1/decks filters by deck_name substring."""
+    r = client.get("/api/v1/decks?deck_name=Spider")
     assert r.status_code == 200
     data = r.json()
     assert len(data["decks"]) >= 1
@@ -77,13 +88,13 @@ def test_get_decks_filter_deck_name(client, sample_decks):
 
 
 def test_get_decks_filter_archetype(client, sample_decks):
-    """GET /api/decks filters by archetype substring."""
-    r = client.get("/api/decks?archetype=Aggro")
+    """GET /api/v1/decks filters by archetype substring."""
+    r = client.get("/api/v1/decks?archetype=Aggro")
     assert r.status_code == 200
     data = r.json()
     assert len(data["decks"]) >= 1
     assert any("Aggro" in (d.get("archetype") or "") for d in data["decks"])
-    r2 = client.get("/api/decks?archetype=Control")
+    r2 = client.get("/api/v1/decks?archetype=Control")
     assert r2.status_code == 200
     data2 = r2.json()
     assert len(data2["decks"]) >= 1
@@ -91,8 +102,8 @@ def test_get_decks_filter_archetype(client, sample_decks):
 
 
 def test_get_decks_filter_player(client, sample_decks):
-    """GET /api/decks filters by player substring."""
-    r = client.get("/api/decks?player=Jeremy")
+    """GET /api/v1/decks filters by player substring."""
+    r = client.get("/api/v1/decks?player=Jeremy")
     assert r.status_code == 200
     data = r.json()
     assert len(data["decks"]) >= 1
@@ -100,14 +111,14 @@ def test_get_decks_filter_player(client, sample_decks):
 
 
 def test_get_decks_filter_player_ignores_accents(client, sample_decks):
-    """GET /api/decks?player=... matches player names accent-insensitive (e.g. matias finds Matías)."""
+    """GET /api/v1/decks?player=... matches player names accent-insensitive (e.g. matias finds Matías)."""
     # Add a deck with accented name so we have Matías in the list
     deck_matias = dict(sample_decks[0])
     deck_matias["deck_id"] = 999001
     deck_matias["player"] = "Matías"
     deck_matias["player_id"] = 101
     api_main._decks = list(sample_decks) + [deck_matias]
-    r = client.get("/api/decks?player=matias")
+    r = client.get("/api/v1/decks?player=matias")
     assert r.status_code == 200
     data = r.json()
     assert len(data["decks"]) >= 1
@@ -115,14 +126,14 @@ def test_get_decks_filter_player_ignores_accents(client, sample_decks):
 
 
 def test_get_player_detail_ignores_accents(client, sample_decks):
-    """GET /api/players/{name} finds player by accent-insensitive name (e.g. matias finds Matías)."""
+    """GET /api/v1/players/{name} finds player by accent-insensitive name (e.g. matias finds Matías)."""
     deck_matias = dict(sample_decks[0])
     deck_matias["deck_id"] = 999002
     deck_matias["player"] = "Matías"
     deck_matias["player_id"] = 102
     api_main._decks = list(sample_decks) + [deck_matias]
     with patch.object(api_main, "_database_available", return_value=False):
-        r = client.get("/api/players/matias")
+        r = client.get("/api/v1/players/matias")
     assert r.status_code == 200
     data = r.json()
     assert data["player"] == "Matías"
@@ -130,14 +141,14 @@ def test_get_player_detail_ignores_accents(client, sample_decks):
 
 
 def test_get_decks_filter_player_id(client, sample_decks):
-    """GET /api/decks?player_id=X returns only decks for that player."""
-    r = client.get("/api/decks?player_id=1")
+    """GET /api/v1/decks?player_id=X returns only decks for that player."""
+    r = client.get("/api/v1/decks?player_id=1")
     assert r.status_code == 200
     data = r.json()
     assert all(d.get("player_id") == 1 for d in data["decks"])
     assert len(data["decks"]) == 1
     assert data["decks"][0]["player_id"] == 1
-    r2 = client.get("/api/decks?player_id=2")
+    r2 = client.get("/api/v1/decks?player_id=2")
     assert r2.status_code == 200
     data2 = r2.json()
     assert all(d.get("player_id") == 2 for d in data2["decks"])
@@ -145,8 +156,8 @@ def test_get_decks_filter_player_id(client, sample_decks):
 
 
 def test_get_decks_response_includes_player_id(client, sample_decks):
-    """GET /api/decks returns decks with player_id when present."""
-    r = client.get("/api/decks")
+    """GET /api/v1/decks returns decks with player_id when present."""
+    r = client.get("/api/v1/decks")
     assert r.status_code == 200
     data = r.json()
     for d in data["decks"]:
@@ -156,50 +167,50 @@ def test_get_decks_response_includes_player_id(client, sample_decks):
 
 
 def test_get_deck_detail_includes_player_id(client, sample_decks):
-    """GET /api/decks/{id} returns deck with player_id when present."""
+    """GET /api/v1/decks/{id} returns deck with player_id when present."""
     deck_id = sample_decks[0]["deck_id"]
-    r = client.get(f"/api/decks/{deck_id}")
+    r = client.get(f"/api/v1/decks/{deck_id}")
     assert r.status_code == 200
     assert "player_id" in r.json()
     assert r.json()["player_id"] == 1
 
 
 def test_get_decks_filter_card(client, sample_decks):
-    """GET /api/decks filters by card name (mainboard/sideboard/commanders)."""
-    r = client.get("/api/decks?card=Lightning")
+    """GET /api/v1/decks filters by card name (mainboard/sideboard/commanders)."""
+    r = client.get("/api/v1/decks?card=Lightning")
     assert r.status_code == 200
     data = r.json()
     assert len(data["decks"]) >= 1
-    r2 = client.get("/api/decks?card=Spider-Man")
+    r2 = client.get("/api/v1/decks?card=Spider-Man")
     assert r2.status_code == 200
     data2 = r2.json()
     assert len(data2["decks"]) >= 1
 
 
 def test_get_deck_by_id_200(client, sample_decks):
-    """GET /api/decks/{id} returns 200 for existing deck."""
+    """GET /api/v1/decks/{id} returns 200 for existing deck."""
     deck_id = sample_decks[0]["deck_id"]
-    r = client.get(f"/api/decks/{deck_id}")
+    r = client.get(f"/api/v1/decks/{deck_id}")
     assert r.status_code == 200
     assert r.json()["deck_id"] == deck_id
 
 
 def test_get_deck_by_id_404(client):
-    """GET /api/decks/{id} returns 404 for non-existent deck."""
-    r = client.get("/api/decks/999999")
+    """GET /api/v1/decks/{id} returns 404 for non-existent deck."""
+    r = client.get("/api/v1/decks/999999")
     assert r.status_code == 404
 
 
 def test_get_archetype_detail_404(client):
-    """GET /api/archetypes/{name} returns 404 when no decks match."""
-    r = client.get("/api/archetypes/NonexistentArchetype")
+    """GET /api/v1/archetypes/{name} returns 404 when no decks match."""
+    r = client.get("/api/v1/archetypes/NonexistentArchetype")
     assert r.status_code == 404
 
 
 def test_get_archetype_detail_200(client, sample_decks):
-    """GET /api/archetypes/{name} returns 200 with archetype, deck_count, average_analysis, top_cards_main."""
+    """GET /api/v1/archetypes/{name} returns 200 with archetype, deck_count, average_analysis, top_cards_main."""
     archetype_name = sample_decks[0].get("archetype") or "UR Aggro"
-    r = client.get(f"/api/archetypes/{archetype_name}")
+    r = client.get(f"/api/v1/archetypes/{archetype_name}")
     assert r.status_code == 200
     data = r.json()
     assert data["archetype"] == archetype_name
@@ -215,8 +226,8 @@ def test_get_archetype_detail_200(client, sample_decks):
 
 
 def test_get_metagame_structure(client):
-    """GET /api/metagame returns structure with top_cards_main, commander_distribution."""
-    r = client.get("/api/metagame")
+    """GET /api/v1/metagame returns structure with top_cards_main, commander_distribution."""
+    r = client.get("/api/v1/metagame")
     assert r.status_code == 200
     data = r.json()
     assert "summary" in data
@@ -226,8 +237,8 @@ def test_get_metagame_structure(client):
 
 
 def test_get_players_leaderboard(client):
-    """GET /api/players returns leaderboard."""
-    r = client.get("/api/players")
+    """GET /api/v1/players returns leaderboard."""
+    r = client.get("/api/v1/players")
     assert r.status_code == 200
     data = r.json()
     assert "players" in data
@@ -235,8 +246,8 @@ def test_get_players_leaderboard(client):
 
 
 def test_post_cards_lookup(client):
-    """POST /api/cards/lookup returns card metadata (uses real lookup or mock)."""
-    r = client.post("/api/cards/lookup", json={"names": ["Lightning Bolt"]})
+    """POST /api/v1/cards/lookup returns card metadata (uses real lookup or mock)."""
+    r = client.post("/api/v1/cards/lookup", json={"names": ["Lightning Bolt"]})
     assert r.status_code == 200
     # May return {} if no network, or Scryfall data if available
     data = r.json()
@@ -244,9 +255,9 @@ def test_post_cards_lookup(client):
 
 
 def test_get_cards_search(client):
-    """GET /api/cards/search returns autocomplete results."""
+    """GET /api/v1/cards/search returns autocomplete results."""
     with patch.object(api_main, "autocomplete_cards", return_value=["Atraxa, Praetors' Voice", "Atraxa, Grand Unifier"]):
-        r = client.get("/api/cards/search?q=Atra")
+        r = client.get("/api/v1/cards/search?q=Atra")
     assert r.status_code == 200
     data = r.json()
     assert "data" in data
@@ -254,9 +265,9 @@ def test_get_cards_search(client):
 
 
 def test_get_cards_search_short_query(client):
-    """GET /api/cards/search returns empty list for query shorter than min length."""
+    """GET /api/v1/cards/search returns empty list for query shorter than min length."""
     with patch.object(api_main, "autocomplete_cards", return_value=[]) as mock_autocomplete:
-        r = client.get("/api/cards/search?q=A")
+        r = client.get("/api/v1/cards/search?q=A")
     assert r.status_code == 200
     data = r.json()
     assert data.get("data") == []
@@ -267,8 +278,8 @@ def test_get_cards_search_short_query(client):
 
 
 def test_get_date_range(client, sample_decks):
-    """GET /api/date-range returns min_date, max_date, last_event_date from decks."""
-    r = client.get("/api/date-range")
+    """GET /api/v1/date-range returns min_date, max_date, last_event_date from decks."""
+    r = client.get("/api/v1/date-range")
     assert r.status_code == 200
     data = r.json()
     assert "min_date" in data
@@ -278,17 +289,17 @@ def test_get_date_range(client, sample_decks):
 
 
 def test_get_date_range_empty(client):
-    """GET /api/date-range returns nulls when no decks."""
+    """GET /api/v1/date-range returns nulls when no decks."""
     api_main._decks = []
-    r = client.get("/api/date-range")
+    r = client.get("/api/v1/date-range")
     assert r.status_code == 200
     assert r.json() == {"min_date": None, "max_date": None, "last_event_date": None}
     # patch_decks (autouse) restores _decks for next test
 
 
 def test_get_format_info(client, sample_decks):
-    """GET /api/format-info returns format_id and format_name from decks."""
-    r = client.get("/api/format-info")
+    """GET /api/v1/format-info returns format_id and format_name from decks."""
+    r = client.get("/api/v1/format-info")
     assert r.status_code == 200
     data = r.json()
     assert data["format_id"] == "EDH"
@@ -296,9 +307,9 @@ def test_get_format_info(client, sample_decks):
 
 
 def test_get_decks_compare(client, sample_decks):
-    """GET /api/decks/compare returns 2–4 decks by id."""
+    """GET /api/v1/decks/compare returns 2–4 decks by id."""
     ids = [sample_decks[0]["deck_id"], sample_decks[1]["deck_id"]]
-    r = client.get(f"/api/decks/compare?ids={ids[0]},{ids[1]}")
+    r = client.get(f"/api/v1/decks/compare?ids={ids[0]},{ids[1]}")
     assert r.status_code == 200
     data = r.json()
     assert "decks" in data
@@ -307,16 +318,16 @@ def test_get_decks_compare(client, sample_decks):
 
 
 def test_get_decks_compare_400(client):
-    """GET /api/decks/compare requires 2–4 ids."""
-    r = client.get("/api/decks/compare?ids=1")
+    """GET /api/v1/decks/compare requires 2–4 ids."""
+    r = client.get("/api/v1/decks/compare?ids=1")
     assert r.status_code == 400
-    r2 = client.get("/api/decks/compare?ids=1,2,3,4,5")
+    r2 = client.get("/api/v1/decks/compare?ids=1,2,3,4,5")
     assert r2.status_code == 400
 
 
 def test_get_decks_duplicates(client, sample_decks):
-    """GET /api/decks/duplicates returns list of duplicate groups."""
-    r = client.get("/api/decks/duplicates")
+    """GET /api/v1/decks/duplicates returns list of duplicate groups."""
+    r = client.get("/api/v1/decks/duplicates")
     assert r.status_code == 200
     data = r.json()
     assert "duplicates" in data
@@ -324,9 +335,9 @@ def test_get_decks_duplicates(client, sample_decks):
 
 
 def test_get_deck_similar(client, sample_decks):
-    """GET /api/decks/{id}/similar returns similar decks."""
+    """GET /api/v1/decks/{id}/similar returns similar decks."""
     deck_id = sample_decks[0]["deck_id"]
-    r = client.get(f"/api/decks/{deck_id}/similar?limit=5")
+    r = client.get(f"/api/v1/decks/{deck_id}/similar?limit=5")
     assert r.status_code == 200
     data = r.json()
     assert "similar" in data
@@ -334,15 +345,15 @@ def test_get_deck_similar(client, sample_decks):
 
 
 def test_get_deck_similar_404(client):
-    """GET /api/decks/{id}/similar returns 404 for unknown deck."""
-    r = client.get("/api/decks/999999/similar")
+    """GET /api/v1/decks/{id}/similar returns 404 for unknown deck."""
+    r = client.get("/api/v1/decks/999999/similar")
     assert r.status_code == 404
 
 
 def test_get_deck_analysis(client, sample_decks):
-    """GET /api/decks/{id}/analysis returns deck analysis."""
+    """GET /api/v1/decks/{id}/analysis returns deck analysis."""
     deck_id = sample_decks[0]["deck_id"]
-    r = client.get(f"/api/decks/{deck_id}/analysis")
+    r = client.get(f"/api/v1/decks/{deck_id}/analysis")
     assert r.status_code == 200
     data = r.json()
     assert "mana_curve" in data
@@ -352,8 +363,8 @@ def test_get_deck_analysis(client, sample_decks):
 
 
 def test_get_deck_analysis_404(client):
-    """GET /api/decks/{id}/analysis returns 404 for unknown deck."""
-    r = client.get("/api/decks/999999/analysis")
+    """GET /api/v1/decks/{id}/analysis returns 404 for unknown deck."""
+    r = client.get("/api/v1/decks/999999/analysis")
     assert r.status_code == 404
 
 
@@ -361,10 +372,10 @@ def test_get_deck_analysis_404(client):
 
 
 def test_auth_login_success(client):
-    """POST /api/auth/login returns token when password matches."""
+    """POST /api/v1/auth/login returns token when password matches."""
     with patch.dict("os.environ", {"ADMIN_PASSWORD": "secret"}):
         with patch.object(api_main, "ADMIN_PASSWORD", "secret"):
-            r = client.post("/api/auth/login", json={"password": "secret"})
+            r = client.post("/api/v1/auth/login", json={"password": "secret"})
     assert r.status_code == 200
     data = r.json()
     assert "token" in data
@@ -372,25 +383,25 @@ def test_auth_login_success(client):
 
 
 def test_auth_login_invalid(client):
-    """POST /api/auth/login returns 401 for wrong password."""
+    """POST /api/v1/auth/login returns 401 for wrong password."""
     with patch.object(api_main, "ADMIN_PASSWORD", "secret"):
-        r = client.post("/api/auth/login", json={"password": "wrong"})
+        r = client.post("/api/v1/auth/login", json={"password": "wrong"})
     assert r.status_code == 401
 
 
 def test_auth_me_401_no_header(client):
-    """GET /api/auth/me returns 401 without Authorization header."""
-    r = client.get("/api/auth/me")
+    """GET /api/v1/auth/me returns 401 without Authorization header."""
+    r = client.get("/api/v1/auth/me")
     assert r.status_code == 401
 
 
 def test_auth_me_200(client):
-    """GET /api/auth/me returns user when valid token provided."""
+    """GET /api/v1/auth/me returns user when valid token provided."""
     with patch.dict("os.environ", {"ADMIN_PASSWORD": "secret"}, clear=False):
         with patch.object(api_main, "ADMIN_PASSWORD", "secret"):
-            login_r = client.post("/api/auth/login", json={"password": "secret"})
+            login_r = client.post("/api/v1/auth/login", json={"password": "secret"})
         token = login_r.json()["token"]
-        r = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+        r = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
     assert r.json() == {"user": "admin"}
 
@@ -399,41 +410,41 @@ def test_auth_me_200(client):
 
 
 def test_get_settings_ignore_lands_cards(client_with_overrides):
-    """GET /api/settings/ignore-lands-cards returns cards list (admin)."""
+    """GET /api/v1/settings/ignore-lands-cards returns cards list (admin)."""
     with patch.object(api_main.settings_service, "get_ignore_lands_cards", return_value=["Forest", "Swamp"]):
-        r = client_with_overrides.get("/api/settings/ignore-lands-cards")
+        r = client_with_overrides.get("/api/v1/settings/ignore-lands-cards")
     assert r.status_code == 200
     assert r.json() == {"cards": ["Forest", "Swamp"]}
 
 
 def test_put_settings_ignore_lands_cards(client_with_overrides):
-    """PUT /api/settings/ignore-lands-cards updates and returns cards (admin)."""
+    """PUT /api/v1/settings/ignore-lands-cards updates and returns cards (admin)."""
     with patch.object(api_main.settings_service, "set_ignore_lands_cards", return_value=["Island", "Mountain"]):
-        r = client_with_overrides.put("/api/settings/ignore-lands-cards", json={"cards": ["Island", "Mountain"]})
+        r = client_with_overrides.put("/api/v1/settings/ignore-lands-cards", json={"cards": ["Island", "Mountain"]})
     assert r.status_code == 200
     assert r.json() == {"cards": ["Island", "Mountain"]}
 
 
 def test_get_settings_rank_weights(client_with_overrides):
-    """GET /api/settings/rank-weights returns weights (admin)."""
+    """GET /api/v1/settings/rank-weights returns weights (admin)."""
     with patch.object(api_main.settings_service, "get_rank_weights", return_value={"1": 10.0, "2": 8.0}):
-        r = client_with_overrides.get("/api/settings/rank-weights")
+        r = client_with_overrides.get("/api/v1/settings/rank-weights")
     assert r.status_code == 200
     assert r.json() == {"weights": {"1": 10.0, "2": 8.0}}
 
 
 def test_put_settings_rank_weights(client_with_overrides):
-    """PUT /api/settings/rank-weights updates and returns weights (admin)."""
+    """PUT /api/v1/settings/rank-weights updates and returns weights (admin)."""
     with patch.object(api_main.settings_service, "set_rank_weights", return_value={"1": 10.0}):
-        r = client_with_overrides.put("/api/settings/rank-weights", json={"weights": {"1": 10.0}})
+        r = client_with_overrides.put("/api/v1/settings/rank-weights", json={"weights": {"1": 10.0}})
     assert r.status_code == 200
     assert r.json() == {"weights": {"1": 10.0}}
 
 
 def test_post_settings_clear_cache(client_with_overrides):
-    """POST /api/settings/clear-cache clears Scryfall cache (admin)."""
+    """POST /api/v1/settings/clear-cache clears Scryfall cache (admin)."""
     with patch.object(api_main, "clear_scryfall_cache"):
-        r = client_with_overrides.post("/api/settings/clear-cache")
+        r = client_with_overrides.post("/api/v1/settings/clear-cache")
     assert r.status_code == 200
     assert "message" in r.json()
 
@@ -442,25 +453,25 @@ def test_post_settings_clear_cache(client_with_overrides):
 
 
 def test_get_player_aliases(client):
-    """GET /api/player-aliases returns alias map."""
-    r = client.get("/api/player-aliases")
+    """GET /api/v1/player-aliases returns alias map."""
+    r = client.get("/api/v1/player-aliases")
     assert r.status_code == 200
     assert "aliases" in r.json()
     assert isinstance(r.json()["aliases"], dict)
 
 
 def test_get_players_with_date_filter(client, sample_decks):
-    """GET /api/players accepts date_from/date_to."""
-    r = client.get("/api/players?date_from=01/01/26&date_to=31/12/26")
+    """GET /api/v1/players accepts date_from/date_to."""
+    r = client.get("/api/v1/players?date_from=01/01/26&date_to=31/12/26")
     assert r.status_code == 200
     assert "players" in r.json()
 
 
 def test_get_player_detail(client, sample_decks):
-    """GET /api/players/{name} returns player stats and decks."""
+    """GET /api/v1/players/{name} returns player stats and decks."""
     player = sample_decks[0]["player"]
     with patch.object(api_main, "_database_available", return_value=False):
-        r = client.get(f"/api/players/{player}")
+        r = client.get(f"/api/v1/players/{player}")
     assert r.status_code == 200
     data = r.json()
     assert data["player"]
@@ -470,14 +481,14 @@ def test_get_player_detail(client, sample_decks):
 
 
 def test_get_player_detail_404(client):
-    """GET /api/players/{name} returns 404 for unknown player."""
-    r = client.get("/api/players/NonexistentPlayer123")
+    """GET /api/v1/players/{name} returns 404 for unknown player."""
+    r = client.get("/api/v1/players/NonexistentPlayer123")
     assert r.status_code == 404
 
 
 def test_get_players_similar(client, sample_decks):
-    """GET /api/players/similar returns similar name suggestions."""
-    r = client.get("/api/players/similar?name=Jeremy&limit=5")
+    """GET /api/v1/players/similar returns similar name suggestions."""
+    r = client.get("/api/v1/players/similar?name=Jeremy&limit=5")
     assert r.status_code == 200
     data = r.json()
     assert "similar" in data
@@ -488,8 +499,8 @@ def test_get_players_similar(client, sample_decks):
 
 
 def test_get_metagame_with_date_params(client, sample_decks):
-    """GET /api/metagame accepts date_from, date_to and returns expected shape."""
-    r = client.get("/api/metagame?date_from=01/01/26&date_to=31/12/26")
+    """GET /api/v1/metagame accepts date_from, date_to and returns expected shape."""
+    r = client.get("/api/v1/metagame?date_from=01/01/26&date_to=31/12/26")
     assert r.status_code == 200
     data = r.json()
     assert "summary" in data
@@ -501,10 +512,10 @@ def test_get_metagame_with_date_params(client, sample_decks):
 
 
 def test_get_events_list(client, sample_decks):
-    """GET /api/events returns events derived from decks when DB not used."""
+    """GET /api/v1/events returns events derived from decks when DB not used."""
     api_main._events_cache = None
     with patch.object(api_main, "_database_available", return_value=False):
-        r = client.get("/api/events")
+        r = client.get("/api/v1/events")
     assert r.status_code == 200
     data = r.json()
     assert "events" in data
@@ -517,10 +528,10 @@ def test_get_events_list(client, sample_decks):
 
 
 def test_get_event_by_id(client, sample_decks):
-    """GET /api/events/{event_id} returns event when found from decks."""
+    """GET /api/v1/events/{event_id} returns event when found from decks."""
     event_id = sample_decks[0]["event_id"]
     with patch.object(api_main, "_database_available", return_value=False):
-        r = client.get(f"/api/events/{event_id}")
+        r = client.get(f"/api/v1/events/{event_id}")
     assert r.status_code == 200
     data = r.json()
     assert data["event_id"] == event_id
@@ -529,9 +540,9 @@ def test_get_event_by_id(client, sample_decks):
 
 
 def test_get_event_by_id_404(client):
-    """GET /api/events/{event_id} returns 404 when event not found."""
+    """GET /api/v1/events/{event_id} returns 404 when event not found."""
     with patch.object(api_main, "_database_available", return_value=False):
-        r = client.get("/api/events/99999999")
+        r = client.get("/api/v1/events/99999999")
     assert r.status_code == 404
 
 
@@ -539,7 +550,7 @@ def test_get_event_by_id_404(client):
 
 
 def test_get_matchups_summary(client_with_overrides):
-    """GET /api/matchups/summary returns structure when DB is mocked."""
+    """GET /api/v1/matchups/summary returns structure when DB is mocked."""
     from contextlib import contextmanager
 
     @contextmanager
@@ -551,7 +562,7 @@ def test_get_matchups_summary(client_with_overrides):
         mock_db.session_scope = mock_session_scope
         mock_db.get_matchups_min_matches.return_value = 0
         mock_db.list_matchups_with_deck_info.return_value = []
-        r = client_with_overrides.get("/api/matchups/summary")
+        r = client_with_overrides.get("/api/v1/matchups/summary")
     assert r.status_code == 200
     data = r.json()
     assert "list" in data and "matrix" in data and "min_matches" in data
