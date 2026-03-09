@@ -120,7 +120,7 @@ def _send_via_brevo_api(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req):
             # 2xx success
             pass
     except urllib.error.HTTPError as e:

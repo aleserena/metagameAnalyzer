@@ -1036,8 +1036,6 @@ def list_missing_matchups_for_event(session: Session, event_id: str) -> list[dic
     if n == 0:
         return []
     event_deck_ids = set(d.deck_id for d in decks)
-    deck_player_id = {d.deck_id: d.player_id for d in decks}
-    deck_player_name = {d.deck_id: (d.player or "").strip() or "(unknown)" for d in decks}
     player_id_to_deck_ids = {}
     for d in decks:
         player_id_to_deck_ids.setdefault(d.player_id, []).append(d.deck_id)

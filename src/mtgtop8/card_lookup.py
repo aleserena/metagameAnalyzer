@@ -14,13 +14,6 @@ CACHE_FILE = Path(__file__).resolve().parent.parent.parent / ".scryfall_cache.js
 REQUEST_DELAY = 0.1  # ~10 req/s rate limit
 AUTOCOMPLETE_MIN_LEN = 2
 
-# Alternate names that Scryfall may not match (e.g. Universes Within vs in-universe name).
-# Map: name-as-typed -> canonical name to look up.
-CARD_NAME_ALIASES: dict[str, str] = {
-    "Helm's Deep": "Shinko, the Bloodsoaked Keep",
-    "Helms Deep": "Shinko, the Bloodsoaked Keep",
-}
-
 
 _card_cache: dict[str, dict] = {}
 
@@ -56,8 +49,8 @@ def _scryfall_lookup_name(name: str) -> str:
 
 
 def _name_for_scryfall(name: str) -> str:
-    """Normalize name for Scryfall collection API (exact match). Title-case so 'Lunarch veteran' matches 'Lunarch Veteran'."""
-    return _scryfall_lookup_name(name).title()
+    """Normalize name for Scryfall collection API without rewriting punctuation/casing."""
+    return _scryfall_lookup_name(name).strip()
 
 
 def _fetch_paper_printing(card_name: str) -> dict | None:
@@ -211,27 +204,6 @@ def lookup_cards(card_names: list[str]) -> dict[str, dict]:
                 if paper_card:
                     card = paper_card
 
-            entry = _build_entry(card)
-            result[orig_name] = entry
-            _card_cache[orig_name] = entry
-            _card_cache[card.get("name", "")] = entry
-
-    # Retry not-found names via alias map (e.g. "Helm's Deep" -> "Shinko, the Bloodsoaked Keep")
-    still_missing = [n for n in names if n not in result or result.get(n, {}).get("error")]
-    for orig_name in still_missing:
-        canonical = CARD_NAME_ALIASES.get(orig_name) or CARD_NAME_ALIASES.get(
-            _name_for_scryfall(orig_name)
-        )
-        if not canonical:
-            continue
-        cached = _card_cache.get(canonical)
-        if cached and "error" not in cached and "card_faces" in cached:
-            result[orig_name] = cached
-            _card_cache[orig_name] = cached
-            continue
-        time.sleep(REQUEST_DELAY)
-        card = _fetch_paper_printing(canonical)
-        if card:
             entry = _build_entry(card)
             result[orig_name] = entry
             _card_cache[orig_name] = entry

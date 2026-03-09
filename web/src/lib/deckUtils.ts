@@ -6,7 +6,7 @@ export const WUBRG_ORDER = ['W', 'U', 'B', 'R', 'G'] as const
 
 /**
  * Replace card names in a parsed deck with canonical names from lookup when the card
- * was found by flavor_name (or alias); returns normalized parsed deck and formatted text.
+ * was found by flavor_name; returns normalized parsed deck and formatted text.
  */
 export function normalizeDeckListByLookup(
   parsed: ParsedDeckList,
