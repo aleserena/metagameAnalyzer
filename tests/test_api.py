@@ -557,7 +557,6 @@ def test_get_matchups_summary(client_with_overrides):
     def mock_session_scope():
         yield None
 
-    mock_rows = []
     with patch.object(api_main, "_db") as mock_db:
         mock_db.session_scope = mock_session_scope
         mock_db.get_matchups_min_matches.return_value = 0

@@ -28,12 +28,17 @@ if not _DATA_DIR.is_absolute():
 _DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _settings_dir() -> Path:
+    """Directory for JSON-backed analyzer settings (rank weights, ignore-lands list)."""
+    return _DATA_DIR / "settings"
+
+
 def _ignore_lands_cards_path() -> Path:
-    return _DATA_DIR / "ignore_lands_cards.json"
+    return _settings_dir() / "ignore_lands_cards.json"
 
 
 def _rank_weights_path() -> Path:
-    return _DATA_DIR / "rank_weights.json"
+    return _settings_dir() / "rank_weights.json"
 
 
 def get_rank_weights() -> Dict[str, float]:

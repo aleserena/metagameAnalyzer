@@ -5,6 +5,8 @@ metagame.json
 player_aliases.json
 ignore_lands_cards.json
 rank_weights.json
+settings/ignore_lands_cards.json
+settings/rank_weights.json
 
 # Python
 __pycache__/

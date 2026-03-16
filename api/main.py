@@ -51,7 +51,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.staticfiles import StaticFiles
-from pydantic import BaseModel
 
 # Import from project - run from project root
 import sys
@@ -65,7 +64,7 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 from api.routers import router as api_router
 from api.schemas.auth_feedback import CardLookupBody, LoginBody, SiteFeedbackBody
-from api.schemas.decks import DeckCardUpdate, DeckListBody, ImportMoxfieldBody, SubmitDeckBody, UpdateDeckBody
+from api.schemas.decks import DeckListBody, ImportMoxfieldBody, SubmitDeckBody, UpdateDeckBody
 from api.schemas.events import (
     CreateEventBody,
     DeckPairPreview,
@@ -77,11 +76,10 @@ from api.schemas.events import (
     MergeConflictItem,
     MergeEventsBody,
     MergePreviewResponse,
-    NewEventBody,
     ScrapeBody,
     UploadDecksBody,
 )
-from api.schemas.matchups import AdminMatchupsBody, MatchupItem, PatchMatchupBody
+from api.schemas.matchups import AdminMatchupsBody, PatchMatchupBody
 from api.schemas.players import PlayerAliasBody, PlayerEmailBody
 from api.schemas.settings import (
     IgnoreLandsCardsBody,
@@ -3005,7 +3003,7 @@ def send_missing_deck_links(event_id: str, request: Request):
             try:
                 _email.send_email(addr, subject, body)
                 sent += 1
-            except Exception as e:
+            except Exception:
                 logger.exception("Send missing-deck email failed for %s", canonical)
                 failed.append(canonical)
         return {"sent": sent, "failed": failed}
@@ -3050,7 +3048,7 @@ def send_feedback_links(event_id: str, request: Request):
             try:
                 _email.send_email(addr, subject, body)
                 sent += 1
-            except Exception as e:
+            except Exception:
                 logger.exception("Send feedback email failed for %s", canonical)
         return {"sent": sent}
 
@@ -3272,9 +3270,9 @@ def get_matchups_summary(
     def norm_arch(name: str) -> str:
         return canonical_archetype.get((name or "").lower(), name or "(unknown)")
 
-    def add_to_agg(arch: str, opp: str, w: int, l: int, d: int, is_intentional_draw: bool, matches: int):
+    def add_to_agg(arch: str, opp: str, wins: int, losses: int, draws: int, is_intentional_draw: bool, matches: int):
         arch, opp = norm_arch(arch), norm_arch(opp)
-        for (a, o), (aw, al, ad) in [((arch, opp), (w, l, d)), ((opp, arch), (l, w, d))]:
+        for (a, o), (aw, al, ad) in [((arch, opp), (wins, losses, draws)), ((opp, arch), (losses, wins, draws))]:
             key = (a.lower(), o.lower())
             if key not in agg:
                 agg[key] = {"wins": 0, "losses": 0, "draws": 0, "intentional_draws": 0, "matches": 0, "archetype": a, "opponent_archetype": o}
@@ -3312,30 +3310,30 @@ def get_matchups_summary(
                 row = ra
             arch = (row.get("archetype") or "(unknown)").strip()
             opp = (row.get("opponent_archetype") or "(unknown)").strip()
-            w, l, d = to_effective_wld(row)
+            wins, losses, draws = to_effective_wld(row)
             is_id = _is_intentional_draw_result(row.get("result") or "")
-            add_to_agg(arch, opp, w, l, d, is_id, matches=1)
+            add_to_agg(arch, opp, wins, losses, draws, is_id, matches=1)
         for i in range(n_paired, len(from_ab)):
             row = from_ab[i]
             arch = (row.get("archetype") or "(unknown)").strip()
             opp = (row.get("opponent_archetype") or "(unknown)").strip()
-            w, l, d = to_effective_wld(row)
+            wins, losses, draws = to_effective_wld(row)
             is_id = _is_intentional_draw_result(row.get("result") or "")
-            add_to_agg(arch, opp, w, l, d, is_id, matches=1)
+            add_to_agg(arch, opp, wins, losses, draws, is_id, matches=1)
         for i in range(n_paired, len(from_ba)):
             row = from_ba[i]
             arch = (row.get("archetype") or "(unknown)").strip()
             opp = (row.get("opponent_archetype") or "(unknown)").strip()
-            w, l, d = to_effective_wld(row)
+            wins, losses, draws = to_effective_wld(row)
             is_id = _is_intentional_draw_result(row.get("result") or "")
-            add_to_agg(arch, opp, w, l, d, is_id, matches=1)
+            add_to_agg(arch, opp, wins, losses, draws, is_id, matches=1)
 
     for r in unpaired_rows:
         arch = (r.get("archetype") or "(unknown)").strip()
         opp = (r.get("opponent_archetype") or "(unknown)").strip()
-        w, l, d = to_effective_wld(r)
+        wins, losses, draws = to_effective_wld(r)
         is_id = _is_intentional_draw_result(r.get("result") or "")
-        add_to_agg(arch, opp, w, l, d, is_id, matches=1)
+        add_to_agg(arch, opp, wins, losses, draws, is_id, matches=1)
 
     list_out = []
     for (_arch_lower, _opp_lower), v in agg.items():
@@ -3647,6 +3645,14 @@ def add_player_alias(body: PlayerAliasBody, _: str = Depends(require_admin)):
         raise HTTPException(status_code=400, detail="alias and canonical required")
     _player_aliases[alias] = canonical
     _save_player_aliases()
+    # If DB is available, also persist alias + merge historical data there
+    if _database_available():
+        try:
+            with _db.session_scope() as session:
+                _db.set_player_alias(session, alias, canonical)
+                _db.merge_players_by_names(session, alias, canonical)
+        except Exception as e:
+            logger.exception("Failed to save/merge player alias to DB: %s", e)
     return {"aliases": _player_aliases}
 
 

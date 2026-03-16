@@ -26,16 +26,29 @@ export function useEventMetadata(): UseEventMetadataResult {
   const refetch = useCallback(() => {
     setLoading(true)
     setError(null)
-    Promise.all([getEvents(), getDateRange()])
-      .then(([eventsRes, rangeRes]) => {
-        setEvents(eventsRes.events)
-        setMaxDate(rangeRes.max_date)
-        setLastEventDate(rangeRes.last_event_date)
-        setError(null)
-      })
-      .catch((e) => {
-        const msg = e instanceof Error ? e.message : String(e ?? '')
-        setError(msg)
+    Promise.allSettled([getEvents(), getDateRange()])
+      .then(([eventsResult, rangeResult]) => {
+        let nextError: string | null = null
+
+        if (eventsResult.status === 'fulfilled') {
+          setEvents(eventsResult.value.events)
+        } else {
+          setEvents([])
+          nextError = eventsResult.reason instanceof Error ? eventsResult.reason.message : String(eventsResult.reason ?? '')
+        }
+
+        if (rangeResult.status === 'fulfilled') {
+          setMaxDate(rangeResult.value.max_date)
+          setLastEventDate(rangeResult.value.last_event_date)
+        } else {
+          setMaxDate(null)
+          setLastEventDate(null)
+          if (!nextError) {
+            nextError = rangeResult.reason instanceof Error ? rangeResult.reason.message : String(rangeResult.reason ?? '')
+          }
+        }
+
+        setError(nextError)
       })
       .finally(() => setLoading(false))
   }, [])

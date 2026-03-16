@@ -1,7 +1,5 @@
 """Unit tests for api.services.settings."""
 
-import pytest
-
 # Import after potential env/path setup so we can monkeypatch before first use
 import api.services.settings as settings_module
 

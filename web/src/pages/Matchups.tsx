@@ -748,6 +748,9 @@ export default function Matchups() {
                             />
                           </div>
                         </td>
+                        <td style={{ padding: '0.35rem', textAlign: 'right', fontWeight: 600 }}>
+                          {overall.toFixed(1)}%
+                        </td>
                         {columnIndices.map((j) => {
                           const cell = summary.matrix[i]![j]
                           if (i === j) return <td key={j} style={{ padding: '0.35rem', backgroundColor: 'rgba(128,128,128,0.2)' }} title="Same archetype"> </td>
@@ -986,6 +989,9 @@ export default function Matchups() {
                               Overall: <strong>{overall.toFixed(1)}%</strong>
                             </span>
                           </div>
+                        </td>
+                        <td style={{ padding: '0.35rem', textAlign: 'right', fontWeight: 600 }}>
+                          {overall.toFixed(1)}%
                         </td>
                         {columnIndices.map((j) => {
                           const pb = playersSummary.players[j]
