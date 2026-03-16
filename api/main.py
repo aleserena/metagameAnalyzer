@@ -3645,6 +3645,14 @@ def add_player_alias(body: PlayerAliasBody, _: str = Depends(require_admin)):
         raise HTTPException(status_code=400, detail="alias and canonical required")
     _player_aliases[alias] = canonical
     _save_player_aliases()
+    # If DB is available, also persist alias + merge historical data there
+    if _database_available():
+        try:
+            with _db.session_scope() as session:
+                _db.set_player_alias(session, alias, canonical)
+                _db.merge_players_by_names(session, alias, canonical)
+        except Exception as e:
+            logger.exception("Failed to save/merge player alias to DB: %s", e)
     return {"aliases": _player_aliases}
 
 
