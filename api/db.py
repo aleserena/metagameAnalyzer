@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import unicodedata
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -1143,11 +1144,22 @@ def _front_face_name(name: str) -> str:
     return s
 
 
+def _normalize_name_for_lookup(name: str) -> str:
+    """Lowercase and strip accents so 'Matias' and 'Matías' match when relating to existing players."""
+    if not name or not (name := (name or "").strip()):
+        return ""
+    s = name.lower()
+    nfd = unicodedata.normalize("NFD", s)
+    return "".join(c for c in nfd if unicodedata.category(c) != "Mn")
+
+
 def get_or_create_player(session: Session, display_name: str) -> tuple[int, str]:
     """Resolve display name to player_id (create player if missing). Returns (player_id, display_name).
-    Dual-faced names (X // Y) are stored as front face (X) so they unify with X across the app."""
+    Dual-faced names (X // Y) are stored as front face (X). Accent-insensitive lookup avoids duplicate
+    players (e.g. Matias and Matías map to the same record)."""
     name = (display_name or "").strip() or "(unknown)"
     canonical = _front_face_name(name)
+    # Exact matches first
     row = session.query(PlayerRow).filter(PlayerRow.display_name == canonical).first()
     if row:
         if name != canonical:
@@ -1158,6 +1170,16 @@ def get_or_create_player(session: Session, display_name: str) -> tuple[int, str]
     row = session.query(PlayerRow).filter(PlayerRow.display_name == name).first()
     if row:
         return row.id, (row.display_name or "")
+    # Before creating, find existing player by normalized name (e.g. Matías vs Matias)
+    norm = _normalize_name_for_lookup(canonical)
+    if norm:
+        for existing in session.query(PlayerRow).all():
+            if _normalize_name_for_lookup(existing.display_name or "") == norm:
+                if name != (existing.display_name or ""):
+                    alias_row = session.query(PlayerAliasRow).filter(PlayerAliasRow.alias == name).first()
+                    if not alias_row:
+                        session.add(PlayerAliasRow(alias=name, player_id=existing.id))
+                return existing.id, (existing.display_name or "")
     new_row = PlayerRow(display_name=canonical)
     session.add(new_row)
     session.flush()
@@ -1172,7 +1194,7 @@ def get_player_by_id(session: Session, player_id: int) -> PlayerRow | None:
 
 def resolve_name_to_player_id(session: Session, name: str) -> tuple[int | None, str]:
     """Resolve a name (alias or display name) to (player_id, display_name). Uses aliases then players table.
-    Dual-faced names (X // Y) also match display_name X."""
+    Dual-faced names (X // Y) match display_name X. Accent-insensitive so 'Matias' resolves to 'Matías'."""
     n = (name or "").strip()
     if not n or n in ("Bye", "(drop)"):
         return None, n
@@ -1189,6 +1211,12 @@ def resolve_name_to_player_id(session: Session, name: str) -> tuple[int | None, 
         player = session.query(PlayerRow).filter(PlayerRow.display_name == canonical).first()
         if player:
             return player.id, (player.display_name or "")
+    # Normalized lookup so new event data (e.g. "Matias") relates to existing "Matías"
+    norm = _normalize_name_for_lookup(canonical)
+    if norm:
+        for existing in session.query(PlayerRow).all():
+            if _normalize_name_for_lookup(existing.display_name or "") == norm:
+                return existing.id, (existing.display_name or "")
     return None, n
 
 
@@ -1318,14 +1346,14 @@ def list_matchups_with_deck_info(session: Session) -> list[dict]:
 
 def list_matchups_with_deck_and_players(session: Session) -> list[dict]:
     """All matchups with deck's player_id, opponent_player_id, canonical player names (from players table),
-    archetypes, event_id, date, round. Uses canonical display_name so aliases (e.g. Tomas vs Tomás Duarte Romero)
-    map to one row per player."""
+    archetypes, event_id, date, round. Uses canonical display_name so aliases map to one row per player.
+    Deck's player is outer-joined so unknown/orphan player_id still returns a row (player shown as '(unknown)')."""
     PlayerDeck = aliased(PlayerRow)
     PlayerOpp = aliased(PlayerRow)
     rows = (
         session.query(MatchupRow, DeckRow, PlayerDeck, PlayerOpp)
         .join(DeckRow, MatchupRow.deck_id == DeckRow.deck_id)
-        .join(PlayerDeck, DeckRow.player_id == PlayerDeck.id)
+        .outerjoin(PlayerDeck, DeckRow.player_id == PlayerDeck.id)
         .outerjoin(PlayerOpp, MatchupRow.opponent_player_id == PlayerOpp.id)
         .all()
     )
@@ -1334,8 +1362,8 @@ def list_matchups_with_deck_and_players(session: Session) -> list[dict]:
             "deck_id": m.deck_id,
             "opponent_deck_id": m.opponent_deck_id,
             "player_id": d.player_id,
-            "opponent_player_id": PlayerOpp.id if PlayerOpp.id is not None else None,
-            "player": (p_deck.display_name or "").strip() or "(unknown)",
+            "opponent_player_id": (p_opp.id if p_opp else None),
+            "player": (p_deck.display_name or "").strip() if p_deck else ((d.player or "").strip() or "(unknown)"),
             "opponent_player": (
                 (p_opp.display_name or "").strip() if p_opp else (m.opponent_player or "").strip()
             ) or "(unknown)",
