@@ -245,6 +245,31 @@ export default function Matchups() {
     return map
   }, [playersSummary])
 
+  const [labelWidth, setLabelWidth] = useState(160)
+  const isResizingLabelRef = useRef(false)
+  const resizeStartXRef = useRef(0)
+  const resizeStartWidthRef = useRef(160)
+
+  useEffect(() => {
+    function onMouseMove(e: MouseEvent) {
+      if (!isResizingLabelRef.current) return
+      const delta = e.clientX - resizeStartXRef.current
+      const next = Math.min(320, Math.max(120, resizeStartWidthRef.current + delta))
+      setLabelWidth(next)
+    }
+    function onMouseUp() {
+      if (isResizingLabelRef.current) {
+        isResizingLabelRef.current = false
+      }
+    }
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+    }
+  }, [])
+
   return (
     <div className="page">
       <h1 className="page-title">Matchups</h1>
@@ -640,7 +665,13 @@ export default function Matchups() {
               Rows = your archetype, columns = opponent. Cell = your win rate vs that archetype. Heatmap: green = 100%, red = 0%.
             </p>
             <div style={{ minWidth: 400 }}>
-              <table style={{ borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+              <table
+                style={{
+                  borderCollapse: 'collapse',
+                  fontSize: '0.8rem',
+                  tableLayout: 'fixed',
+                }}
+              >
                 <thead>
                   <tr>
                     <th
@@ -650,9 +681,10 @@ export default function Matchups() {
                         position: 'sticky',
                         left: 0,
                         background: 'var(--bg-card)',
+                        width: labelWidth,
+                        maxWidth: labelWidth,
                       }}
                     />
-                    <th style={{ padding: '0.35rem', textAlign: 'right' }}>Overall</th>
                     {columnIndices.map((j) => {
                       const a = summary.archetypes[j]
                       return (
@@ -669,8 +701,52 @@ export default function Matchups() {
                     const overall = (archetypeOverallWinRate.get(a) ?? 0) * 100
                     return (
                       <tr key={a}>
-                        <td style={{ padding: '0.35rem', position: 'sticky', left: 0, background: 'var(--bg-card)', whiteSpace: 'nowrap', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis' }} title={a}>
-                          {a.length > 14 ? a.slice(0, 13) + '…' : a}
+                        <td
+                          style={{
+                            padding: '0.35rem',
+                            position: 'sticky',
+                            left: 0,
+                            background: 'var(--bg-card)',
+                            minWidth: labelWidth,
+                            maxWidth: labelWidth,
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                          }}
+                          title={`${a} — Overall: ${overall.toFixed(1)}%`}
+                        >
+                          <div
+                            style={{
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: 2,
+                              minHeight: 32,
+                              justifyContent: 'center',
+                              position: 'relative',
+                            }}
+                          >
+                            <span style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>
+                              {a}
+                            </span>
+                            <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                              Overall: <strong>{overall.toFixed(1)}%</strong>
+                            </span>
+                            <div
+                              onMouseDown={(e) => {
+                                e.preventDefault()
+                                isResizingLabelRef.current = true
+                                resizeStartXRef.current = e.clientX
+                                resizeStartWidthRef.current = labelWidth
+                              }}
+                              style={{
+                                position: 'absolute',
+                                top: 0,
+                                right: 0,
+                                width: 6,
+                                height: '100%',
+                                cursor: 'col-resize',
+                              }}
+                            />
+                          </div>
                         </td>
                         <td style={{ padding: '0.35rem', textAlign: 'right', fontWeight: 600 }}>
                           {overall.toFixed(1)}%
@@ -678,7 +754,19 @@ export default function Matchups() {
                         {columnIndices.map((j) => {
                           const cell = summary.matrix[i]![j]
                           if (i === j) return <td key={j} style={{ padding: '0.35rem', backgroundColor: 'rgba(128,128,128,0.2)' }} title="Same archetype"> </td>
-                          if (cell == null) return <td key={j} style={{ padding: '0.35rem', color: 'var(--text-muted)' }}>—</td>
+                          if (cell == null)
+                            return (
+                              <td
+                                key={j}
+                                style={{
+                                  padding: '0.35rem',
+                                  color: 'var(--text-muted)',
+                                  textAlign: 'center',
+                                }}
+                              >
+                                —
+                              </td>
+                            )
                           const pct = cell * 100
                           const opponent = summary.archetypes[j]
                           const key = `${a}|||${opponent}`
@@ -686,7 +774,12 @@ export default function Matchups() {
                           return (
                             <td
                               key={j}
-                              style={{ padding: '0.35rem', backgroundColor: heatmapColor(pct), cursor: matchupRow ? 'help' : 'default' }}
+                              style={{
+                                padding: '0.35rem',
+                                backgroundColor: heatmapColor(pct),
+                                cursor: matchupRow ? 'help' : 'default',
+                                textAlign: 'center',
+                              }}
                               onMouseEnter={(e) => {
                                 if (!matchupRow) return
                                 setHoveredCell({ archetype: a, opponent, rect: e.currentTarget.getBoundingClientRect() })
@@ -839,7 +932,13 @@ export default function Matchups() {
             <p style={{ color: 'var(--text-muted)' }}>No player matchup data for the selected filters.</p>
           ) : (
             <div style={{ minWidth: 400 }}>
-              <table style={{ borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+              <table
+                style={{
+                  borderCollapse: 'collapse',
+                  fontSize: '0.8rem',
+                  tableLayout: 'fixed',
+                }}
+              >
                 <thead>
                   <tr>
                     <th
@@ -849,9 +948,10 @@ export default function Matchups() {
                         position: 'sticky',
                         left: 0,
                         background: 'var(--bg-card)',
+                        width: labelWidth,
+                        maxWidth: labelWidth,
                       }}
                     />
-                    <th style={{ padding: '0.35rem', textAlign: 'right' }}>Overall</th>
                     {columnIndices.map((j) => {
                       const p = playersSummary.players[j]
                       return (
@@ -868,8 +968,27 @@ export default function Matchups() {
                     const overall = (playersOverallWinRate.get(pa) ?? 0) * 100
                     return (
                       <tr key={pa}>
-                        <td style={{ padding: '0.35rem', position: 'sticky', left: 0, background: 'var(--bg-card)', whiteSpace: 'nowrap', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis' }} title={pa}>
-                          {pa.length > 14 ? pa.slice(0, 13) + '…' : pa}
+                        <td
+                          style={{
+                            padding: '0.35rem',
+                            position: 'sticky',
+                            left: 0,
+                            background: 'var(--bg-card)',
+                            minWidth: 140,
+                            maxWidth: 180,
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                          }}
+                          title={`${pa} — Overall: ${overall.toFixed(1)}%`}
+                        >
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                            <span style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>
+                              {pa}
+                            </span>
+                            <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                              Overall: <strong>{overall.toFixed(1)}%</strong>
+                            </span>
+                          </div>
                         </td>
                         <td style={{ padding: '0.35rem', textAlign: 'right', fontWeight: 600 }}>
                           {overall.toFixed(1)}%
@@ -878,13 +997,30 @@ export default function Matchups() {
                           const pb = playersSummary.players[j]
                           if (i === j) return <td key={pb} style={{ padding: '0.35rem', backgroundColor: 'rgba(128,128,128,0.2)' }} title="Same player"> </td>
                           const cell = playersSummary.players_matrix[i]?.[j]
-                          if (cell == null) return <td key={pb} style={{ padding: '0.35rem', color: 'var(--text-muted)' }}>—</td>
+                          if (cell == null)
+                            return (
+                              <td
+                                key={pb}
+                                style={{
+                                  padding: '0.35rem',
+                                  color: 'var(--text-muted)',
+                                  textAlign: 'center',
+                                }}
+                              >
+                                —
+                              </td>
+                            )
                           const pct = cell * 100
                           const matchupRow = playersByPair.get(`${pa}|||${pb}`)
                           return (
                             <td
                               key={pb}
-                              style={{ padding: '0.35rem', backgroundColor: heatmapColor(pct), cursor: matchupRow ? 'help' : 'default' }}
+                              style={{
+                                padding: '0.35rem',
+                                backgroundColor: heatmapColor(pct),
+                                cursor: matchupRow ? 'help' : 'default',
+                                textAlign: 'center',
+                              }}
                               onMouseEnter={(e) => {
                                 if (!matchupRow) return
                                 setHoveredPlayerCell({ player: pa, opponent: pb, rect: e.currentTarget.getBoundingClientRect() })
