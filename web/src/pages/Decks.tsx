@@ -94,6 +94,7 @@ export default function Decks() {
 
   useEffect(() => {
     setLoading(true)
+    setError(null)
     getDecks({
       event_ids: eventIds.length ? eventIds.map(String).join(',') : undefined,
       deck_name: deckName ?? undefined,
@@ -109,6 +110,7 @@ export default function Decks() {
       .then((r) => {
         setDecks(r.decks)
         setTotal(r.total)
+        setError(null)
       })
       .catch((e) => {
         setError(e.message)

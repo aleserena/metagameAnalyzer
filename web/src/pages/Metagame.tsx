@@ -63,9 +63,13 @@ export default function Metagame() {
 
   useEffect(() => {
     setLoading(true)
+    setError(null)
     const eventIdsParam = eventIds.length ? eventIds.map(String).join(',') : undefined
     getMetagame(placementWeighted, ignoreLands, undefined, undefined, undefined, eventIdsParam, top8Only)
-      .then(setMetagame)
+      .then((data) => {
+        setMetagame(data)
+        setError(null)
+      })
       .catch((e) => {
         setError(e.message)
         toast.error(reportError(e))
@@ -245,7 +249,7 @@ export default function Metagame() {
           <BarChart data={commanders.slice(0, 15)} margin={{ top: 15, right: 25, left: 35, bottom: 90 }}
             style={{ cursor: 'pointer' }}
             onClick={(state) => {
-              if (state?.activeLabel) navigate(`/decks?deck_name=${encodeURIComponent(state.activeLabel)}`)
+              if (state?.activeLabel) navigate(`/decks?archetype=${encodeURIComponent(state.activeLabel)}`)
             }}
           >
             <XAxis dataKey="commander" angle={-45} textAnchor="end" height={80} tick={{ fontSize: 11 }} />

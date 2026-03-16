@@ -1,6 +1,5 @@
 from pydantic import BaseModel, Field
 
-from .decks import SubmitDeckBody
 from .matchups import MatchupItem
 
 
@@ -16,4 +15,3 @@ class EventFeedbackBody(BaseModel):
     deck_name: str | None = None
     rank: str | None = None
     matchups: list[MatchupItem] = Field(default_factory=list)
-

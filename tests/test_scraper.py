@@ -1,7 +1,5 @@
 """Unit tests for src.mtgtop8.scraper (pure functions and parsing)."""
 
-import pytest
-
 from src.mtgtop8.scraper import (
     event_display_name,
     parse_event_display,

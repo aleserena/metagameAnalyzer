@@ -1,4 +1,4 @@
-"""Tests for Scryfall card lookup and alias resolution."""
+"""Tests for Scryfall card lookup and flavor-name resolution."""
 
 import sys
 from pathlib import Path
@@ -7,12 +7,6 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.mtgtop8 import card_lookup
-
-
-def test_card_name_aliases_contains_helms_deep():
-    """CARD_NAME_ALIASES maps Helm's Deep to Shinko for lookup."""
-    assert "Helm's Deep" in card_lookup.CARD_NAME_ALIASES
-    assert card_lookup.CARD_NAME_ALIASES["Helm's Deep"] == "Shinko, the Bloodsoaked Keep"
 
 
 def test_build_entry_requires_card_faces():
@@ -36,11 +30,11 @@ def test_build_entry_requires_card_faces():
 @patch("src.mtgtop8.card_lookup.requests.get")
 @patch("src.mtgtop8.card_lookup.requests.post")
 @patch("src.mtgtop8.card_lookup.time.sleep")
-def test_lookup_cards_resolves_alias_when_collection_not_found(mock_sleep, mock_post, mock_get):
-    """When collection API returns not_found for an alias name, lookup retries via canonical name."""
+def test_lookup_cards_resolves_flavor_name_when_collection_not_found(mock_sleep, mock_post, mock_get):
+    """When collection lookup misses, lookup retries by flavor_name."""
     card_lookup.clear_cache()
 
-    # Collection API: not_found for "Helm's Deep" (title-cased)
+    # Collection API: no direct exact-name hit for the in-universe flavor name.
     mock_post.return_value = MagicMock()
     mock_post.return_value.raise_for_status = MagicMock()
     mock_post.return_value.json.return_value = {
@@ -48,13 +42,14 @@ def test_lookup_cards_resolves_alias_when_collection_not_found(mock_sleep, mock_
         "data": [],
     }
 
-    # Search API: return a minimal valid card for "Shinko, the Bloodsoaked Keep"
+    # Search API: flavor_name search returns the canonical paper card.
     mock_get.return_value = MagicMock()
     mock_get.return_value.raise_for_status = MagicMock()
     mock_get.return_value.json.return_value = {
         "data": [
             {
                 "name": "Shinko, the Bloodsoaked Keep",
+                "flavor_name": "Helm's Deep",
                 "image_uris": {"normal": "https://example.com/img.png"},
                 "card_faces": [{"name": "Shinko, the Bloodsoaked Keep", "image_uris": {"normal": "https://example.com/img.png"}}],
                 "mana_cost": "",
