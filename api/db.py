@@ -1265,6 +1265,96 @@ def remove_player_alias(session: Session, alias: str) -> bool:
     return False
 
 
+def merge_players(
+    session: Session,
+    from_player_id: int,
+    to_player_id: int,
+    canonical_name: str | None = None,
+) -> None:
+    """
+    Merge all data from from_player_id into to_player_id and delete from_player.
+
+    Updates:
+    - decks.player_id / decks.player
+    - matchups.opponent_player_id / matchups.opponent_player
+    - player_emails.player_id
+    - player_aliases.player_id
+    """
+    if from_player_id == to_player_id:
+        return
+
+    to_row = get_player_by_id(session, to_player_id)
+    if not to_row:
+        return
+    display = (canonical_name or to_row.display_name or "").strip() or "(unknown)"
+
+    # Decks
+    decks = session.query(DeckRow).filter(DeckRow.player_id == from_player_id).all()
+    for d in decks:
+        d.player_id = to_player_id
+        d.player = display
+
+    # Matchups where this player is the opponent
+    matchups = (
+        session.query(MatchupRow)
+        .filter(MatchupRow.opponent_player_id == from_player_id)
+        .all()
+    )
+    for m in matchups:
+        m.opponent_player_id = to_player_id
+        m.opponent_player = display
+
+    # Emails
+    emails = (
+        session.query(PlayerEmailRow)
+        .filter(PlayerEmailRow.player_id == from_player_id)
+        .all()
+    )
+    for e in emails:
+        e.player_id = to_player_id
+
+    # Aliases pointing at from_player_id
+    alias_rows = (
+        session.query(PlayerAliasRow)
+        .filter(PlayerAliasRow.player_id == from_player_id)
+        .all()
+    )
+    for a in alias_rows:
+        a.player_id = to_player_id
+
+    # Finally, delete the old player row
+    old = get_player_by_id(session, from_player_id)
+    if old:
+        session.delete(old)
+
+
+def merge_players_by_names(session: Session, alias: str, canonical: str) -> None:
+    """
+    Convenience helper: given alias and canonical names, resolve to player_ids and
+    merge alias player into canonical player when they differ.
+    """
+    alias = (alias or "").strip()
+    canonical = (canonical or "").strip()
+    if not alias or not canonical:
+        return
+
+    # Resolve canonical first (or create)
+    pid_canonical, display = resolve_name_to_player_id(session, canonical)
+    if pid_canonical is None:
+        pid_canonical, display = get_or_create_player(session, canonical)
+
+    pid_alias, _ = resolve_name_to_player_id(session, alias)
+    if pid_alias is None or pid_alias == pid_canonical:
+        return
+
+    merge_players(
+        session,
+        from_player_id=pid_alias,
+        to_player_id=pid_canonical,
+        canonical_name=display,
+    )
+
+
 # --- Repository helpers: settings ---
 
 

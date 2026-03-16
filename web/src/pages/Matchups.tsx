@@ -643,7 +643,16 @@ export default function Matchups() {
               <table style={{ borderCollapse: 'collapse', fontSize: '0.8rem' }}>
                 <thead>
                   <tr>
-                    <th style={{ padding: '0.35rem', textAlign: 'left', position: 'sticky', left: 0, background: 'var(--bg-card)' }} />
+                    <th
+                      style={{
+                        padding: '0.35rem',
+                        textAlign: 'left',
+                        position: 'sticky',
+                        left: 0,
+                        background: 'var(--bg-card)',
+                      }}
+                    />
+                    <th style={{ padding: '0.35rem', textAlign: 'right' }}>Overall</th>
                     {columnIndices.map((j) => {
                       const a = summary.archetypes[j]
                       return (
@@ -657,10 +666,14 @@ export default function Matchups() {
                 <tbody>
                   {rowIndices.map((i) => {
                     const a = summary.archetypes[i]
+                    const overall = (archetypeOverallWinRate.get(a) ?? 0) * 100
                     return (
                       <tr key={a}>
                         <td style={{ padding: '0.35rem', position: 'sticky', left: 0, background: 'var(--bg-card)', whiteSpace: 'nowrap', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis' }} title={a}>
                           {a.length > 14 ? a.slice(0, 13) + '…' : a}
+                        </td>
+                        <td style={{ padding: '0.35rem', textAlign: 'right', fontWeight: 600 }}>
+                          {overall.toFixed(1)}%
                         </td>
                         {columnIndices.map((j) => {
                           const cell = summary.matrix[i]![j]
@@ -829,7 +842,16 @@ export default function Matchups() {
               <table style={{ borderCollapse: 'collapse', fontSize: '0.8rem' }}>
                 <thead>
                   <tr>
-                    <th style={{ padding: '0.35rem', textAlign: 'left', position: 'sticky', left: 0, background: 'var(--bg-card)' }} />
+                    <th
+                      style={{
+                        padding: '0.35rem',
+                        textAlign: 'left',
+                        position: 'sticky',
+                        left: 0,
+                        background: 'var(--bg-card)',
+                      }}
+                    />
+                    <th style={{ padding: '0.35rem', textAlign: 'right' }}>Overall</th>
                     {columnIndices.map((j) => {
                       const p = playersSummary.players[j]
                       return (
@@ -843,10 +865,14 @@ export default function Matchups() {
                 <tbody>
                   {rowIndices.map((i) => {
                     const pa = playersSummary.players[i]
+                    const overall = (playersOverallWinRate.get(pa) ?? 0) * 100
                     return (
                       <tr key={pa}>
                         <td style={{ padding: '0.35rem', position: 'sticky', left: 0, background: 'var(--bg-card)', whiteSpace: 'nowrap', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis' }} title={pa}>
                           {pa.length > 14 ? pa.slice(0, 13) + '…' : pa}
+                        </td>
+                        <td style={{ padding: '0.35rem', textAlign: 'right', fontWeight: 600 }}>
+                          {overall.toFixed(1)}%
                         </td>
                         {columnIndices.map((j) => {
                           const pb = playersSummary.players[j]
