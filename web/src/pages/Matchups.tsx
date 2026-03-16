@@ -748,9 +748,6 @@ export default function Matchups() {
                             />
                           </div>
                         </td>
-                        <td style={{ padding: '0.35rem', textAlign: 'right', fontWeight: 600 }}>
-                          {overall.toFixed(1)}%
-                        </td>
                         {columnIndices.map((j) => {
                           const cell = summary.matrix[i]![j]
                           if (i === j) return <td key={j} style={{ padding: '0.35rem', backgroundColor: 'rgba(128,128,128,0.2)' }} title="Same archetype"> </td>
@@ -974,24 +971,46 @@ export default function Matchups() {
                             position: 'sticky',
                             left: 0,
                             background: 'var(--bg-card)',
-                            minWidth: 140,
-                            maxWidth: 180,
+                            minWidth: labelWidth,
+                            maxWidth: labelWidth,
                             overflow: 'hidden',
                             textOverflow: 'ellipsis',
                           }}
                           title={`${pa} — Overall: ${overall.toFixed(1)}%`}
                         >
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          <div
+                            style={{
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: 2,
+                              minHeight: 32,
+                              justifyContent: 'center',
+                              position: 'relative',
+                            }}
+                          >
                             <span style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>
                               {pa}
                             </span>
                             <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
                               Overall: <strong>{overall.toFixed(1)}%</strong>
                             </span>
+                            <div
+                              onMouseDown={(e) => {
+                                e.preventDefault()
+                                isResizingLabelRef.current = true
+                                resizeStartXRef.current = e.clientX
+                                resizeStartWidthRef.current = labelWidth
+                              }}
+                              style={{
+                                position: 'absolute',
+                                top: 0,
+                                right: 0,
+                                width: 6,
+                                height: '100%',
+                                cursor: 'col-resize',
+                              }}
+                            />
                           </div>
-                        </td>
-                        <td style={{ padding: '0.35rem', textAlign: 'right', fontWeight: 600 }}>
-                          {overall.toFixed(1)}%
                         </td>
                         {columnIndices.map((j) => {
                           const pb = playersSummary.players[j]
