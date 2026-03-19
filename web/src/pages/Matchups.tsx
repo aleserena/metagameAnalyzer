@@ -78,9 +78,17 @@ export default function Matchups() {
     opponent: string
     rect: DOMRect
   } | null>(null)
+  const [hoveredArchetypeRow, setHoveredArchetypeRow] = useState<{
+    archetype: string
+    rect: DOMRect
+  } | null>(null)
   const [hoveredPlayerCell, setHoveredPlayerCell] = useState<{
     player: string
     opponent: string
+    rect: DOMRect
+  } | null>(null)
+  const [hoveredPlayerRow, setHoveredPlayerRow] = useState<{
+    player: string
     rect: DOMRect
   } | null>(null)
 
@@ -224,6 +232,29 @@ export default function Matchups() {
     return map
   }, [summary])
 
+  const archetypeOverallStats = useMemo(() => {
+    const map = new Map<string, { wins: number; losses: number; draws: number; matches: number; winRate: number; drawPct: number }>()
+    if (!summary) return map
+    const agg = new Map<string, { wins: number; losses: number; draws: number; matches: number }>()
+    for (const row of summary.list) {
+      const a = (row.archetype || '').trim()
+      if (!a) continue
+      const prev = agg.get(a) ?? { wins: 0, losses: 0, draws: 0, matches: 0 }
+      prev.wins += row.wins
+      prev.losses += row.losses
+      prev.draws += row.draws
+      prev.matches += row.matches
+      agg.set(a, prev)
+    }
+    for (const [a, v] of agg.entries()) {
+      const denom = v.matches || 0
+      const winRate = denom ? (v.wins + 0.5 * v.draws) / denom : 0
+      const drawPct = denom ? v.draws / denom : 0
+      map.set(a, { ...v, winRate, drawPct })
+    }
+    return map
+  }, [summary])
+
   const playersOverallWinRate = useMemo(() => {
     const map = new Map<string, number>()
     if (!playersSummary) return map
@@ -241,6 +272,29 @@ export default function Matchups() {
       const denom = v.matches || 0
       const wr = denom ? (v.wins + 0.5 * v.draws) / denom : 0
       map.set(p, wr)
+    }
+    return map
+  }, [playersSummary])
+
+  const playersOverallStats = useMemo(() => {
+    const map = new Map<string, { wins: number; losses: number; draws: number; matches: number; winRate: number; drawPct: number }>()
+    if (!playersSummary) return map
+    const agg = new Map<string, { wins: number; losses: number; draws: number; matches: number }>()
+    for (const row of playersSummary.players_list) {
+      const p = (row.player || '').trim()
+      if (!p) continue
+      const prev = agg.get(p) ?? { wins: 0, losses: 0, draws: 0, matches: 0 }
+      prev.wins += row.wins
+      prev.losses += row.losses
+      prev.draws += row.draws
+      prev.matches += row.matches
+      agg.set(p, prev)
+    }
+    for (const [p, v] of agg.entries()) {
+      const denom = v.matches || 0
+      const winRate = denom ? (v.wins + 0.5 * v.draws) / denom : 0
+      const drawPct = denom ? v.draws / denom : 0
+      map.set(p, { ...v, winRate, drawPct })
     }
     return map
   }, [playersSummary])
@@ -699,6 +753,7 @@ export default function Matchups() {
                   {rowIndices.map((i) => {
                     const a = summary.archetypes[i]
                     const overall = (archetypeOverallWinRate.get(a) ?? 0) * 100
+                    const rowStats = archetypeOverallStats.get(a)
                     return (
                       <tr key={a}>
                         <td
@@ -713,6 +768,22 @@ export default function Matchups() {
                             textOverflow: 'ellipsis',
                           }}
                           title={`${a} — Overall: ${overall.toFixed(1)}%`}
+                          onMouseEnter={(e) => {
+                            if (!rowStats) return
+                            setHoveredArchetypeRow({ archetype: a, rect: e.currentTarget.getBoundingClientRect() })
+                          }}
+                          onMouseMove={(e) => {
+                            if (!rowStats) return
+                            setHoveredArchetypeRow({ archetype: a, rect: e.currentTarget.getBoundingClientRect() })
+                          }}
+                          onMouseLeave={() => setHoveredArchetypeRow(null)}
+                          onFocus={(e) => {
+                            if (!rowStats) return
+                            setHoveredArchetypeRow({ archetype: a, rect: e.currentTarget.getBoundingClientRect() })
+                          }}
+                          onBlur={() => setHoveredArchetypeRow(null)}
+                          tabIndex={rowStats ? 0 : -1}
+                          aria-label={rowStats ? `${a} overall row stats` : undefined}
                         >
                           <div
                             style={{
@@ -722,6 +793,7 @@ export default function Matchups() {
                               minHeight: 32,
                               justifyContent: 'center',
                               position: 'relative',
+                              cursor: rowStats ? 'help' : 'default',
                             }}
                           >
                             <span style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>
@@ -847,6 +919,48 @@ export default function Matchups() {
                 </div>
               )
             })()}
+            {hoveredArchetypeRow && (() => {
+              const row = archetypeOverallStats.get(hoveredArchetypeRow.archetype)
+              if (!row) return null
+              const pos = getTooltipPosition(hoveredArchetypeRow.rect)
+              return (
+                <div
+                  role="tooltip"
+                  style={{
+                    position: 'fixed',
+                    left: pos.left,
+                    top: pos.top,
+                    transform: pos.transform,
+                    zIndex: 1000,
+                    pointerEvents: 'none',
+                    background: 'var(--bg-card)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    padding: '0.5rem 0.6rem',
+                    color: 'var(--text)',
+                    boxShadow: '0 10px 26px rgba(0,0,0,0.25)',
+                    minWidth: 220,
+                    maxWidth: 320,
+                    fontSize: '0.85rem',
+                    lineHeight: 1.25,
+                  }}
+                >
+                  <div style={{ fontWeight: 700, marginBottom: '0.35rem' }}>
+                    {hoveredArchetypeRow.archetype} overall
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: '0.75rem', rowGap: '0.2rem' }}>
+                    <div style={{ color: 'var(--text-muted)' }}>Win %</div>
+                    <div style={{ textAlign: 'right' }}>{(row.winRate * 100).toFixed(1)}%</div>
+                    <div style={{ color: 'var(--text-muted)' }}>Draw %</div>
+                    <div style={{ textAlign: 'right' }}>{(row.drawPct * 100).toFixed(1)}%</div>
+                    <div style={{ color: 'var(--text-muted)' }}>Record</div>
+                    <div style={{ textAlign: 'right' }}>{row.wins}–{row.losses}–{row.draws}</div>
+                    <div style={{ color: 'var(--text-muted)' }}>Matches</div>
+                    <div style={{ textAlign: 'right' }}>{row.matches}</div>
+                  </div>
+                </div>
+              )
+            })()}
           </div>
         )
       })()}
@@ -963,6 +1077,7 @@ export default function Matchups() {
                   {rowIndices.map((i) => {
                     const pa = playersSummary.players[i]
                     const overall = (playersOverallWinRate.get(pa) ?? 0) * 100
+                    const rowStats = playersOverallStats.get(pa)
                     return (
                       <tr key={pa}>
                         <td
@@ -977,6 +1092,22 @@ export default function Matchups() {
                             textOverflow: 'ellipsis',
                           }}
                           title={`${pa} — Overall: ${overall.toFixed(1)}%`}
+                          onMouseEnter={(e) => {
+                            if (!rowStats) return
+                            setHoveredPlayerRow({ player: pa, rect: e.currentTarget.getBoundingClientRect() })
+                          }}
+                          onMouseMove={(e) => {
+                            if (!rowStats) return
+                            setHoveredPlayerRow({ player: pa, rect: e.currentTarget.getBoundingClientRect() })
+                          }}
+                          onMouseLeave={() => setHoveredPlayerRow(null)}
+                          onFocus={(e) => {
+                            if (!rowStats) return
+                            setHoveredPlayerRow({ player: pa, rect: e.currentTarget.getBoundingClientRect() })
+                          }}
+                          onBlur={() => setHoveredPlayerRow(null)}
+                          tabIndex={rowStats ? 0 : -1}
+                          aria-label={rowStats ? `${pa} overall row stats` : undefined}
                         >
                           <div
                             style={{
@@ -986,6 +1117,7 @@ export default function Matchups() {
                               minHeight: 32,
                               justifyContent: 'center',
                               position: 'relative',
+                              cursor: rowStats ? 'help' : 'default',
                             }}
                           >
                             <span style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>
@@ -1101,6 +1233,48 @@ export default function Matchups() {
                       <div style={{ textAlign: 'right' }}>{(row.win_rate * 100).toFixed(1)}%</div>
                       <div style={{ color: 'var(--text-muted)' }}>Draw %</div>
                       <div style={{ textAlign: 'right' }}>{drawPct.toFixed(1)}%</div>
+                      <div style={{ color: 'var(--text-muted)' }}>Record</div>
+                      <div style={{ textAlign: 'right' }}>{row.wins}–{row.losses}–{row.draws}</div>
+                      <div style={{ color: 'var(--text-muted)' }}>Matches</div>
+                      <div style={{ textAlign: 'right' }}>{row.matches}</div>
+                    </div>
+                  </div>
+                )
+              })()}
+              {hoveredPlayerRow && (() => {
+                const row = playersOverallStats.get(hoveredPlayerRow.player)
+                if (!row) return null
+                const pos = getTooltipPosition(hoveredPlayerRow.rect)
+                return (
+                  <div
+                    role="tooltip"
+                    style={{
+                      position: 'fixed',
+                      left: pos.left,
+                      top: pos.top,
+                      transform: pos.transform,
+                      zIndex: 1000,
+                      pointerEvents: 'none',
+                      background: 'var(--bg-card)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      padding: '0.5rem 0.6rem',
+                      color: 'var(--text)',
+                      boxShadow: '0 10px 26px rgba(0,0,0,0.25)',
+                      minWidth: 220,
+                      maxWidth: 320,
+                      fontSize: '0.85rem',
+                      lineHeight: 1.25,
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, marginBottom: '0.35rem' }}>
+                      {hoveredPlayerRow.player} overall
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: '0.75rem', rowGap: '0.2rem' }}>
+                      <div style={{ color: 'var(--text-muted)' }}>Win %</div>
+                      <div style={{ textAlign: 'right' }}>{(row.winRate * 100).toFixed(1)}%</div>
+                      <div style={{ color: 'var(--text-muted)' }}>Draw %</div>
+                      <div style={{ textAlign: 'right' }}>{(row.drawPct * 100).toFixed(1)}%</div>
                       <div style={{ color: 'var(--text-muted)' }}>Record</div>
                       <div style={{ textAlign: 'right' }}>{row.wins}–{row.losses}–{row.draws}</div>
                       <div style={{ color: 'var(--text-muted)' }}>Matches</div>
