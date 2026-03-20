@@ -62,6 +62,32 @@ if not DATA_DIR.is_absolute():
     DATA_DIR = _project_root / DATA_DIR
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+# Max JSON upload size for admin load / deck import (bytes). Default 50 MiB.
+MAX_UPLOAD_JSON_BYTES = int(os.getenv("MAX_UPLOAD_JSON_BYTES", str(50 * 1024 * 1024)))
+
+
+async def _read_upload_json_bytes_async(upload: UploadFile) -> bytes:
+    content = await upload.read(MAX_UPLOAD_JSON_BYTES + 1)
+    if len(content) > MAX_UPLOAD_JSON_BYTES:
+        raise HTTPException(status_code=413, detail="Upload too large")
+    return content
+
+
+def _resolve_load_path_under_data_dir(raw: str) -> Path:
+    """Resolve a relative path under DATA_DIR; reject absolute paths and path traversal."""
+    if raw is None or not str(raw).strip():
+        raise HTTPException(status_code=400, detail="Invalid path")
+    rel = Path(str(raw).strip())
+    if rel.is_absolute():
+        raise HTTPException(status_code=400, detail="path must be relative to DATA_DIR")
+    base = DATA_DIR.resolve()
+    resolved = (base / rel).resolve()
+    try:
+        resolved.relative_to(base)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="path must stay under DATA_DIR") from None
+    return resolved
+
 from api.routers import router as api_router
 from api.schemas.auth_feedback import CardLookupBody, LoginBody, SiteFeedbackBody
 from api.schemas.decks import DeckListBody, ImportMoxfieldBody, SubmitDeckBody, UpdateDeckBody
@@ -1786,7 +1812,7 @@ async def upload_decks_to_event(
         event_name = event_display_name(ev.name, ev.store or "", ev.location or "")
         date, format_id = ev.date, ev.format_id
     if file:
-        content = await file.read()
+        content = await _read_upload_json_bytes_async(file)
         try:
             raw = json.loads(content.decode("utf-8"))
             decks = raw if isinstance(raw, list) else raw.get("decks", [])
@@ -3812,27 +3838,45 @@ def get_player_detail(player_name: str):
 
 
 @app.post("/api/v1/load", dependencies=[Depends(require_database)])
-def load_decks(
-    body: LoadBody | None = None,
+async def load_decks(
+    request: Request,
     file: UploadFile | None = File(None),
     _: str = Depends(require_admin),
 ):
-    """Load decks from JSON into the database. Body: { "decks": [...] } or { "path": "decks.json" }, or upload file. Requires PostgreSQL."""
+    """Load decks from JSON into the database. Body: { "decks": [...] } or { "path": "decks.json" }, or upload file. Requires PostgreSQL.
+
+    JSON body cannot be declared alongside ``File()`` in the same handler (OpenAPI limitation); we read ``application/json`` from the request when no file part is sent.
+    """
     global _decks
-    if file:
+    body: LoadBody | None = None
+    has_upload = file is not None and bool(getattr(file, "filename", None))
+
+    if has_upload:
         try:
-            content = file.file.read()
+            content = await _read_upload_json_bytes_async(file)
             _decks = _normalize_split_cards(json.loads(content.decode("utf-8")))
         except json.JSONDecodeError as e:
             logger.warning("Load decks: invalid JSON from upload: %s", e)
             raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
-    elif body:
-        if body.decks is not None:
-            _decks = _normalize_split_cards(body.decks)
-        elif body.path:
-            path = Path(body.path)
-            if not path.is_absolute():
-                path = DATA_DIR / path
+    else:
+        ct = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+        if ct != "application/json":
+            raise HTTPException(status_code=400, detail="Provide JSON body or file upload")
+        try:
+            raw = await request.json()
+        except json.JSONDecodeError as e:
+            logger.warning("Load decks: invalid JSON body: %s", e)
+            raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+        if not isinstance(raw, dict):
+            raise HTTPException(status_code=400, detail="JSON body must be an object")
+        try:
+            body = LoadBody.model_validate(raw)
+        except Exception as e:
+            logger.warning("Load decks: invalid load payload: %s", e)
+            raise HTTPException(status_code=422, detail=str(e)) from e
+        path_str = (body.path or "").strip()
+        if path_str:
+            path = _resolve_load_path_under_data_dir(path_str)
             if not path.exists():
                 raise HTTPException(status_code=404, detail=f"File not found: {path}")
             try:
@@ -3840,10 +3884,10 @@ def load_decks(
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning("Load decks from path %s failed: %s", path, e)
                 raise HTTPException(status_code=400, detail=f"Failed to load file: {e}") from e
+        elif body.decks is not None:
+            _decks = _normalize_split_cards(body.decks)
         else:
-            raise HTTPException(status_code=400, detail="Provide 'decks' array or 'path'")
-    else:
-        raise HTTPException(status_code=400, detail="Provide JSON body or file upload")
+            raise HTTPException(status_code=400, detail="Provide 'decks' array, 'path', or file upload")
     _invalidate_metagame()
     if _database_available():
         if body and (body.event_id is not None or body.new_event is not None):

@@ -77,7 +77,7 @@ def _fetch_paper_printing(card_name: str) -> dict | None:
 
 def _search_by_flavor_name(typed_name: str) -> dict | None:
     """Search Scryfall for a card whose flavor_name matches typed_name. Returns card object or None."""
-    if not (typed_name or typed_name.strip()):
+    if not typed_name or not typed_name.strip():
         return None
     time.sleep(REQUEST_DELAY)
     try:

@@ -22,7 +22,14 @@ import Feedback from './pages/Feedback'
 
 const router = createBrowserRouter(
   [
-    { path: '/upload/:token', element: <UploadDeck /> },
+    {
+      path: '/upload/:token',
+      element: (
+        <ErrorBoundary>
+          <UploadDeck />
+        </ErrorBoundary>
+      ),
+    },
     {
       path: '/',
       element: (

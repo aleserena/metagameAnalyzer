@@ -51,21 +51,25 @@ export default function CardHover({ cardName, children, linkTo = false }: CardHo
       }
       return
     }
-    getCardLookup([cardName]).then((res) => {
-      const c = res[cardName]
-      if (c) {
-        lookupCache[cardName] = c
-        const faces = c.card_faces
-        if ((faces?.length ?? 0) >= 2 && faces) {
-          setImg(null)
-          setDfcUrls(faces.map((f) => getFaceUrl(f)))
-        } else {
-          setDfcUrls([])
-          const url = c.image_uris?.normal ?? c.image_uris?.small
-          if (url) setImg(url)
+    getCardLookup([cardName])
+      .then((res) => {
+        const c = res[cardName]
+        if (c) {
+          lookupCache[cardName] = c
+          const faces = c.card_faces
+          if ((faces?.length ?? 0) >= 2 && faces) {
+            setImg(null)
+            setDfcUrls(faces.map((f) => getFaceUrl(f)))
+          } else {
+            setDfcUrls([])
+            const url = c.image_uris?.normal ?? c.image_uris?.small
+            if (url) setImg(url)
+          }
         }
-      }
-    })
+      })
+      .catch(() => {
+        /* hover preview is best-effort */
+      })
   }, [cardName])
 
   const handleMouseEnter = useCallback(
