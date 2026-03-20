@@ -43,12 +43,21 @@ export default function Archetypes() {
   }, [searchParams])
 
   useEffect(() => {
-    getDateRange().then((r) => {
-      setMaxDate(r.max_date)
-      setLastEventDate(r.last_event_date)
-    })
-    getEvents().then((r) => setEvents(r.events))
-    getFormatInfo().then((r) => setFormatName(r.format_name))
+    getDateRange()
+      .then((r) => {
+        setMaxDate(r.max_date)
+        setLastEventDate(r.last_event_date)
+      })
+      .catch(() => {
+        setMaxDate(null)
+        setLastEventDate(null)
+      })
+    getEvents()
+      .then((r) => setEvents(r.events))
+      .catch(() => setEvents([]))
+    getFormatInfo()
+      .then((r) => setFormatName(r.format_name))
+      .catch(() => setFormatName(null))
   }, [])
 
   useEffect(() => {

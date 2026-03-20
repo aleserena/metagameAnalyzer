@@ -58,7 +58,9 @@ export default function Metagame() {
   }, [eventMetadataError])
 
   useEffect(() => {
-    getFormatInfo().then((r) => setFormatName(r.format_name))
+    getFormatInfo()
+      .then((r) => setFormatName(r.format_name))
+      .catch(() => setFormatName(null))
   }, [])
 
   useEffect(() => {
@@ -86,6 +88,7 @@ export default function Metagame() {
     setLoadingCardMeta(true)
     getCardLookup(topMain.map((c) => c.card))
       .then(setCardMeta)
+      .catch(() => setCardMeta({}))
       .finally(() => setLoadingCardMeta(false))
   }, [metagame?.top_cards_main])
 

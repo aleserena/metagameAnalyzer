@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { getDeck, getMetagame, getDeckAnalysis, getDateRange, getSimilarDecks, deleteDeck, getCardLookup, createEventUploadLinks } from '../api'
@@ -56,6 +56,18 @@ export default function DeckDetail() {
   const [sampleHand, setSampleHand] = useState<string[]>([])
   const [handLookup, setHandLookup] = useState<Record<string, CardLookupResult>>({})
   const MAX_COMPARE = 4
+  const deckNotFoundToastShown = useRef(false)
+
+  useEffect(() => {
+    deckNotFoundToastShown.current = false
+  }, [deckId])
+
+  useEffect(() => {
+    if (loading || error || deck || !deckId) return
+    if (deckNotFoundToastShown.current) return
+    deckNotFoundToastShown.current = true
+    toast.error('Deck not found')
+  }, [loading, error, deck, deckId])
 
   useEffect(() => {
     const main = deck?.mainboard ?? []
@@ -182,7 +194,6 @@ export default function DeckDetail() {
     )
   }
   if (!deck) {
-    toast.error('Deck not found')
     return (
       <div>
         <h1 className="page-title">Deck</h1>

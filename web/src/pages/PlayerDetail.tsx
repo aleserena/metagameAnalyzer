@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { getPlayerDetail, getPlayerDetailById, getSimilarPlayers, addPlayerAlias, getPlayerAliases, putPlayerEmail, sendPlayerMissingDeckLinks } from '../api'
@@ -31,10 +31,22 @@ export default function PlayerDetail() {
   const [emailValue, setEmailValue] = useState('')
   const [savingEmail, setSavingEmail] = useState(false)
   const [sendingMissingLinks, setSendingMissingLinks] = useState(false)
+  const playerNotFoundToastShown = useRef(false)
+
+  useEffect(() => {
+    playerNotFoundToastShown.current = false
+  }, [playerIdParam])
 
   useEffect(() => {
     if (error) toast.error(reportError(new Error(error)))
   }, [error])
+
+  useEffect(() => {
+    if (loading || error || data || !playerIdParam) return
+    if (playerNotFoundToastShown.current) return
+    playerNotFoundToastShown.current = true
+    toast.error('Player not found')
+  }, [loading, error, data, playerIdParam])
 
   // When loaded by name, replace URL with stable ID so bookmark/share uses /players/123
   useEffect(() => {
@@ -47,8 +59,12 @@ export default function PlayerDetail() {
 
   useEffect(() => {
     if (!data?.player) return
-    getSimilarPlayers(data.player, 10).then((r) => setSimilarPlayers(r.similar.filter((s) => s !== data.player)))
-    getPlayerAliases().then((r) => setAliases(r.aliases))
+    getSimilarPlayers(data.player, 10)
+      .then((r) => setSimilarPlayers(r.similar.filter((s) => s !== data.player)))
+      .catch(() => setSimilarPlayers([]))
+    getPlayerAliases()
+      .then((r) => setAliases(r.aliases))
+      .catch(() => setAliases({}))
   }, [data?.player])
 
   if (loading) return <PageSkeleton titleWidth={200} blocks={2} />
@@ -58,7 +74,6 @@ export default function PlayerDetail() {
     )
   }
   if (!data) {
-    toast.error('Player not found')
     return (
       <div>
         <h1 className="page-title">Player</h1>
@@ -186,6 +201,8 @@ export default function PlayerDetail() {
                         await addPlayerAlias(name, data!.player)
                         setAliases((a) => ({ ...a, [name]: data!.player }))
                         navigate(0)
+                      } catch (e) {
+                        toast.error(reportError(e as Error))
                       } finally {
                         setMergeLoading(false)
                       }

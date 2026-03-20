@@ -20,21 +20,28 @@ export function useFetch<T>(
   const [error, setError] = useState<string | null>(null)
   const fetcherRef = useRef(fetcher)
   fetcherRef.current = fetcher
+  const requestIdRef = useRef(0)
 
   const run = useCallback(() => {
+    const id = ++requestIdRef.current
     setLoading(true)
     setError(null)
     fetcherRef.current()
       .then((result) => {
+        if (id !== requestIdRef.current) return
         setData(result)
         setError(null)
       })
       .catch((e) => {
+        if (id !== requestIdRef.current) return
         const msg = e instanceof Error ? e.message : String(e ?? '')
         setError(msg)
         setData(null)
       })
-      .finally(() => setLoading(false))
+      .finally(() => {
+        if (id !== requestIdRef.current) return
+        setLoading(false)
+      })
   }, [])
 
   useEffect(() => {

@@ -1,8 +1,11 @@
 """API integration tests using FastAPI TestClient."""
 
+import json
 import sys
+from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -551,8 +554,6 @@ def test_get_event_by_id_404(client):
 
 def test_get_matchups_summary(client_with_overrides):
     """GET /api/v1/matchups/summary returns structure when DB is mocked."""
-    from contextlib import contextmanager
-
     @contextmanager
     def mock_session_scope():
         yield None
@@ -565,3 +566,108 @@ def test_get_matchups_summary(client_with_overrides):
     assert r.status_code == 200
     data = r.json()
     assert "list" in data and "matrix" in data and "min_matches" in data
+
+
+# --- POST /api/v1/load ---
+
+
+def test_post_load_from_path_json(client_with_overrides, sample_deck_dict, tmp_path, monkeypatch):
+    """JSON body with only path loads file under DATA_DIR (in-memory when DB off)."""
+    monkeypatch.setattr(api_main, "DATA_DIR", tmp_path)
+    (tmp_path / "import.json").write_text(json.dumps([sample_deck_dict]), encoding="utf-8")
+    with patch.object(api_main, "_database_available", return_value=False):
+        r = client_with_overrides.post("/api/v1/load", json={"path": "import.json"})
+    assert r.status_code == 200
+    assert r.json()["loaded"] == 1
+    assert api_main._decks[0]["deck_id"] == sample_deck_dict["deck_id"]
+
+
+def test_post_load_path_wins_over_inline_decks(client_with_overrides, sample_deck_dict, sample_decks, tmp_path, monkeypatch):
+    """Non-empty path is applied before inline decks when both are sent."""
+    monkeypatch.setattr(api_main, "DATA_DIR", tmp_path)
+    (tmp_path / "one.json").write_text(json.dumps([sample_deck_dict]), encoding="utf-8")
+    with patch.object(api_main, "_database_available", return_value=False):
+        r = client_with_overrides.post(
+            "/api/v1/load",
+            json={"path": "one.json", "decks": sample_decks},
+        )
+    assert r.status_code == 200
+    assert r.json()["loaded"] == 1
+    assert api_main._decks[0]["deck_id"] == sample_deck_dict["deck_id"]
+
+
+def test_post_load_rejects_path_traversal(client_with_overrides, tmp_path, monkeypatch):
+    monkeypatch.setattr(api_main, "DATA_DIR", tmp_path)
+    r = client_with_overrides.post("/api/v1/load", json={"path": "../outside.json"})
+    assert r.status_code == 400
+
+
+def test_post_load_rejects_absolute_path(client_with_overrides, tmp_path, monkeypatch):
+    monkeypatch.setattr(api_main, "DATA_DIR", tmp_path)
+    r = client_with_overrides.post("/api/v1/load", json={"path": str(tmp_path / "x.json")})
+    assert r.status_code == 400
+
+
+def test_post_load_empty_body_400(client_with_overrides):
+    r = client_with_overrides.post("/api/v1/load", json={})
+    assert r.status_code == 400
+
+
+def test_post_load_inline_decks_attaches_event_id(client_with_overrides, sample_deck_dict):
+    """event_id on LoadBody is applied when DB is available (mocked)."""
+    ev = SimpleNamespace(event_id="m42", name="Linked Event", date="03/03/25", format_id="EDH")
+
+    @contextmanager
+    def session_scope():
+        yield MagicMock()
+
+    deck = dict(sample_deck_dict)
+    deck["deck_id"] = None
+    with patch.object(api_main, "_database_available", return_value=True):
+        with patch.object(api_main, "_persist_decks_to_db"):
+            with patch.object(api_main, "_db") as mock_db:
+                mock_db.session_scope = session_scope
+                mock_db.get_event = MagicMock(return_value=ev)
+                mock_db.next_manual_deck_id.return_value = 2_000_500
+                mock_db.ORIGIN_MANUAL = "manual"
+                mock_db.ORIGIN_MTGTOP8 = "mtgtop8"
+                mock_db.MANUAL_DECK_ID_START = 2_000_000
+                r = client_with_overrides.post(
+                    "/api/v1/load",
+                    json={"decks": [deck], "event_id": "m42"},
+                )
+    assert r.status_code == 200
+    assert api_main._decks[0]["event_id"] == "m42"
+    assert api_main._decks[0]["event_name"] == "Linked Event"
+    assert api_main._decks[0]["deck_id"] == 2_000_500
+
+
+def test_post_load_new_event_creates_and_attaches(client_with_overrides, sample_deck_dict):
+    row = SimpleNamespace(event_id="m1", name="Fresh", date="04/04/25", format_id="EDH")
+
+    @contextmanager
+    def session_scope():
+        yield MagicMock()
+
+    deck = dict(sample_deck_dict)
+    deck["deck_id"] = 99
+    with patch.object(api_main, "_database_available", return_value=True):
+        with patch.object(api_main, "_persist_decks_to_db"):
+            with patch.object(api_main, "_db") as mock_db:
+                mock_db.session_scope = session_scope
+                mock_db.create_event = MagicMock(return_value=row)
+                mock_db.next_manual_deck_id.return_value = 2_000_600
+                mock_db.ORIGIN_MANUAL = "manual"
+                mock_db.ORIGIN_MTGTOP8 = "mtgtop8"
+                mock_db.MANUAL_DECK_ID_START = 2_000_000
+                r = client_with_overrides.post(
+                    "/api/v1/load",
+                    json={
+                        "decks": [deck],
+                        "new_event": {"event_name": "Fresh", "date": "04/04/25", "format_id": "EDH"},
+                    },
+                )
+    assert r.status_code == 200
+    assert api_main._decks[0]["event_id"] == "m1"
+    assert api_main._decks[0]["event_name"] == "Fresh"
+    assert api_main._decks[0]["deck_id"] == 2_000_600

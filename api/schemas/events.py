@@ -33,7 +33,15 @@ class NewEventBody(BaseModel):
 
 
 class LoadBody(BaseModel):
-    decks: list[dict] = Field(default_factory=list)
+    """Load source: optional file upload, or JSON with explicit path and/or decks (not both required).
+
+    Priority when multiple fields are set: non-empty ``path`` is loaded from disk first; otherwise
+    ``decks`` when provided (including an empty list). Omit ``decks`` to load from ``path`` only.
+    """
+
+    path: str | None = None
+    decks: list[dict] | None = None
+    event_id: int | str | None = None
     new_event: NewEventBody | None = None
 
 
