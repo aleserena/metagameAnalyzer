@@ -3,11 +3,9 @@ from __future__ import annotations
 """
 One-off maintenance script to merge duplicate players that only differ by accents/case.
 
-It uses the same normalization logic as api.db._normalize_name_for_lookup and updates:
-- decks.player_id / decks.player
-- matchups.opponent_player_id / matchups.opponent_player
-- player_emails.player_id
-- player_aliases.alias -> canonical player_id
+It uses the same normalization logic as api.db._normalize_name_for_lookup and
+api.db.merge_players for each duplicate (repoints all references, then deletes
+the merged-away PlayerRow). Old display names are registered as player_aliases.
 
 Usage (with DATABASE_URL configured, e.g. in your shell or .env loaded):
 
@@ -77,56 +75,21 @@ def merge_cluster(session, cluster: PlayerCluster) -> None:
     print(f"  Canonical id={canonical_id}, name={canonical_name!r}")
     print(f"  Duplicate ids={dup_ids}, names={cluster.names[1:]}")
 
-    # 1) decks: move player_id and player name to canonical
-    decks = session.query(_db.DeckRow).filter(_db.DeckRow.player_id.in_(dup_ids)).all()
-    for d in decks:
-        print(f"    Deck {d.deck_id}: player_id {d.player_id} -> {canonical_id}, player -> {canonical_name!r}")
-        d.player_id = canonical_id
-        d.player = canonical_name
-
-    # 2) matchups: opponent_player_id / opponent_player
-    matchups = session.query(_db.MatchupRow).filter(_db.MatchupRow.opponent_player_id.in_(dup_ids)).all()
-    for m in matchups:
-        print(
-            f"    Matchup {m.id}: opponent_player_id {m.opponent_player_id} -> {canonical_id}, "
-            f"opponent_player -> {canonical_name!r}"
+    for dup_id, dup_name in zip(dup_ids, cluster.names[1:], strict=True):
+        dup_row = _db.get_player_by_id(session, dup_id)
+        if not dup_row:
+            print(f"    Skip id={dup_id}: row already gone")
+            continue
+        print(f"    Merge id={dup_id} name={dup_row.display_name!r} -> canonical (delete source row after repoint)")
+        _db.merge_players(
+            session,
+            from_player_id=dup_id,
+            to_player_id=canonical_id,
+            canonical_name=canonical_name,
         )
-        m.opponent_player_id = canonical_id
-        m.opponent_player = canonical_name
-
-    # 3) player_emails: move player_id
-    email_rows = session.query(_db.PlayerEmailRow).filter(_db.PlayerEmailRow.player_id.in_(dup_ids)).all()
-    for e in email_rows:
-        print(f"    Email row: player_id {e.player_id} -> {canonical_id}")
-        e.player_id = canonical_id
-
-    # 4) aliases: ensure alias rows for all old display names
-    for dup_name in cluster.names[1:]:
         alias = (dup_name or "").strip()
-        if not alias or alias == canonical_name:
-            continue
-        existing = (
-            session.query(_db.PlayerAliasRow)
-            .filter(_db.PlayerAliasRow.alias == alias)
-            .first()
-        )
-        if existing:
-            if existing.player_id != canonical_id:
-                print(
-                    f"    Alias {alias!r}: player_id {existing.player_id} -> {canonical_id}"
-                )
-                existing.player_id = canonical_id
-        else:
-            print(f"    Creating alias {alias!r} -> player_id {canonical_id}")
-            session.add(_db.PlayerAliasRow(alias=alias, player_id=canonical_id))
-
-    # 5) delete duplicate PlayerRow entries
-    for dup_id in dup_ids:
-        dup = _db.get_player_by_id(session, dup_id)
-        if not dup:
-            continue
-        print(f"    Deleting player id={dup.id}, name={dup.display_name!r}")
-        session.delete(dup)
+        if alias and alias != canonical_name:
+            _db.set_player_alias(session, alias, canonical_name)
 
 
 def main() -> None:

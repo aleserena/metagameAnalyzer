@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import re
 import unicodedata
 from contextlib import contextmanager
 from datetime import datetime
@@ -1272,12 +1273,15 @@ def merge_players(
     canonical_name: str | None = None,
 ) -> None:
     """
-    Merge all data from from_player_id into to_player_id and delete from_player.
+    Merge all data from from_player_id into to_player_id, then delete from_player.
+
+    No-op if ids are equal or to_player_id does not exist. On success, the
+    from_player PlayerRow is always removed after references are repointed.
 
     Updates:
     - decks.player_id / decks.player
     - matchups.opponent_player_id / matchups.opponent_player
-    - player_emails.player_id
+    - player_emails (player_id is PK: drops source email if canonical already has one)
     - player_aliases.player_id
     """
     if from_player_id == to_player_id:
@@ -1304,14 +1308,23 @@ def merge_players(
         m.opponent_player_id = to_player_id
         m.opponent_player = display
 
-    # Emails
-    emails = (
+    # Emails: one row per player_id (PK). Repoint only if canonical has no email yet.
+    to_email = (
+        session.query(PlayerEmailRow)
+        .filter(PlayerEmailRow.player_id == to_player_id)
+        .first()
+    )
+    from_emails = (
         session.query(PlayerEmailRow)
         .filter(PlayerEmailRow.player_id == from_player_id)
         .all()
     )
-    for e in emails:
-        e.player_id = to_player_id
+    for e in from_emails:
+        if to_email is not None:
+            session.delete(e)
+        else:
+            e.player_id = to_player_id
+            to_email = e
 
     # Aliases pointing at from_player_id
     alias_rows = (
@@ -1322,7 +1335,6 @@ def merge_players(
     for a in alias_rows:
         a.player_id = to_player_id
 
-    # Finally, delete the old player row
     old = get_player_by_id(session, from_player_id)
     if old:
         session.delete(old)
@@ -1434,10 +1446,38 @@ def list_matchups_with_deck_info(session: Session) -> list[dict]:
     ]
 
 
+_UNNAMED_PLACEHOLDER_DISPLAY_RE = re.compile(r"^Unnamed\s*\d*$", re.IGNORECASE)
+
+
+def _is_unnamed_placeholder_display(name: str) -> bool:
+    s = (name or "").strip()
+    return bool(_UNNAMED_PLACEHOLDER_DISPLAY_RE.fullmatch(s))
+
+
+def _matchup_row_player_display(player_row: PlayerRow | None, denormalized: str) -> str:
+    """Label for matrix / summaries: use players.display_name unless it is Unnamed* and denormalized text is a real name."""
+    den = (denormalized or "").strip()
+    if player_row is not None:
+        disp = (player_row.display_name or "").strip()
+        if (
+            disp
+            and _is_unnamed_placeholder_display(disp)
+            and den
+            and not _is_unnamed_placeholder_display(den)
+        ):
+            return den
+        if disp:
+            return disp
+    return den or "(unknown)"
+
+
 def list_matchups_with_deck_and_players(session: Session) -> list[dict]:
-    """All matchups with deck's player_id, opponent_player_id, canonical player names (from players table),
-    archetypes, event_id, date, round. Uses canonical display_name so aliases map to one row per player.
-    Deck's player is outer-joined so unknown/orphan player_id still returns a row (player shown as '(unknown)')."""
+    """All matchups with deck's player_id, opponent_player_id, player names, archetypes, event_id, date, round.
+
+    Names prefer ``players.display_name`` when it is a real name; if the row is still ``Unnamed*`` but
+    ``decks.player`` / ``matchups.opponent_player`` was updated to the human-readable name, that text
+    is used so the matchups matrix matches the event UI.
+    """
     PlayerDeck = aliased(PlayerRow)
     PlayerOpp = aliased(PlayerRow)
     rows = (
@@ -1453,10 +1493,8 @@ def list_matchups_with_deck_and_players(session: Session) -> list[dict]:
             "opponent_deck_id": m.opponent_deck_id,
             "player_id": d.player_id,
             "opponent_player_id": (p_opp.id if p_opp else None),
-            "player": (p_deck.display_name or "").strip() if p_deck else ((d.player or "").strip() or "(unknown)"),
-            "opponent_player": (
-                (p_opp.display_name or "").strip() if p_opp else (m.opponent_player or "").strip()
-            ) or "(unknown)",
+            "player": _matchup_row_player_display(p_deck, d.player or ""),
+            "opponent_player": _matchup_row_player_display(p_opp, m.opponent_player or ""),
             "archetype": (d.archetype or "").strip() or "(unknown)",
             "opponent_archetype": (m.opponent_archetype or "").strip() or "(unknown)",
             "format_id": d.format_id or "",

@@ -3160,6 +3160,17 @@ def _front_face_name(name: str) -> str:
     return s
 
 
+_BLANK_DECK_PLACEHOLDER_PLAYER_RE = re.compile(r"^Unnamed\s*\d*$", re.IGNORECASE)
+
+
+def _is_blank_deck_placeholder_player_name(name: str) -> bool:
+    """True for blank-event-deck placeholders (Unnamed, Unnamed 9, Unnamed9). Matches add_blank_deck_to_event."""
+    s = (name or "").strip()
+    if not s:
+        return False
+    return bool(_BLANK_DECK_PLACEHOLDER_PLAYER_RE.fullmatch(s))
+
+
 def _matchup_result_consistent(result_a: str, result_b: str) -> bool:
     """True if the pair is consistent: one win + one loss, or both draw/intentional_draw. Bye/drop have no pair."""
     a = _matchup_result_to_canonical(result_a)
@@ -3431,6 +3442,17 @@ def get_matchups_players_summary(
             continue
         filtered.append(r)
 
+    # Drop rows that cannot produce a meaningful player-vs-player cell: no resolved opponent id, or either
+    # side is still a blank-deck placeholder (e.g. deck.player_id points at Unnamed N — deleting "vs Unnamed"
+    # matchups does not remove these reporter-side rows).
+    filtered = [
+        r
+        for r in filtered
+        if r.get("opponent_player_id") is not None
+        and not _is_blank_deck_placeholder_player_name((r.get("player") or "").strip() or "(unknown)")
+        and not _is_blank_deck_placeholder_player_name((r.get("opponent_player") or "").strip() or "(unknown)")
+    ]
+
     def to_effective_wld(row):
         raw = (row.get("result") or "loss").strip().lower()
         if raw == "intentional_draw":
@@ -3450,8 +3472,6 @@ def get_matchups_players_summary(
     # "Norman Osborn // Green Goblin" are one row (dual-faced names unified across the app).
     agg: dict[tuple[str, str], dict] = {}
     for r in filtered:
-        if r.get("opponent_player_id") is None:
-            continue
         pname = (r.get("player") or "(unknown)").strip()
         opp = (r.get("opponent_player") or "(unknown)").strip()
         player_canonical = _front_face_name(pname)
