@@ -338,12 +338,15 @@ def update_deck_event(
 
 
 def next_manual_deck_id(session: Session) -> int:
-    """Return next deck_id for manual uploads (>= MANUAL_DECK_ID_START)."""
+    """Return next deck_id for manual uploads (>= MANUAL_DECK_ID_START).
+
+    Must be strictly greater than every existing deck_id (MTGTop8 and manual) to avoid PK collisions.
+    """
     from sqlalchemy import func
-    r = session.query(func.max(DeckRow.deck_id)).filter(DeckRow.origin == ORIGIN_MANUAL).scalar()
-    if r is None:
-        return MANUAL_DECK_ID_START
-    return max(MANUAL_DECK_ID_START, r + 1)
+
+    r = session.query(func.max(DeckRow.deck_id)).scalar()
+    next_after_max = (r or 0) + 1
+    return max(MANUAL_DECK_ID_START, next_after_max)
 
 
 # --- Repository helpers: events ---
