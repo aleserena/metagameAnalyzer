@@ -10,7 +10,7 @@ Requires PostgreSQL (`DATABASE_URL`). Output is JSON (pretty-printed by default)
 
 Optional deletion removes matchup rows where `opponent_archetype` is missing/unknown and/or the
 row's deck has an unknown archetype, plus inverse mirror rows (see `--delete-matchups`).
-Bye and drop rounds (`result` is bye or drop) are excluded from export lists and from deletion.
+Bye/drop rounds and rows with no `opponent_deck_id` (unmatched opponent) are excluded from deletion.
 
 Examples:
   python3 -m scripts.export_unknown_archetypes
@@ -127,13 +127,18 @@ def _find_inverse_matchup(session, m: _db.MatchupRow) -> _db.MatchupRow | None:
 
 
 def _collect_matchup_ids_to_delete(session, or_, func, and_, DeckRow, MatchupRow) -> set[int]:
-    """Rows where opponent_archetype is missing/unknown OR the row's deck has unknown archetype; plus inverse rows."""
+    """Rows where opponent_archetype is missing/unknown OR the row's deck has unknown archetype; plus inverse rows.
+
+    Rows with no linked opponent deck (opponent_deck_id NULL) are never deleted — those are unmatched
+    opponents; missing archetype there is expected until the opponent is linked.
+    """
     q = (
         session.query(MatchupRow)
         .join(DeckRow, MatchupRow.deck_id == DeckRow.deck_id)
         .filter(
             and_(
                 _filter_exclude_bye_and_drop(or_, func, and_, MatchupRow),
+                MatchupRow.opponent_deck_id.isnot(None),
                 or_(
                     _filter_matchup_opponent_archetype_unknown(or_, func, MatchupRow),
                     _filter_deck_archetype_unknown(or_, func, DeckRow),
@@ -176,7 +181,8 @@ def main() -> None:
         help=(
             "Delete matchup rows where opponent_archetype is missing/unknown OR the row's deck "
             "has unknown archetype; also removes inverse mirror rows when present. "
-            "Bye/drop rounds are never selected. Requires --dry-run or --apply."
+            "Bye/drop rounds and rows with no opponent_deck_id (unmatched opponent) are never deleted. "
+            "Requires --dry-run or --apply."
         ),
     )
     parser.add_argument(
@@ -337,7 +343,7 @@ def main() -> None:
                 "criteria": (
                     "matchups.opponent_archetype is NULL/empty/(unknown) OR decks.archetype "
                     "(for matchups.deck_id) is NULL/empty/(unknown); includes inverse mirror rows; "
-                    "excludes result=bye/drop"
+                    "excludes result=bye/drop and excludes rows with opponent_deck_id NULL (unmatched opponent)"
                 ),
                 "matchup_row_ids_count": len(delete_ids),
                 "matchup_row_ids_sample": sample,
@@ -383,7 +389,7 @@ def main() -> None:
             "Use scripts.fix_matchup_unknown_archetypes to backfill opponent_archetype from opponent deck rows when possible.",
             "Use scripts.fix_deck_unknown_archetypes_from_matchups to infer deck archetype from matchup labels when unambiguous.",
             "For remaining decks, set archetype via the app or DB after checking mtgtop8_deck_url / deck lists.",
-            "matchup_delete (when using --delete-matchups): removes rows where opponent_archetype is missing/unknown OR the row deck's archetype is unknown, plus paired inverse rows; bye/drop rounds are excluded.",
+            "matchup_delete (when using --delete-matchups): removes rows where opponent_archetype is missing/unknown OR the row deck's archetype is unknown, plus paired inverse rows; bye/drop and unmatched-opponent rows (opponent_deck_id NULL) are excluded.",
         ],
     }
 

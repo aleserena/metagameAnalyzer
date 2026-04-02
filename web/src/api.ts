@@ -430,6 +430,10 @@ export async function getMatchupsSummary(params?: {
   from_date?: string
   to_date?: string
   archetype?: string[]
+  /** Minimum aggregated matches per pair (list + matrix). Default 0. */
+  min_matches?: number
+  /** When min_matches > 0, include pairs with 1..min_matches-1 games in list and matrix. */
+  include_opponents_below_min?: boolean
 }): Promise<{
   list: Array<{
     archetype: string
@@ -444,6 +448,7 @@ export async function getMatchupsSummary(params?: {
   archetypes: string[]
   matrix: (number | null)[][]
   min_matches: number
+  include_opponents_below_min: boolean
 }> {
   const search = new URLSearchParams()
   if (params?.format_id) search.set('format_id', params.format_id)
@@ -451,19 +456,14 @@ export async function getMatchupsSummary(params?: {
   if (params?.from_date) search.set('from_date', params.from_date)
   if (params?.to_date) search.set('to_date', params.to_date)
   if (params?.archetype?.length) params.archetype.forEach((a) => search.append('archetype', a))
+  if (params?.min_matches !== undefined && params.min_matches >= 0) {
+    search.set('min_matches', String(Math.floor(params.min_matches)))
+  }
+  if (params?.include_opponents_below_min) {
+    search.set('include_opponents_below_min', 'true')
+  }
   const q = search.toString()
   return fetchApi(`/matchups/summary${q ? `?${q}` : ''}`)
-}
-
-export async function getMatchupsMinMatchesSetting(): Promise<{ value: number }> {
-  return fetchApi('/settings/matchups-min-matches')
-}
-
-export async function putMatchupsMinMatchesSetting(value: number): Promise<{ value: number }> {
-  return fetchApi('/settings/matchups-min-matches', {
-    method: 'PUT',
-    body: JSON.stringify({ value }),
-  })
 }
 
 export async function getMatchupsPlayersSummary(params?: {
@@ -472,6 +472,10 @@ export async function getMatchupsPlayersSummary(params?: {
   from_date?: string
   to_date?: string
   player?: string[]
+  /** Minimum aggregated matches per pair (list + matrix). Default 0. */
+  min_matches?: number
+  /** When min_matches > 0, include pairs with 1..min_matches-1 games in list and matrix. */
+  include_opponents_below_min?: boolean
 }): Promise<{
   players_list: Array<{
     player: string
@@ -496,6 +500,7 @@ export async function getMatchupsPlayersSummary(params?: {
     archetype_b: string
   }>
   min_matches: number
+  include_opponents_below_min: boolean
 }> {
   const search = new URLSearchParams()
   if (params?.format_id) search.set('format_id', params.format_id)
@@ -503,19 +508,14 @@ export async function getMatchupsPlayersSummary(params?: {
   if (params?.from_date) search.set('date_from', params.from_date)
   if (params?.to_date) search.set('date_to', params.to_date)
   if (params?.player?.length) params.player.forEach((p) => search.append('player', p))
+  if (params?.min_matches !== undefined && params.min_matches >= 0) {
+    search.set('min_matches', String(Math.floor(params.min_matches)))
+  }
+  if (params?.include_opponents_below_min) {
+    search.set('include_opponents_below_min', 'true')
+  }
   const q = search.toString()
   return fetchApi(`/matchups/players-summary${q ? `?${q}` : ''}`)
-}
-
-export async function getMatchupsPlayersMinMatchesSetting(): Promise<{ value: number }> {
-  return fetchApi('/settings/matchups-players-min-matches')
-}
-
-export async function putMatchupsPlayersMinMatchesSetting(value: number): Promise<{ value: number }> {
-  return fetchApi('/settings/matchups-players-min-matches', {
-    method: 'PUT',
-    body: JSON.stringify({ value }),
-  })
 }
 
 /** Create a one-time event edit link (admin-only). Returns URL to event page with ?token= for editing event + decks (no delete event, no new links). */

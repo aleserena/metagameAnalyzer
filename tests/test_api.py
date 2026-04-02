@@ -560,12 +560,21 @@ def test_get_matchups_summary(client_with_overrides):
 
     with patch.object(api_main, "_db") as mock_db:
         mock_db.session_scope = mock_session_scope
-        mock_db.get_matchups_min_matches.return_value = 0
         mock_db.list_matchups_with_deck_info.return_value = []
         r = client_with_overrides.get("/api/v1/matchups/summary")
     assert r.status_code == 200
     data = r.json()
     assert "list" in data and "matrix" in data and "min_matches" in data
+    assert data["min_matches"] == 0
+    assert data.get("include_opponents_below_min") is False
+    r2 = client_with_overrides.get("/api/v1/matchups/summary?min_matches=3")
+    assert r2.status_code == 200
+    assert r2.json()["min_matches"] == 3
+    r3 = client_with_overrides.get(
+        "/api/v1/matchups/summary?min_matches=3&include_opponents_below_min=true"
+    )
+    assert r3.status_code == 200
+    assert r3.json()["include_opponents_below_min"] is True
 
 
 # --- POST /api/v1/load ---
