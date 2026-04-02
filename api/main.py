@@ -2351,11 +2351,15 @@ def update_deck_endpoint(deck_id: int, body: UpdateDeckBody):
     if not deck_dict:
         raise HTTPException(status_code=404, detail="Deck not found")
     current = dict(deck_dict)
+    # DB player row before this edit (used to merge away Unnamed* rows when renaming to a real player)
+    prior_player_id = deck_dict.get("player_id")
     # Merge body into current
     if body.name is not None:
         current["name"] = body.name
     if body.player is not None:
         current["player"] = _normalize_player(body.player.strip())
+        # deck_dict always includes player_id; force re-resolve so player_id matches the new name
+        current.pop("player_id", None)
     if body.rank is not None:
         current["rank"] = body.rank
     if body.archetype is not None:
@@ -2384,8 +2388,8 @@ def update_deck_endpoint(deck_id: int, body: UpdateDeckBody):
         with _db.session_scope() as session:
             if "player_id" not in current:
                 _resolve_deck_player(session, current)
+            new_pid = current.get("player_id")
             if event_id and (body.player is not None or current.get("player")):
-                new_pid = current.get("player_id")
                 if new_pid is not None:
                     event_decks = _db.get_decks_by_event(session, event_id)
                     for d in event_decks:
@@ -2394,6 +2398,29 @@ def update_deck_endpoint(deck_id: int, body: UpdateDeckBody):
                                 status_code=400,
                                 detail="Player already in this event. Each player can only have one deck per event.",
                             )
+            # Drop orphan Unnamed* PlayerRow: GET /players/id/{id} shows decks.player (denormalized), not
+            # players.display_name, so renames looked correct while the placeholder row lingered.
+            if (
+                body.player is not None
+                and prior_player_id is not None
+                and new_pid is not None
+                and prior_player_id != new_pid
+                and _db.player_row_is_unnamed_placeholder(session, prior_player_id)
+            ):
+                _db.merge_players(
+                    session,
+                    prior_player_id,
+                    new_pid,
+                    canonical_name=(current.get("player") or "").strip() or None,
+                )
+                current["player_id"] = new_pid
+                to_row = _db.get_player_by_id(session, new_pid)
+                if to_row and (to_row.display_name or "").strip():
+                    current["player"] = to_row.display_name
+            if new_pid is not None:
+                _db.sync_matchup_opponent_identity_for_deck(
+                    session, deck_id, new_pid, current.get("player", "")
+                )
             _db.upsert_deck(session, current, origin=current.get("origin", _db.ORIGIN_MTGTOP8))
         _load_decks_from_db()
         return {"deck_id": deck_id, "message": "updated"}

@@ -964,6 +964,24 @@ def delete_matchups_for_deck(session: Session, deck_id: int) -> int:
     return len(rows)
 
 
+def sync_matchup_opponent_identity_for_deck(
+    session: Session,
+    deck_id: int,
+    player_id: int,
+    player_display: str,
+) -> int:
+    """Update inverse matchup rows: where another deck reports playing against ``deck_id``,
+    set opponent_player_id / opponent_player to this deck's current player.
+
+    Stale values after a rename would otherwise leave two identities (old + new) for the same deck."""
+    display = (player_display or "").strip() or "(unknown)"
+    rows = session.query(MatchupRow).filter(MatchupRow.opponent_deck_id == deck_id).all()
+    for r in rows:
+        r.opponent_player_id = player_id
+        r.opponent_player = display
+    return len(rows)
+
+
 def reassign_matchups_to_deck(
     session: Session,
     from_deck_id: int,
@@ -1282,7 +1300,8 @@ def merge_players(
     from_player PlayerRow is always removed after references are repointed.
 
     Updates:
-    - decks.player_id / decks.player
+    - decks.player_id / decks.player (or delete a deck when ``(event_id, to_player_id)`` already exists —
+      e.g. placeholder deck + real deck for same person in one event; matchups cascade with deck delete)
     - matchups.opponent_player_id / matchups.opponent_player
     - player_emails (player_id is PK: drops source email if canonical already has one)
     - player_aliases.player_id
@@ -1295,11 +1314,24 @@ def merge_players(
         return
     display = (canonical_name or to_row.display_name or "").strip() or "(unknown)"
 
-    # Decks
+    # Decks: one deck per (event_id, player_id). If target already has a deck in this event, drop the
+    # from-player row (typically an Unnamed placeholder duplicate).
     decks = session.query(DeckRow).filter(DeckRow.player_id == from_player_id).all()
     for d in decks:
-        d.player_id = to_player_id
-        d.player = display
+        conflict = (
+            session.query(DeckRow)
+            .filter(
+                DeckRow.event_id == d.event_id,
+                DeckRow.player_id == to_player_id,
+                DeckRow.deck_id != d.deck_id,
+            )
+            .first()
+        )
+        if conflict is not None:
+            session.delete(d)
+        else:
+            d.player_id = to_player_id
+            d.player = display
 
     # Matchups where this player is the opponent
     matchups = (
@@ -1450,11 +1482,23 @@ def list_matchups_with_deck_info(session: Session) -> list[dict]:
 
 
 _UNNAMED_PLACEHOLDER_DISPLAY_RE = re.compile(r"^Unnamed\s*\d*$", re.IGNORECASE)
+# add_blank_deck_to_event fallback: Unnamed_<uuid10>
+_UNNAMED_HEX_PLACEHOLDER_RE = re.compile(r"^Unnamed_[a-f0-9]{10}$", re.IGNORECASE)
 
 
 def _is_unnamed_placeholder_display(name: str) -> bool:
     s = (name or "").strip()
-    return bool(_UNNAMED_PLACEHOLDER_DISPLAY_RE.fullmatch(s))
+    if _UNNAMED_PLACEHOLDER_DISPLAY_RE.fullmatch(s):
+        return True
+    return bool(_UNNAMED_HEX_PLACEHOLDER_RE.fullmatch(s))
+
+
+def player_row_is_unnamed_placeholder(session: Session, player_id: int) -> bool:
+    """True if this ``players`` row is a blank-deck placeholder (Unnamed / Unnamed N), not a real name."""
+    row = get_player_by_id(session, player_id)
+    if not row:
+        return False
+    return _is_unnamed_placeholder_display(row.display_name or "")
 
 
 def _matchup_row_player_display(player_row: PlayerRow | None, denormalized: str) -> str:
