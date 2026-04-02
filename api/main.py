@@ -361,11 +361,15 @@ def _save_player_aliases() -> None:
 
 
 def _normalize_player(name: str) -> str:
-    """Return canonical player name (alias -> canonical mapping)."""
+    """Return canonical player name (alias -> canonical mapping). Follows chains so nested aliases resolve."""
     if not name or not name.strip():
         return "(unknown)"
     n = name.strip()
-    return _player_aliases.get(n, n)
+    seen: set[str] = set()
+    while n in _player_aliases and n not in seen:
+        seen.add(n)
+        n = (_player_aliases[n] or "").strip() or n
+    return n
 
 
 def _resolve_deck_player(session, d: dict) -> None:
@@ -889,7 +893,7 @@ def _deck_duplicate_info(deck_id: int) -> dict | None:
         return {
             "deck_id": did,
             "name": d.get("name"),
-            "player": d.get("player"),
+            "player": _normalize_player(d.get("player") or ""),
             "event_name": d.get("event_name"),
             "date": d.get("date"),
             "rank": d.get("rank"),
@@ -933,7 +937,7 @@ def list_duplicate_decks(
         result.append({
             "primary_deck_id": primary_id,
             "primary_name": primary.get("name"),
-            "primary_player": primary.get("player"),
+            "primary_player": _normalize_player(primary.get("player") or ""),
             "primary_event": primary.get("event_name"),
             "primary_date": primary.get("date"),
             "duplicate_deck_ids": duplicate_ids,
@@ -941,7 +945,7 @@ def list_duplicate_decks(
                 {
                     "deck_id": did,
                     "name": deck_map.get(did, {}).get("name"),
-                    "player": deck_map.get(did, {}).get("player"),
+                    "player": _normalize_player(deck_map.get(did, {}).get("player") or ""),
                     "event_name": deck_map.get(did, {}).get("event_name"),
                     "date": deck_map.get(did, {}).get("date"),
                 }
@@ -3714,6 +3718,9 @@ def add_player_alias(body: PlayerAliasBody, _: str = Depends(require_admin)):
                 _db.merge_players_by_names(session, alias, canonical)
         except Exception as e:
             logger.exception("Failed to save/merge player alias to DB: %s", e)
+        else:
+            _load_player_aliases()
+            _load_decks_from_db()
     return {"aliases": _player_aliases}
 
 
@@ -3729,6 +3736,9 @@ def remove_player_alias(alias: str, _: str = Depends(require_admin)):
                     _db.remove_player_alias(session, a)
             except Exception as e:
                 logger.exception("Failed to remove player alias from DB: %s", e)
+            else:
+                _load_player_aliases()
+                _load_decks_from_db()
         _save_player_aliases()
     return {"aliases": _player_aliases}
 
@@ -3787,7 +3797,7 @@ def get_player_detail_by_id(player_id: int):
     player_decks = [d for d in _decks if d.get("player_id") == player_id]
     if not player_decks:
         raise HTTPException(status_code=404, detail="Player not found")
-    canonical = (player_decks[0].get("player") or "").strip()
+    display = _normalize_player((player_decks[0].get("player") or "").strip())
     decks = [Deck.from_dict(d) for d in player_decks]
     rank_weights = settings_service.get_rank_weights()
     stats_list = player_leaderboard(decks, rank_weights=rank_weights)
@@ -3800,7 +3810,7 @@ def get_player_detail_by_id(player_id: int):
     ]
     deck_summaries.sort(key=lambda x: _deck_sort_key(x))
     out = {
-        "player": canonical,
+        "player": display,
         "player_id": player_id,
         "wins": stat["wins"],
         "top2": stat["top2"],
@@ -3812,7 +3822,11 @@ def get_player_detail_by_id(player_id: int):
     }
     if _database_available():
         with _db.session_scope() as session:
-            email = _db.get_player_email(session, canonical)
+            prow = _db.get_player_by_id(session, player_id)
+            if prow and (prow.display_name or "").strip():
+                display = (prow.display_name or "").strip()
+                out["player"] = display
+            email = _db.get_player_email(session, display)
             out["has_email"] = bool(email and email.strip())
     return out
 
@@ -3854,8 +3868,9 @@ def get_player_detail(player_name: str):
     ]
     deck_summaries.sort(key=lambda x: _deck_sort_key(x))
     pid = player_decks[0].get("player_id") if player_decks else None
+    display = _normalize_player(canonical)
     out = {
-        "player": canonical,
+        "player": display,
         "player_id": pid,
         "wins": stat["wins"],
         "top2": stat["top2"],
@@ -3867,7 +3882,12 @@ def get_player_detail(player_name: str):
     }
     if _database_available():
         with _db.session_scope() as session:
-            email = _db.get_player_email(session, canonical)
+            if pid is not None:
+                prow = _db.get_player_by_id(session, pid)
+                if prow and (prow.display_name or "").strip():
+                    display = (prow.display_name or "").strip()
+                    out["player"] = display
+            email = _db.get_player_email(session, display)
             out["has_email"] = bool(email and email.strip())
     return out
 

@@ -211,14 +211,16 @@ def run_migrations():
 # --- Repository helpers: decks ---
 
 
-def deck_row_to_dict(row: DeckRow) -> dict:
+def deck_row_to_dict(row: DeckRow, player_display_override: str | None = None) -> dict:
+    """If ``player_display_override`` is set (e.g. ``players.display_name`` from a join), use it as ``player``."""
+    disp = (player_display_override or "").strip() or (row.player or "")
     return {
         "deck_id": row.deck_id,
         "event_id": row.event_id,
         "format_id": row.format_id or "",
         "name": row.name or "",
         "player_id": getattr(row, "player_id", None),
-        "player": row.player or "",
+        "player": disp,
         "event_name": row.event_name or "",
         "date": row.date or "",
         "rank": row.rank or "",
@@ -252,15 +254,34 @@ def dict_to_deck_row(d: dict, origin: str = ORIGIN_MTGTOP8) -> DeckRow:
 
 
 def get_all_decks(session: Session) -> list[dict]:
-    rows = session.query(DeckRow).all()
-    return [deck_row_to_dict(r) for r in rows]
+    """Load decks; ``player`` comes from ``players.display_name`` when joined so UI matches alias canonical."""
+    rows = (
+        session.query(DeckRow, PlayerRow.display_name)
+        .outerjoin(PlayerRow, DeckRow.player_id == PlayerRow.id)
+        .all()
+    )
+    return [deck_row_to_dict(r, pname) for r, pname in rows]
 
 
 def get_decks_by_event(session: Session, event_id: int | str) -> list[dict]:
     """Return all decks for an event (by event_id)."""
     eid = _event_id_str(event_id)
-    rows = session.query(DeckRow).filter(DeckRow.event_id == eid).all()
-    return [deck_row_to_dict(r) for r in rows]
+    rows = (
+        session.query(DeckRow, PlayerRow.display_name)
+        .outerjoin(PlayerRow, DeckRow.player_id == PlayerRow.id)
+        .filter(DeckRow.event_id == eid)
+        .all()
+    )
+    return [deck_row_to_dict(r, pname) for r, pname in rows]
+
+
+def _sync_deck_row_player_denorm(session: Session, row: DeckRow) -> None:
+    """Keep ``decks.player`` equal to ``players.display_name`` for this ``player_id`` (canonical / alias target)."""
+    if row.player_id is None:
+        return
+    prow = get_player_by_id(session, row.player_id)
+    if prow and (prow.display_name or "").strip():
+        row.player = (prow.display_name or "").strip()
 
 
 def upsert_deck(session: Session, d: dict, origin: str = ORIGIN_MTGTOP8) -> DeckRow:
@@ -290,6 +311,7 @@ def upsert_deck(session: Session, d: dict, origin: str = ORIGIN_MTGTOP8) -> Deck
         row.archetype = d.get("archetype", row.archetype)
         row.mainboard = mainboard
         row.sideboard = sideboard
+        _sync_deck_row_player_denorm(session, row)
         return row
     row = DeckRow(
         deck_id=d["deck_id"],
@@ -309,6 +331,7 @@ def upsert_deck(session: Session, d: dict, origin: str = ORIGIN_MTGTOP8) -> Deck
         sideboard=sideboard,
     )
     session.add(row)
+    _sync_deck_row_player_denorm(session, row)
     return row
 
 
@@ -825,26 +848,29 @@ def get_deck_by_event_and_player(session: Session, event_id: str, player: str) -
 
 
 def list_matchups_by_deck(session: Session, deck_id: int) -> list[dict]:
+    Opp = aliased(PlayerRow)
     rows = (
-        session.query(MatchupRow)
+        session.query(MatchupRow, Opp.display_name)
+        .outerjoin(Opp, MatchupRow.opponent_player_id == Opp.id)
         .filter(MatchupRow.deck_id == deck_id)
         .order_by(MatchupRow.round, MatchupRow.id)
         .all()
     )
-    return [
-        {
+    out: list[dict] = []
+    for r, opp_disp in rows:
+        opp_name = (opp_disp or "").strip() or (r.opponent_player or "")
+        out.append({
             "id": r.id,
             "deck_id": r.deck_id,
             "opponent_player_id": getattr(r, "opponent_player_id", None),
-            "opponent_player": r.opponent_player,
+            "opponent_player": opp_name,
             "opponent_deck_id": r.opponent_deck_id,
             "opponent_archetype": r.opponent_archetype,
             "result": r.result,
             "result_note": r.result_note or "",
             "round": r.round,
-        }
-        for r in rows
-    ]
+        })
+    return out
 
 
 def count_effective_matchups_for_deck(session: Session, deck_id: int) -> int:
@@ -879,8 +905,12 @@ def upsert_matchups_for_deck(
     of the matchup are stored (if A beats B, B is recorded as having lost to A)."""
     session.query(MatchupRow).filter(MatchupRow.deck_id == deck_id).delete()
     deck_row = session.query(DeckRow).filter(DeckRow.deck_id == deck_id).first()
-    my_player = (deck_row.player or "").strip() or "(unknown)" if deck_row else "(unknown)"
     my_player_id = deck_row.player_id if deck_row else None
+    my_player = (deck_row.player or "").strip() or "(unknown)" if deck_row else "(unknown)"
+    if my_player_id is not None:
+        prow = get_player_by_id(session, my_player_id)
+        if prow and (prow.display_name or "").strip():
+            my_player = (prow.display_name or "").strip()
     my_archetype = getattr(deck_row, "archetype", None) if deck_row else None
 
     for m in matchups:
