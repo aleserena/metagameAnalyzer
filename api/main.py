@@ -31,6 +31,7 @@ import re
 import threading
 import time
 import unicodedata
+import uuid
 from contextlib import asynccontextmanager
 from urllib.parse import unquote
 
@@ -1862,12 +1863,19 @@ def add_blank_deck_to_event(event_id: str):
                 status_code=400,
                 detail=f"Event allows at most {player_count} deck(s). It already has {len(existing)}.",
             )
-        existing_players = {(d.player or "").strip() for d in existing}
-        placeholder = "Unnamed"
-        n = 1
-        while placeholder in existing_players:
-            n += 1
-            placeholder = f"Unnamed {n}"
+        # One deck per player_id per event. Placeholder names like "Unnamed" can resolve via aliases
+        # or normalized lookup to a player who already has a deck here — pick a name whose resolved
+        # player_id is not yet in this event.
+        existing_player_ids = {d.player_id for d in existing}
+        for n in range(5000):
+            player_try = "Unnamed" if n == 0 else f"Unnamed {n}"
+            tmp = {"player": player_try}
+            _resolve_deck_player(session, tmp)
+            if tmp["player_id"] not in existing_player_ids:
+                break
+        else:
+            tmp = {"player": f"Unnamed_{uuid.uuid4().hex[:10]}"}
+            _resolve_deck_player(session, tmp)
         event_name = event_display_name(ev.name, ev.store or "", ev.location or "")
         deck_id = _db.next_manual_deck_id(session)
         blank = {
@@ -1877,14 +1885,14 @@ def add_blank_deck_to_event(event_id: str):
             "date": ev.date,
             "format_id": ev.format_id,
             "name": "Unnamed",
-            "player": placeholder,
+            "player": tmp["player"],
+            "player_id": tmp["player_id"],
             "rank": "",
             "player_count": 0,
             "commanders": [],
             "mainboard": [],
             "sideboard": [],
         }
-        _resolve_deck_player(session, blank)
         _db.upsert_deck(session, blank, origin=_db.ORIGIN_MANUAL)
     _load_decks_from_db()
     return {"event_id": event_id, "deck_id": deck_id, "message": "Deck added"}
@@ -3160,17 +3168,6 @@ def _front_face_name(name: str) -> str:
     return s
 
 
-_BLANK_DECK_PLACEHOLDER_PLAYER_RE = re.compile(r"^Unnamed\s*\d*$", re.IGNORECASE)
-
-
-def _is_blank_deck_placeholder_player_name(name: str) -> bool:
-    """True for blank-event-deck placeholders (Unnamed, Unnamed 9, Unnamed9). Matches add_blank_deck_to_event."""
-    s = (name or "").strip()
-    if not s:
-        return False
-    return bool(_BLANK_DECK_PLACEHOLDER_PLAYER_RE.fullmatch(s))
-
-
 def _matchup_result_consistent(result_a: str, result_b: str) -> bool:
     """True if the pair is consistent: one win + one loss, or both draw/intentional_draw. Bye/drop have no pair."""
     a = _matchup_result_to_canonical(result_a)
@@ -3442,17 +3439,6 @@ def get_matchups_players_summary(
             continue
         filtered.append(r)
 
-    # Drop rows that cannot produce a meaningful player-vs-player cell: no resolved opponent id, or either
-    # side is still a blank-deck placeholder (e.g. deck.player_id points at Unnamed N — deleting "vs Unnamed"
-    # matchups does not remove these reporter-side rows).
-    filtered = [
-        r
-        for r in filtered
-        if r.get("opponent_player_id") is not None
-        and not _is_blank_deck_placeholder_player_name((r.get("player") or "").strip() or "(unknown)")
-        and not _is_blank_deck_placeholder_player_name((r.get("opponent_player") or "").strip() or "(unknown)")
-    ]
-
     def to_effective_wld(row):
         raw = (row.get("result") or "loss").strip().lower()
         if raw == "intentional_draw":
@@ -3472,6 +3458,8 @@ def get_matchups_players_summary(
     # "Norman Osborn // Green Goblin" are one row (dual-faced names unified across the app).
     agg: dict[tuple[str, str], dict] = {}
     for r in filtered:
+        if r.get("opponent_player_id") is None:
+            continue
         pname = (r.get("player") or "(unknown)").strip()
         opp = (r.get("opponent_player") or "(unknown)").strip()
         player_canonical = _front_face_name(pname)
