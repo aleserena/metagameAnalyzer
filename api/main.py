@@ -2278,6 +2278,7 @@ def submit_feedback_with_upload_link(token: str, body: EventFeedbackBody):
         if body.rank is not None:
             deck_dict["rank"] = (body.rank or "").strip()
         _db.upsert_deck(session, deck_dict, origin=deck_dict.get("origin", _db.ORIGIN_MANUAL))
+        feedback_event_id = _db._event_id_str(deck_dict.get("event_id", ""))
         matchup_rows = []
         for m in body.matchups or []:
             result_raw = (m.result or "1-1").strip().lower()
@@ -2295,9 +2296,9 @@ def submit_feedback_with_upload_link(token: str, body: EventFeedbackBody):
             opp_player = _normalize_player((m.opponent_player or "").strip())
             if not opp_player or opp_player == "(unknown)":
                 continue
-            opp_deck = _db.get_deck_by_event_and_player(session, row.event_id, opp_player)
+            opp_deck = _db.get_deck_by_event_and_player(session, feedback_event_id, opp_player)
             opp_deck_id = opp_deck.deck_id if opp_deck else None
-            opp_archetype = getattr(opp_deck, "archetype", None) if opp_deck else None
+            opp_archetype = _db.deck_archetype_for_deck_id(session, opp_deck_id)
             matchup_rows.append({
                 "opponent_player": opp_player,
                 "opponent_deck_id": opp_deck_id,
@@ -2527,7 +2528,7 @@ def update_deck_matchups(deck_id: int, body: AdminMatchupsBody):
             seen_opponent_round.add(key)
             opp_deck = _db.get_deck_by_event_and_player(session, event_id, opp_player)
             opp_deck_id = opp_deck.deck_id if opp_deck else None
-            opp_archetype = getattr(opp_deck, "archetype", None) if opp_deck else None
+            opp_archetype = _db.deck_archetype_for_deck_id(session, opp_deck_id)
             matchup_rows.append({
                 "opponent_player": opp_player,
                 "opponent_deck_id": opp_deck_id,

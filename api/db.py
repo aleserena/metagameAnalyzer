@@ -847,6 +847,17 @@ def get_deck_by_event_and_player(session: Session, event_id: str, player: str) -
     return get_deck_by_event_and_player_id(session, eid, pid)
 
 
+def deck_archetype_for_deck_id(session: Session, deck_id: int | None) -> str | None:
+    """Return trimmed archetype string for a deck, or None if missing / no row."""
+    if deck_id is None:
+        return None
+    row = session.query(DeckRow).filter(DeckRow.deck_id == deck_id).first()
+    if not row:
+        return None
+    s = (row.archetype or "").strip()
+    return s or None
+
+
 def list_matchups_by_deck(session: Session, deck_id: int) -> list[dict]:
     Opp = aliased(PlayerRow)
     rows = (
@@ -902,8 +913,13 @@ def upsert_matchups_for_deck(
     """Replace all matchups for this deck. Each item: opponent_player, opponent_player_id?, opponent_deck_id?, result, ...
     Sets opponent_player_id from item or by resolving opponent_player (name). Bye/drop: opponent_player_id NULL.
     When opponent_deck_id is set (real opponent), also upserts the inverse row for the opponent so both sides
-    of the matchup are stored (if A beats B, B is recorded as having lost to A)."""
-    session.query(MatchupRow).filter(MatchupRow.deck_id == deck_id).delete()
+    of the matchup are stored (if A beats B, B is recorded as having lost to A).
+
+    Deletes existing rows for ``deck_id`` (this deck's report) and rows where ``opponent_deck_id == deck_id``
+    (other decks' mirrored rows vs this deck) so removing a matchup from the form drops both sides.
+    """
+    session.query(MatchupRow).filter(MatchupRow.deck_id == deck_id).delete(synchronize_session=False)
+    session.query(MatchupRow).filter(MatchupRow.opponent_deck_id == deck_id).delete(synchronize_session=False)
     deck_row = session.query(DeckRow).filter(DeckRow.deck_id == deck_id).first()
     my_player_id = deck_row.player_id if deck_row else None
     my_player = (deck_row.player or "").strip() or "(unknown)" if deck_row else "(unknown)"
@@ -911,7 +927,7 @@ def upsert_matchups_for_deck(
         prow = get_player_by_id(session, my_player_id)
         if prow and (prow.display_name or "").strip():
             my_player = (prow.display_name or "").strip()
-    my_archetype = getattr(deck_row, "archetype", None) if deck_row else None
+    my_archetype = deck_archetype_for_deck_id(session, deck_id)
 
     for m in matchups:
         opponent_player = (m.get("opponent_player") or "").strip()
