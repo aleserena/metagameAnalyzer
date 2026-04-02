@@ -72,7 +72,7 @@ def main() -> None:
             print("No placeholder players (Unnamed / Unnamed N) found; nothing to do.")
             return
 
-        print(f"Placeholder players to remove: {len(ids)}")
+        print(f"Placeholder players to remove: {len(ids)} — ids: {', '.join(str(i) for i in ids)}")
         if args.verbose:
             for p in placeholder_rows:
                 print(f"  player id={p.id} display_name={p.display_name!r}")
@@ -130,6 +130,9 @@ def main() -> None:
         # 3) Decks owned by placeholder players (matchups on those decks cascade at DB level).
         for d in decks:
             _db.delete_deck(session, d.deck_id)
+
+        # Bulk DELETE on players must not run before pending ORM deck deletes hit the DB, or FK fails.
+        session.flush()
 
         session.query(_db.PlayerAliasRow).filter(_db.PlayerAliasRow.player_id.in_(ids)).delete(
             synchronize_session=False
