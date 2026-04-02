@@ -65,6 +65,10 @@ export default function Matchups() {
   const [playerOpen, setPlayerOpen] = useState(false)
   const [viewMode, setViewMode] = useState<ViewMode>('matrix')
   const [sortByWinRate, setSortByWinRate] = useState(false)
+  const [archetypeMinMatches, setArchetypeMinMatches] = useState(0)
+  const [playersMinMatches, setPlayersMinMatches] = useState(0)
+  const [archetypeIncludeBelowMin, setArchetypeIncludeBelowMin] = useState(false)
+  const [playersIncludeBelowMin, setPlayersIncludeBelowMin] = useState(false)
   const archetypeRef = useRef<HTMLDivElement>(null)
   const archetypeButtonRef = useRef<HTMLButtonElement>(null)
   const playerRef = useRef<HTMLDivElement>(null)
@@ -104,6 +108,8 @@ export default function Matchups() {
       format_id: formatId || undefined,
       event_ids: eventIds.length ? eventIds.map(String).join(',') : undefined,
       archetype: selectedArchetypes.length ? selectedArchetypes : undefined,
+      min_matches: archetypeMinMatches,
+      include_opponents_below_min: archetypeIncludeBelowMin,
     })
       .then((s) => {
         setSummary(s)
@@ -118,7 +124,7 @@ export default function Matchups() {
         setSummary(null)
       })
       .finally(() => setLoading(false))
-  }, [dataMode, formatId, eventIds, selectedArchetypes])
+  }, [dataMode, formatId, eventIds, selectedArchetypes, archetypeMinMatches, archetypeIncludeBelowMin])
 
   useEffect(() => {
     if (dataMode !== 'players') return
@@ -128,6 +134,8 @@ export default function Matchups() {
       format_id: formatId || undefined,
       event_ids: eventIds.length ? eventIds.map(String).join(',') : undefined,
       player: selectedPlayers.length ? selectedPlayers : undefined,
+      min_matches: playersMinMatches,
+      include_opponents_below_min: playersIncludeBelowMin,
     })
       .then((s) => {
         setPlayersSummary(s)
@@ -142,7 +150,7 @@ export default function Matchups() {
         setPlayersSummary(null)
       })
       .finally(() => setPlayersLoading(false))
-  }, [dataMode, formatId, eventIds, selectedPlayers])
+  }, [dataMode, formatId, eventIds, selectedPlayers, playersMinMatches, playersIncludeBelowMin])
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -329,13 +337,161 @@ export default function Matchups() {
       <h1 className="page-title">Matchups</h1>
       <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
         {dataMode === 'archetypes'
-          ? 'Archetype vs archetype win rates from event feedback. Only pairs with at least the minimum number of matches (set in Settings by admin) are shown.'
-          : 'Player vs player win rates from event feedback. Only pairs with at least the minimum number of matches for players (set in Settings by admin) are shown.'}
+          ? 'Archetype vs archetype win rates from event feedback. Use Min. matches in the filters to hide low-sample pairs.'
+          : 'Player vs player win rates from event feedback. Use Min. matches in the filters to hide low-sample pairs.'}
       </p>
 
       <div className="table-wrap-outer" style={{ marginBottom: '1.5rem' }}>
         <div className="table-wrap" style={{ overflow: 'visible' }}>
           <FiltersPanel>
+            {dataMode === 'archetypes' && (
+            <div
+              className="matchups-min-row"
+              style={{
+                flexBasis: '100%',
+                width: '100%',
+                minWidth: 0,
+                boxSizing: 'border-box',
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'flex-end',
+                gap: '0.75rem 1.25rem',
+                marginBottom: 0,
+              }}
+            >
+              <div style={{ flex: '0 0 auto' }}>
+                <label
+                  htmlFor="matchups-min-arch"
+                  style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}
+                >
+                  Min. matches
+                </label>
+                <input
+                  id="matchups-min-arch"
+                  type="number"
+                  min={0}
+                  value={archetypeMinMatches}
+                  onChange={(e) => {
+                    const v = Math.max(0, parseInt(e.target.value, 10) || 0)
+                    setArchetypeMinMatches(v)
+                    if (v < 2) setArchetypeIncludeBelowMin(false)
+                  }}
+                  aria-label="Minimum matches per archetype pair"
+                  style={{
+                    width: 72,
+                    maxWidth: 72,
+                    padding: '0.35rem 0.5rem',
+                    boxSizing: 'border-box',
+                  }}
+                />
+              </div>
+              {archetypeMinMatches >= 2 && (
+                <label
+                  htmlFor="matchups-include-below-arch"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '0.45rem',
+                    marginBottom: 2,
+                    fontSize: '0.8rem',
+                    fontWeight: 400,
+                    color: 'var(--text-muted)',
+                    lineHeight: 1.4,
+                    cursor: 'pointer',
+                    maxWidth: 'min(100%, 36rem)',
+                    minWidth: 0,
+                  }}
+                >
+                  <input
+                    id="matchups-include-below-arch"
+                    type="checkbox"
+                    checked={archetypeIncludeBelowMin}
+                    onChange={(e) => setArchetypeIncludeBelowMin(e.target.checked)}
+                    style={{ marginTop: 3, flexShrink: 0, width: '1rem', height: '1rem' }}
+                  />
+                  <span style={{ wordBreak: 'break-word' }}>
+                    {archetypeMinMatches === 2
+                      ? 'Also show opponent pairs with only 1 recorded match (matrix and list)'
+                      : `Also show opponent pairs with 1–${archetypeMinMatches - 1} matches (matrix and list)`}
+                  </span>
+                </label>
+              )}
+            </div>
+            )}
+            {dataMode === 'players' && (
+            <div
+              className="matchups-min-row"
+              style={{
+                flexBasis: '100%',
+                width: '100%',
+                minWidth: 0,
+                boxSizing: 'border-box',
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'flex-end',
+                gap: '0.75rem 1.25rem',
+                marginBottom: 0,
+              }}
+            >
+              <div style={{ flex: '0 0 auto' }}>
+                <label
+                  htmlFor="matchups-min-pl"
+                  style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}
+                >
+                  Min. matches
+                </label>
+                <input
+                  id="matchups-min-pl"
+                  type="number"
+                  min={0}
+                  value={playersMinMatches}
+                  onChange={(e) => {
+                    const v = Math.max(0, parseInt(e.target.value, 10) || 0)
+                    setPlayersMinMatches(v)
+                    if (v < 2) setPlayersIncludeBelowMin(false)
+                  }}
+                  aria-label="Minimum matches per player pair"
+                  style={{
+                    width: 72,
+                    maxWidth: 72,
+                    padding: '0.35rem 0.5rem',
+                    boxSizing: 'border-box',
+                  }}
+                />
+              </div>
+              {playersMinMatches >= 2 && (
+                <label
+                  htmlFor="matchups-include-below-pl"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '0.45rem',
+                    marginBottom: 2,
+                    fontSize: '0.8rem',
+                    fontWeight: 400,
+                    color: 'var(--text-muted)',
+                    lineHeight: 1.4,
+                    cursor: 'pointer',
+                    maxWidth: 'min(100%, 36rem)',
+                    minWidth: 0,
+                  }}
+                >
+                  <input
+                    id="matchups-include-below-pl"
+                    type="checkbox"
+                    checked={playersIncludeBelowMin}
+                    onChange={(e) => setPlayersIncludeBelowMin(e.target.checked)}
+                    style={{ marginTop: 3, flexShrink: 0, width: '1rem', height: '1rem' }}
+                  />
+                  <span style={{ wordBreak: 'break-word' }}>
+                    {playersMinMatches === 2
+                      ? 'Also show player pairs with only 1 recorded match (matrix and list)'
+                      : `Also show player pairs with 1–${playersMinMatches - 1} matches (matrix and list)`}
+                  </span>
+                </label>
+              )}
+            </div>
+            )}
             <div className="form-group" style={{ marginBottom: 0 }}>
               <label htmlFor="matchups-format">Format</label>
               <select
@@ -575,17 +731,33 @@ export default function Matchups() {
 
       {dataMode === 'archetypes' && summary && (() => {
         const listFiltered = summary.list.filter((row) => (row.archetype || '').toLowerCase() !== (row.opponent_archetype || '').toLowerCase())
+        const minM = summary.min_matches
+        const inc = summary.include_opponents_below_min
+        const filterPhrase =
+          minM <= 0
+            ? 'Pairs with at least one recorded matchup.'
+            : minM >= 2 && inc
+              ? `Pairs with ≥ ${minM} match(es), plus pairs with 1–${minM - 1} match(es).`
+              : `Pairs with ≥ ${minM} match(es) only.`
         return (
           <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
-            Showing matchups with ≥ {summary.min_matches} match(es). {listFiltered.length} pair(s). Same-archetype vs same-archetype excluded from list and shown as 50% in matrix. Record is <strong>Wins–Losses–Draws</strong> (e.g. 2–1–0).
+            {filterPhrase} {listFiltered.length} pair(s) in list. Same-archetype vs same-archetype excluded from list and shown as 50% in matrix. Record is <strong>Wins–Losses–Draws</strong> (e.g. 2–1–0).
           </p>
         )
       })()}
       {dataMode === 'players' && playersSummary && (() => {
         const listFiltered = playersSummary.players_list.filter((row) => (row.player || '').toLowerCase() !== (row.opponent_player || '').toLowerCase())
+        const minM = playersSummary.min_matches
+        const inc = playersSummary.include_opponents_below_min
+        const filterPhrase =
+          minM <= 0
+            ? 'Pairs with at least one recorded matchup.'
+            : minM >= 2 && inc
+              ? `Pairs with ≥ ${minM} match(es), plus pairs with 1–${minM - 1} match(es).`
+              : `Pairs with ≥ ${minM} match(es) only.`
         return (
           <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
-            Showing player pairs with ≥ {playersSummary.min_matches} match(es). {listFiltered.length} pair(s). Same-player vs same-player excluded from list. Record is <strong>Wins–Losses–Draws</strong> (e.g. 2–1–0).
+            {filterPhrase} {listFiltered.length} pair(s) in list. Same-player vs same-player excluded from list. Record is <strong>Wins–Losses–Draws</strong> (e.g. 2–1–0).
           </p>
         )
       })()}

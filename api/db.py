@@ -23,6 +23,7 @@ from sqlalchemy import (
     Text,
     create_engine,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session, aliased, declarative_base, sessionmaker
@@ -214,6 +215,9 @@ def run_migrations():
 def deck_row_to_dict(row: DeckRow, player_display_override: str | None = None) -> dict:
     """If ``player_display_override`` is set (e.g. ``players.display_name`` from a join), use it as ``player``."""
     disp = (player_display_override or "").strip() or (row.player or "")
+    cmd_raw = row.commanders if isinstance(row.commanders, list) else []
+    commanders_out = _normalize_commanders_list(cmd_raw)
+    arch_out = _normalize_archetype_or_commander_display(row.archetype)
     return {
         "deck_id": row.deck_id,
         "event_id": row.event_id,
@@ -225,8 +229,8 @@ def deck_row_to_dict(row: DeckRow, player_display_override: str | None = None) -
         "date": row.date or "",
         "rank": row.rank or "",
         "player_count": row.player_count or 0,
-        "commanders": row.commanders if isinstance(row.commanders, list) else [],
-        "archetype": row.archetype,
+        "commanders": commanders_out,
+        "archetype": arch_out,
         "mainboard": row.mainboard if isinstance(row.mainboard, list) else [],
         "sideboard": row.sideboard if isinstance(row.sideboard, list) else [],
     }
@@ -234,6 +238,10 @@ def deck_row_to_dict(row: DeckRow, player_display_override: str | None = None) -
 
 def dict_to_deck_row(d: dict, origin: str = ORIGIN_MTGTOP8) -> DeckRow:
     mainboard, sideboard = _normalize_boards(d)
+    arch_raw = d.get("archetype")
+    norm_arch = None
+    if arch_raw is not None and str(arch_raw).strip():
+        norm_arch = _normalize_archetype_or_commander_display(str(arch_raw))
     return DeckRow(
         deck_id=d["deck_id"],
         event_id=_event_id_str(d["event_id"]),
@@ -246,8 +254,8 @@ def dict_to_deck_row(d: dict, origin: str = ORIGIN_MTGTOP8) -> DeckRow:
         date=d.get("date", ""),
         rank=d.get("rank", ""),
         player_count=int(d.get("player_count", 0)),
-        commanders=d.get("commanders") or [],
-        archetype=d.get("archetype"),
+        commanders=_normalize_commanders_list(d.get("commanders")),
+        archetype=norm_arch,
         mainboard=mainboard,
         sideboard=sideboard,
     )
@@ -296,6 +304,19 @@ def upsert_deck(session: Session, d: dict, origin: str = ORIGIN_MTGTOP8) -> Deck
         d["player"] = display
     row = session.query(DeckRow).filter(DeckRow.deck_id == d["deck_id"]).first()
     mainboard, sideboard = _normalize_boards(d)
+
+    cmd_src = d.get("commanders")
+    if cmd_src is None:
+        cmd_src = row.commanders if row else []
+    norm_cmd = _normalize_commanders_list(cmd_src)
+
+    arch_src = d.get("archetype")
+    if arch_src is None and row:
+        arch_src = row.archetype
+    norm_arch = None
+    if arch_src is not None and str(arch_src).strip():
+        norm_arch = _normalize_archetype_or_commander_display(str(arch_src))
+
     if row:
         row.event_id = _event_id_str(d.get("event_id", row.event_id))
         row.format_id = d.get("format_id", row.format_id)
@@ -307,8 +328,8 @@ def upsert_deck(session: Session, d: dict, origin: str = ORIGIN_MTGTOP8) -> Deck
         row.date = d.get("date", row.date)
         row.rank = d.get("rank", row.rank)
         row.player_count = int(d.get("player_count", row.player_count))
-        row.commanders = d.get("commanders") or row.commanders
-        row.archetype = d.get("archetype", row.archetype)
+        row.commanders = norm_cmd
+        row.archetype = norm_arch
         row.mainboard = mainboard
         row.sideboard = sideboard
         _sync_deck_row_player_denorm(session, row)
@@ -325,8 +346,8 @@ def upsert_deck(session: Session, d: dict, origin: str = ORIGIN_MTGTOP8) -> Deck
         date=d.get("date", ""),
         rank=d.get("rank", ""),
         player_count=int(d.get("player_count", 0)),
-        commanders=d.get("commanders") or [],
-        archetype=d.get("archetype"),
+        commanders=norm_cmd,
+        archetype=norm_arch,
         mainboard=mainboard,
         sideboard=sideboard,
     )
@@ -848,14 +869,16 @@ def get_deck_by_event_and_player(session: Session, event_id: str, player: str) -
 
 
 def deck_archetype_for_deck_id(session: Session, deck_id: int | None) -> str | None:
-    """Return trimmed archetype string for a deck, or None if missing / no row."""
+    """Return normalized (front-face) archetype string for a deck, or None if missing / no row."""
     if deck_id is None:
         return None
     row = session.query(DeckRow).filter(DeckRow.deck_id == deck_id).first()
     if not row:
         return None
     s = (row.archetype or "").strip()
-    return s or None
+    if not s:
+        return None
+    return _normalize_archetype_or_commander_display(s) or s
 
 
 def list_matchups_by_deck(session: Session, deck_id: int) -> list[dict]:
@@ -870,13 +893,16 @@ def list_matchups_by_deck(session: Session, deck_id: int) -> list[dict]:
     out: list[dict] = []
     for r, opp_disp in rows:
         opp_name = (opp_disp or "").strip() or (r.opponent_player or "")
+        oa = r.opponent_archetype
+        if oa is not None and str(oa).strip():
+            oa = _normalize_archetype_or_commander_display(str(oa))
         out.append({
             "id": r.id,
             "deck_id": r.deck_id,
             "opponent_player_id": getattr(r, "opponent_player_id", None),
             "opponent_player": opp_name,
             "opponent_deck_id": r.opponent_deck_id,
-            "opponent_archetype": r.opponent_archetype,
+            "opponent_archetype": oa,
             "result": r.result,
             "result_note": r.result_note or "",
             "round": r.round,
@@ -947,12 +973,16 @@ def upsert_matchups_for_deck(
         opponent_deck_id = m.get("opponent_deck_id")
         round_num = m.get("round")
 
+        oa_in = m.get("opponent_archetype")
+        oa_norm = None
+        if oa_in is not None and str(oa_in).strip():
+            oa_norm = _normalize_archetype_or_commander_display(str(oa_in))
         row = MatchupRow(
             deck_id=deck_id,
             opponent_player_id=opp_pid,
             opponent_player=opponent_player or "Bye",
             opponent_deck_id=opponent_deck_id,
-            opponent_archetype=m.get("opponent_archetype"),
+            opponent_archetype=oa_norm,
             result=result,
             result_note=(m.get("result_note") or "").strip() or None,
             round=round_num,
@@ -1212,6 +1242,62 @@ def _front_face_name(name: str) -> str:
     return s
 
 
+def _normalize_archetype_or_commander_display(name: str | None) -> str | None:
+    """Normalize commander / deck archetype strings: ``Fire / Ice`` -> ``Fire // Ice``, then front face only.
+
+    Used for stored and displayed archetype labels and commander names so the matchups matrix and
+    archetype pages aggregate ``X`` and ``X // Y`` together. Does not apply to mainboard/sideboard
+    card lines (split cards must keep both halves).
+    """
+    if name is None:
+        return None
+    t = str(name).strip()
+    if not t:
+        return None
+    if " // " not in t and re.search(r"\s/\s", t):
+        t = re.sub(r"\s+/\s+", " // ", t)
+    if " // " in t:
+        front = t.split(" // ", 1)[0].strip()
+        return front or t
+    return t
+
+
+def archetype_canonical_key(name: str | None) -> str:
+    """Lowercase key for comparing archetype URLs to ``decks.archetype`` after front-face normalization."""
+    n = _normalize_archetype_or_commander_display(name)
+    return (n or "").strip().lower()
+
+
+def normalize_archetype_display(name: str | None) -> str | None:
+    """Public alias for :func:`_normalize_archetype_or_commander_display` (API / scripts)."""
+    return _normalize_archetype_or_commander_display(name)
+
+
+def normalize_commanders_list(raw) -> list[str]:
+    """Public alias for :func:`_normalize_commanders_list` (API / scripts)."""
+    return _normalize_commanders_list(raw)
+
+
+def _normalize_commanders_list(raw) -> list[str]:
+    out: list[str] = []
+    for c in raw or []:
+        if not c:
+            continue
+        ff = _normalize_archetype_or_commander_display(str(c))
+        if ff:
+            out.append(ff)
+    return out
+
+
+def matchup_aggregate_archetype_label(label: str | None) -> str:
+    """Archetype string for matchup summaries: front-face dual cards; empty -> (unknown)."""
+    t = (label or "").strip()
+    if not t:
+        return "(unknown)"
+    u = _normalize_archetype_or_commander_display(t)
+    return u if u else "(unknown)"
+
+
 def _normalize_name_for_lookup(name: str) -> str:
     """Lowercase and strip accents so 'Matias' and 'Matías' match when relating to existing players."""
     if not name or not (name := (name or "").strip()):
@@ -1258,6 +1344,102 @@ def get_or_create_player(session: Session, display_name: str) -> tuple[int, str]
 
 def get_player_by_id(session: Session, player_id: int) -> PlayerRow | None:
     return session.query(PlayerRow).filter(PlayerRow.id == player_id).first()
+
+
+def player_row_exists_in_database(session: Session, player_id: int) -> bool:
+    """True if ``players.id`` exists in the DB after flushing pending work.
+
+    Use this instead of :func:`get_player_by_id` when checking whether a row was
+    removed: ORM queries can still return a pending-deleted instance from the
+    identity map until flush/commit.
+    """
+    session.flush()
+    return (
+        session.connection()
+        .execute(text("SELECT 1 FROM players WHERE id = :id LIMIT 1"), {"id": player_id})
+        .scalar()
+        is not None
+    )
+
+
+def rename_player_display_name(
+    session: Session,
+    player_id: int,
+    new_display_name: str,
+    *,
+    add_alias_for_old_name: bool = True,
+) -> dict[str, int | str | None]:
+    """Update ``players.display_name`` and denormalized ``decks.player``, opponent-facing matchups,
+    and inverse matchup labels (via :func:`sync_matchup_opponent_identity_for_deck`).
+
+    Registers the previous display name as a ``player_aliases`` row pointing at this player so
+    imports and lookups still resolve.
+
+    Raises ``ValueError`` if the player does not exist, if ``new_display_name`` is empty, or if
+    another player already uses that display name (merge players first).
+    """
+    new_display_name = (new_display_name or "").strip()
+    if not new_display_name:
+        raise ValueError("new_display_name is required")
+    row = get_player_by_id(session, player_id)
+    if not row:
+        raise ValueError(f"No player with id={player_id}")
+    old_name = (row.display_name or "").strip()
+    if old_name == new_display_name:
+        return {
+            "old_name": old_name,
+            "new_name": new_display_name,
+            "skipped": True,
+            "decks_updated": 0,
+            "matchups_opponent_field_updated": 0,
+            "inverse_matchup_rows_updated": 0,
+        }
+
+    conflict = (
+        session.query(PlayerRow)
+        .filter(PlayerRow.display_name == new_display_name, PlayerRow.id != player_id)
+        .first()
+    )
+    if conflict:
+        raise ValueError(
+            f"Display name {new_display_name!r} is already used by player_id={conflict.id}; "
+            "merge the duplicate into that player instead of renaming, e.g. "
+            f"python3 -m scripts.merge_players_by_ids --merge-from {player_id} --to {conflict.id} --apply"
+        )
+
+    row.display_name = new_display_name
+    decks_updated = 0
+    inverse_updated = 0
+    for d in session.query(DeckRow).filter(DeckRow.player_id == player_id).all():
+        d.player = new_display_name
+        decks_updated += 1
+        inverse_updated += sync_matchup_opponent_identity_for_deck(
+            session, d.deck_id, player_id, new_display_name
+        )
+
+    opp_rows = (
+        session.query(MatchupRow).filter(MatchupRow.opponent_player_id == player_id).all()
+    )
+    for m in opp_rows:
+        m.opponent_player = new_display_name
+    matchups_opponent_field_updated = len(opp_rows)
+
+    if add_alias_for_old_name and old_name and old_name.lower() != new_display_name.lower():
+        existing = session.query(PlayerAliasRow).filter(PlayerAliasRow.alias == old_name).first()
+        if existing and existing.player_id != player_id:
+            raise ValueError(
+                f"Alias {old_name!r} already points to player_id={existing.player_id}; fix aliases first."
+            )
+        set_player_alias_by_id(session, old_name, player_id)
+
+    return {
+        "old_name": old_name,
+        "new_name": new_display_name,
+        "skipped": False,
+        "decks_updated": decks_updated,
+        "matchups_opponent_field_updated": matchups_opponent_field_updated,
+        "inverse_matchup_rows_updated": inverse_updated,
+    }
 
 
 def resolve_name_to_player_id(session: Session, name: str) -> tuple[int | None, str]:
@@ -1348,7 +1530,8 @@ def merge_players(
     Updates:
     - decks.player_id / decks.player (or delete a deck when ``(event_id, to_player_id)`` already exists —
       e.g. placeholder deck + real deck for same person in one event; matchups cascade with deck delete)
-    - matchups.opponent_player_id / matchups.opponent_player
+    - inverse matchups (``opponent_deck_id`` → this deck) via :func:`sync_matchup_opponent_identity_for_deck`
+    - matchups.opponent_player_id / matchups.opponent_player (where this player was the opponent by id)
     - player_emails (player_id is PK: drops source email if canonical already has one)
     - player_aliases.player_id
     """
@@ -1378,6 +1561,9 @@ def merge_players(
         else:
             d.player_id = to_player_id
             d.player = display
+            sync_matchup_opponent_identity_for_deck(
+                session, d.deck_id, to_player_id, display
+            )
 
     # Matchups where this player is the opponent
     matchups = (
@@ -1419,6 +1605,103 @@ def merge_players(
     old = get_player_by_id(session, from_player_id)
     if old:
         session.delete(old)
+        session.flush()
+
+
+def collect_alias_duplicate_player_merges(
+    session: Session,
+    *,
+    case_insensitive: bool = False,
+) -> list[tuple[int, int, str]]:
+    """
+    For each ``player_aliases`` row (alias string -> ``player_id``), if another ``PlayerRow``
+    exists whose ``display_name`` equals that alias but ``id`` differs from the alias target,
+    return ``(duplicate_player_id, canonical_player_id, alias)`` for :func:`merge_players`.
+
+    Deduplicates ``(duplicate_player_id, canonical_player_id)`` pairs. Empty if none.
+    """
+    from sqlalchemy import func as sa_func
+
+    out: list[tuple[int, int, str]] = []
+    seen: set[tuple[int, int]] = set()
+    for arow in session.query(PlayerAliasRow).all():
+        alias = (arow.alias or "").strip()
+        if not alias:
+            continue
+        target_id = int(arow.player_id)
+        q = session.query(PlayerRow).filter(PlayerRow.id != target_id)
+        if case_insensitive:
+            al = alias.strip().lower()
+            dup = q.filter(
+                sa_func.lower(sa_func.trim(PlayerRow.display_name)) == al,
+            ).first()
+        else:
+            dup = q.filter(PlayerRow.display_name == alias).first()
+        if dup is None:
+            continue
+        key = (dup.id, target_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((dup.id, target_id, alias))
+    return out
+
+
+def list_redundant_player_aliases(
+    session: Session,
+    *,
+    case_insensitive: bool = False,
+) -> list[str]:
+    """
+    Return alias strings for rows where the target player's ``display_name`` already equals the alias
+    (so the ``player_aliases`` row adds no resolution value and can be removed after merges).
+    """
+    out: list[str] = []
+    for arow in session.query(PlayerAliasRow).all():
+        alias = (arow.alias or "").strip()
+        if not alias:
+            continue
+        prow = get_player_by_id(session, arow.player_id)
+        if not prow:
+            continue
+        disp = (prow.display_name or "").strip()
+        same = (
+            disp.casefold() == alias.casefold()
+            if case_insensitive
+            else disp == alias
+        )
+        if same:
+            out.append(alias)
+    return sorted(set(out))
+
+
+def prune_redundant_player_aliases(
+    session: Session,
+    *,
+    case_insensitive: bool = False,
+) -> list[str]:
+    """
+    Delete ``player_aliases`` rows whose alias string matches the linked player's ``display_name``
+    (see :func:`list_redundant_player_aliases`). Returns deleted alias strings.
+    """
+    removed: list[str] = []
+    for arow in list(session.query(PlayerAliasRow).all()):
+        alias = (arow.alias or "").strip()
+        if not alias:
+            continue
+        prow = get_player_by_id(session, arow.player_id)
+        if not prow:
+            continue
+        disp = (prow.display_name or "").strip()
+        same = (
+            disp.casefold() == alias.casefold()
+            if case_insensitive
+            else disp == alias
+        )
+        if same:
+            session.delete(arow)
+            removed.append(alias)
+    return sorted(set(removed))
 
 
 def merge_players_by_names(session: Session, alias: str, canonical: str) -> None:
@@ -1515,11 +1798,11 @@ def list_matchups_with_deck_info(session: Session) -> list[dict]:
         {
             "deck_id": m.deck_id,
             "opponent_deck_id": m.opponent_deck_id,
-            "archetype": (d.archetype or "").strip() or "(unknown)",
+            "archetype": matchup_aggregate_archetype_label(d.archetype),
             "format_id": d.format_id or "",
             "event_id": d.event_id,
             "date": d.date or "",
-            "opponent_archetype": (m.opponent_archetype or "").strip() or "(unknown)",
+            "opponent_archetype": matchup_aggregate_archetype_label(m.opponent_archetype),
             "result": m.result or "loss",
             "result_note": m.result_note or "",
         }
@@ -1588,8 +1871,8 @@ def list_matchups_with_deck_and_players(session: Session) -> list[dict]:
             "opponent_player_id": (p_opp.id if p_opp else None),
             "player": _matchup_row_player_display(p_deck, d.player or ""),
             "opponent_player": _matchup_row_player_display(p_opp, m.opponent_player or ""),
-            "archetype": (d.archetype or "").strip() or "(unknown)",
-            "opponent_archetype": (m.opponent_archetype or "").strip() or "(unknown)",
+            "archetype": matchup_aggregate_archetype_label(d.archetype),
+            "opponent_archetype": matchup_aggregate_archetype_label(m.opponent_archetype),
             "format_id": d.format_id or "",
             "event_id": d.event_id,
             "date": d.date or "",

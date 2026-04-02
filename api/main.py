@@ -442,13 +442,22 @@ def _invalidate_events_cache() -> None:
 
 
 def _normalize_split_cards(decks: list[dict]) -> list[dict]:
-    """Normalize card names in deck dicts (including split cards)."""
+    """Normalize card names in deck dicts (including split cards); archetype/commanders to front-face."""
     for d in decks:
         for section in ("mainboard", "sideboard"):
             cards = d.get(section, [])
             for card in cards:
                 if isinstance(card, dict) and "card" in card:
                     card["card"] = _normalize_card_name(card["card"])
+        if _db is not None:
+            a = d.get("archetype")
+            if a is not None and str(a).strip():
+                nd = _db.normalize_archetype_display(str(a))
+                if nd:
+                    d["archetype"] = nd
+            cmd = d.get("commanders")
+            if isinstance(cmd, list):
+                d["commanders"] = _db.normalize_commanders_list(cmd)
     return decks
 
 
@@ -2810,10 +2819,11 @@ def get_archetype_detail(
     decoded = unquote(archetype_name)
     if (decoded or "").strip().lower() == "(unknown)":
         raise HTTPException(status_code=404, detail="Archetype not found")
+    want_key = _db.archetype_canonical_key(decoded)
     filtered = _filter_decks_for_query(_decks, event_id, event_ids, date_from, date_to)
     filtered = [
         d for d in filtered
-        if ((d.get("archetype") or "(unknown)").strip().lower() == (decoded or "").strip().lower())
+        if _db.archetype_canonical_key(d.get("archetype")) == want_key
     ]
     if not filtered:
         raise HTTPException(status_code=404, detail="Archetype not found or no decks in range")
@@ -2849,8 +2859,9 @@ def get_archetype_detail(
         include_basic_lands=True,
     )
     deck_count_top8 = sum(1 for d in decks if is_top8(d.rank))
+    display_arch = _db.normalize_archetype_display(decoded.strip()) or decoded.strip()
     return {
-        "archetype": decoded,
+        "archetype": display_arch,
         "deck_count": len(decks),
         "deck_count_top8": deck_count_top8,
         "average_analysis": average_analysis,
@@ -2884,26 +2895,26 @@ def put_rank_weights(body: RankWeightsBody, _: str = Depends(require_admin)):
 
 @app.get("/api/v1/settings/matchups-min-matches", dependencies=[Depends(require_admin), Depends(require_database)])
 def get_matchups_min_matches_setting():
-    """Return minimum matches threshold for matchup summary (admin)."""
+    """Legacy stored setting; the Matchups page uses ``GET /matchups/summary?min_matches=`` instead."""
     return {"value": settings_service.get_matchups_min_matches()}
 
 
 @app.put("/api/v1/settings/matchups-min-matches", dependencies=[Depends(require_admin), Depends(require_database)])
 def put_matchups_min_matches_setting(body: MatchupsMinMatchesBody):
-    """Set minimum matches threshold for matchup summary (admin)."""
+    """Legacy stored setting (e.g. scripts); summary endpoints do not read this value."""
     n = settings_service.set_matchups_min_matches(body.value)
     return {"value": n}
 
 
 @app.get("/api/v1/settings/matchups-players-min-matches", dependencies=[Depends(require_admin), Depends(require_database)])
 def get_matchups_players_min_matches_setting():
-    """Return minimum matches threshold for player matchup summary (admin)."""
+    """Legacy stored setting; the Matchups page uses ``GET /matchups/players-summary?min_matches=`` instead."""
     return {"value": settings_service.get_matchups_players_min_matches()}
 
 
 @app.put("/api/v1/settings/matchups-players-min-matches", dependencies=[Depends(require_admin), Depends(require_database)])
 def put_matchups_players_min_matches_setting(body: MatchupsMinMatchesBody):
-    """Set minimum matches threshold for player matchup summary (admin)."""
+    """Legacy stored setting (e.g. scripts); players-summary does not read this value."""
     n = settings_service.set_matchups_players_min_matches(body.value)
     return {"value": n}
 
@@ -3270,16 +3281,22 @@ def get_matchups_summary(
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     archetype: list[str] | None = Query(None, description="Filter by archetype(s); repeated param per name; include matchups where both deck and opponent archetype are in this list"),
+    min_matches: int = Query(0, ge=0, le=1_000_000, description="Minimum aggregated matches per archetype pair to include in list and matrix"),
+    include_opponents_below_min: bool = Query(
+        False,
+        description="When min_matches > 0, still include pairs with at least one match but fewer than min_matches (matrix + list)",
+    ),
 ):
-    """Aggregated matchup summary by archetype. Optional filters; respects matchups_min_matches setting.
+    """Aggregated matchup summary by archetype. Optional filters.
 
     Query parameters:
     - format_id: filter by format (e.g. EDH)
     - event_ids: comma-separated event IDs
     - date_from/date_to: DD/MM/YY range filter
+    - min_matches: hide pairs with fewer than this many aggregated matches (default 0)
+    - include_opponents_below_min: if true and min_matches > 0, also show pairs with 1 .. min_matches-1 games
     """
     with _db.session_scope() as session:
-        min_matches = _db.get_matchups_min_matches(session)
         rows = _db.list_matchups_with_deck_info(session)
 
     event_id_set = None
@@ -3401,9 +3418,18 @@ def get_matchups_summary(
         is_id = _is_intentional_draw_result(r.get("result") or "")
         add_to_agg(arch, opp, wins, losses, draws, is_id, matches=1)
 
+    def _pair_included_in_summary(mcount: int) -> bool:
+        if mcount <= 0:
+            return False
+        if min_matches <= 0:
+            return True
+        if mcount >= min_matches:
+            return True
+        return include_opponents_below_min
+
     list_out = []
     for (_arch_lower, _opp_lower), v in agg.items():
-        if v["matches"] < min_matches:
+        if not _pair_included_in_summary(v["matches"]):
             continue
         wr = (v["wins"] + 0.5 * v["draws"]) / v["matches"] if v["matches"] else 0
         list_out.append({
@@ -3427,7 +3453,7 @@ def get_matchups_summary(
                 continue
             key = (a.lower(), b.lower())
             v = agg.get(key, {"matches": 0, "wins": 0, "draws": 0})
-            if v["matches"] < min_matches:
+            if not _pair_included_in_summary(v["matches"]):
                 row.append(None)
                 continue
             wr = (v["wins"] + 0.5 * v["draws"]) / v["matches"] if v["matches"] else None
@@ -3439,6 +3465,7 @@ def get_matchups_summary(
         "archetypes": archetypes_sorted,
         "matrix": matrix,
         "min_matches": min_matches,
+        "include_opponents_below_min": include_opponents_below_min,
     }
 
 
@@ -3449,10 +3476,14 @@ def get_matchups_players_summary(
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     player: list[str] | None = Query(None),
+    min_matches: int = Query(0, ge=0, le=1_000_000, description="Minimum aggregated matches per player pair to include in list and matrix"),
+    include_opponents_below_min: bool = Query(
+        False,
+        description="When min_matches > 0, still include pairs with at least one match but fewer than min_matches (matrix + list)",
+    ),
 ):
-    """Aggregated matchup summary by player. Optional filters; respects matchups_players_min_matches setting."""
+    """Aggregated matchup summary by player. Optional filters."""
     with _db.session_scope() as session:
-        min_matches = _db.get_matchups_players_min_matches(session)
         rows = _db.list_matchups_with_deck_and_players(session)
 
     event_id_set = None
@@ -3525,9 +3556,18 @@ def get_matchups_players_summary(
     def norm_player(name: str) -> str:
         return canonical_player.get((name or "").lower(), name or "(unknown)")
 
+    def _player_pair_included(mcount: int) -> bool:
+        if mcount <= 0:
+            return False
+        if min_matches <= 0:
+            return True
+        if mcount >= min_matches:
+            return True
+        return include_opponents_below_min
+
     players_list_out = []
     for (_pl_lower, _op_lower), v in agg.items():
-        if v["matches"] < min_matches:
+        if not _player_pair_included(v["matches"]):
             continue
         wr = (v["wins"] + 0.5 * v["draws"]) / v["matches"] if v["matches"] else 0
         players_list_out.append({
@@ -3553,7 +3593,7 @@ def get_matchups_players_summary(
                 continue
             key = (pa.lower(), pb.lower())
             v = agg.get(key, {"matches": 0, "wins": 0, "draws": 0})
-            if v["matches"] < min_matches:
+            if not _player_pair_included(v["matches"]):
                 row.append(None)
                 continue
             wr = (v["wins"] + 0.5 * v["draws"]) / v["matches"] if v["matches"] else None
@@ -3594,7 +3634,7 @@ def get_matchups_players_summary(
                         continue
                     key = (pa.lower(), pb.lower())
                     v = agg.get(key, {"matches": 0, "wins": 0, "draws": 0})
-                    if v["matches"] < min_matches:
+                    if not _player_pair_included(v["matches"]):
                         row.append(None)
                         continue
                     wr = (v["wins"] + 0.5 * v["draws"]) / v["matches"] if v["matches"] else None
@@ -3617,6 +3657,7 @@ def get_matchups_players_summary(
         "players_matrix": players_matrix,
         "matchups_list": matchups_list_out,
         "min_matches": min_matches,
+        "include_opponents_below_min": include_opponents_below_min,
     }
 
 
