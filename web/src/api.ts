@@ -820,12 +820,28 @@ export interface PlayerDetail {
   has_email?: boolean
 }
 
-export async function getPlayerDetail(playerName: string): Promise<PlayerDetail> {
-  return fetchApi(`/players/${encodeURIComponent(playerName)}`)
+function dateRangeQuery(dateFrom?: string | null, dateTo?: string | null): string {
+  const params = new URLSearchParams()
+  if (dateFrom) params.set('date_from', dateFrom)
+  if (dateTo) params.set('date_to', dateTo)
+  const q = params.toString()
+  return q ? `?${q}` : ''
 }
 
-export async function getPlayerDetailById(playerId: number): Promise<PlayerDetail> {
-  return fetchApi(`/players/id/${playerId}`)
+export async function getPlayerDetail(
+  playerName: string,
+  dateFrom?: string | null,
+  dateTo?: string | null,
+): Promise<PlayerDetail> {
+  return fetchApi(`/players/${encodeURIComponent(playerName)}${dateRangeQuery(dateFrom, dateTo)}`)
+}
+
+export async function getPlayerDetailById(
+  playerId: number,
+  dateFrom?: string | null,
+  dateTo?: string | null,
+): Promise<PlayerDetail> {
+  return fetchApi(`/players/id/${playerId}${dateRangeQuery(dateFrom, dateTo)}`)
 }
 
 export interface PlayerAnalysisEvent {
@@ -925,12 +941,20 @@ export interface PlayerAnalysis {
   highlights: PlayerAnalysisHighlights
 }
 
-export async function getPlayerAnalysisById(playerId: number): Promise<PlayerAnalysis> {
-  return fetchApi(`/players/id/${playerId}/analysis`)
+export async function getPlayerAnalysisById(
+  playerId: number,
+  dateFrom?: string | null,
+  dateTo?: string | null,
+): Promise<PlayerAnalysis> {
+  return fetchApi(`/players/id/${playerId}/analysis${dateRangeQuery(dateFrom, dateTo)}`)
 }
 
-export async function getPlayerAnalysisByName(playerName: string): Promise<PlayerAnalysis> {
-  return fetchApi(`/players/${encodeURIComponent(playerName)}/analysis`)
+export async function getPlayerAnalysisByName(
+  playerName: string,
+  dateFrom?: string | null,
+  dateTo?: string | null,
+): Promise<PlayerAnalysis> {
+  return fetchApi(`/players/${encodeURIComponent(playerName)}/analysis${dateRangeQuery(dateFrom, dateTo)}`)
 }
 
 export async function getPlayerAliases(): Promise<{ aliases: Record<string, string> }> {

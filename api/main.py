@@ -4160,25 +4160,34 @@ def get_players(
     return {"players": players}
 
 
-@app.get("/api/v1/players/id/{player_id:int}")
-def get_player_detail_by_id(player_id: int):
-    """Player stats and their decks by stable player_id."""
-    player_decks = [d for d in _decks if d.get("player_id") == player_id]
-    if not player_decks:
-        raise HTTPException(status_code=404, detail="Player not found")
-    display = _normalize_player((player_decks[0].get("player") or "").strip())
-    decks = [Deck.from_dict(d) for d in player_decks]
+def _empty_player_stats() -> dict:
+    return {"wins": 0, "top2": 0, "top4": 0, "top8": 0, "points": 0.0, "deck_count": 0}
+
+
+def _player_detail_payload(
+    all_player_decks: list[dict],
+    display: str,
+    player_id: int | None,
+    date_from: str | None,
+    date_to: str | None,
+) -> dict:
+    """Build the shared payload for both /players/id/{id} and /players/{name} endpoints.
+
+    When date filters are provided, stats are computed on the filtered subset. If
+    the player exists but has no decks in range, returns zero-valued stats with
+    an empty decks list (instead of 404).
+    """
+    player_decks = _filter_decks_by_date(all_player_decks, date_from, date_to)
     rank_weights = settings_service.get_rank_weights()
-    stats_list = player_leaderboard(decks, rank_weights=rank_weights)
-    if not stats_list:
-        raise HTTPException(status_code=404, detail="Player not found")
-    stat = stats_list[0]
+    decks = [Deck.from_dict(d) for d in player_decks]
+    stats_list = player_leaderboard(decks, rank_weights=rank_weights) if decks else []
+    stat = stats_list[0] if stats_list else _empty_player_stats()
     deck_summaries = [
         {"deck_id": d.get("deck_id"), "name": d.get("name"), "event_name": d.get("event_name"), "date": d.get("date"), "rank": d.get("rank")}
         for d in player_decks
     ]
     deck_summaries.sort(key=lambda x: _deck_sort_key(x))
-    out = {
+    return {
         "player": display,
         "player_id": player_id,
         "wins": stat["wins"],
@@ -4189,6 +4198,20 @@ def get_player_detail_by_id(player_id: int):
         "deck_count": stat["deck_count"],
         "decks": deck_summaries,
     }
+
+
+@app.get("/api/v1/players/id/{player_id:int}")
+def get_player_detail_by_id(
+    player_id: int,
+    date_from: str | None = Query(None, description="Filter from date (DD/MM/YY)"),
+    date_to: str | None = Query(None, description="Filter to date (DD/MM/YY)"),
+):
+    """Player stats and their decks by stable player_id. Optional date range."""
+    all_player_decks = [d for d in _decks if d.get("player_id") == player_id]
+    if not all_player_decks:
+        raise HTTPException(status_code=404, detail="Player not found")
+    display = _normalize_player((all_player_decks[0].get("player") or "").strip())
+    out = _player_detail_payload(all_player_decks, display, player_id, date_from, date_to)
     if _database_available():
         with _db.session_scope() as session:
             prow = _db.get_player_by_id(session, player_id)
@@ -4218,8 +4241,12 @@ def _resolve_player_name_to_canonical(name: str) -> str:
 
 
 @app.get("/api/v1/players/id/{player_id:int}/analysis", response_model=PlayerAnalysisResponse)
-def get_player_analysis_by_id(player_id: int):
-    """Aggregated analytics for the player dashboard by stable player_id."""
+def get_player_analysis_by_id(
+    player_id: int,
+    date_from: str | None = Query(None, description="Filter from date (DD/MM/YY)"),
+    date_to: str | None = Query(None, description="Filter to date (DD/MM/YY)"),
+):
+    """Aggregated analytics for the player dashboard by stable player_id. Optional date range."""
     player_decks = [d for d in _decks if d.get("player_id") == player_id]
     if not player_decks:
         raise HTTPException(status_code=404, detail="Player not found")
@@ -4232,12 +4259,16 @@ def get_player_analysis_by_id(player_id: int):
                     display = (prow.display_name or "").strip()
         except Exception:
             logger.exception("DB lookup failed for player analysis display name")
-    return _player_analysis_cached(player_decks, display, player_id)
+    return _player_analysis_cached(player_decks, display, player_id, date_from, date_to)
 
 
 @app.get("/api/v1/players/{player_name:path}/analysis", response_model=PlayerAnalysisResponse)
-def get_player_analysis_by_name(player_name: str):
-    """Aggregated analytics for the player dashboard by name (alias-resolved)."""
+def get_player_analysis_by_name(
+    player_name: str,
+    date_from: str | None = Query(None, description="Filter from date (DD/MM/YY)"),
+    date_to: str | None = Query(None, description="Filter to date (DD/MM/YY)"),
+):
+    """Aggregated analytics for the player dashboard by name (alias-resolved). Optional date range."""
     name = unquote(player_name).strip()
     # If the name ends with "/analysis" because of path matching quirks, strip it.
     if name.endswith("/analysis"):
@@ -4256,41 +4287,24 @@ def get_player_analysis_by_name(player_name: str):
                     display = (prow.display_name or "").strip()
         except Exception:
             logger.exception("DB lookup failed for player analysis display name")
-    return _player_analysis_cached(player_decks, display, pid)
+    return _player_analysis_cached(player_decks, display, pid, date_from, date_to)
 
 
 @app.get("/api/v1/players/{player_name:path}")
-def get_player_detail(player_name: str):
+def get_player_detail(
+    player_name: str,
+    date_from: str | None = Query(None, description="Filter from date (DD/MM/YY)"),
+    date_to: str | None = Query(None, description="Filter to date (DD/MM/YY)"),
+):
     """Player stats and their decks. Merges aliased players (e.g. Pablo Tomas Pesci = Tomas Pesci). Accent-insensitive: matias finds Matías."""
     name = unquote(player_name).strip()
     canonical = _resolve_player_name_to_canonical(name)
-    player_decks = [d for d in _decks if _normalize_player(d.get("player") or "") == canonical]
-    if not player_decks:
+    all_player_decks = [d for d in _decks if _normalize_player(d.get("player") or "") == canonical]
+    if not all_player_decks:
         raise HTTPException(status_code=404, detail="Player not found")
-    decks = [Deck.from_dict(d) for d in player_decks]
-    rank_weights = settings_service.get_rank_weights()
-    stats_list = player_leaderboard(decks, rank_weights=rank_weights)
-    if not stats_list:
-        raise HTTPException(status_code=404, detail="Player not found")
-    stat = stats_list[0]
-    deck_summaries = [
-        {"deck_id": d.get("deck_id"), "name": d.get("name"), "event_name": d.get("event_name"), "date": d.get("date"), "rank": d.get("rank")}
-        for d in player_decks
-    ]
-    deck_summaries.sort(key=lambda x: _deck_sort_key(x))
-    pid = player_decks[0].get("player_id") if player_decks else None
+    pid = all_player_decks[0].get("player_id") if all_player_decks else None
     display = _normalize_player(canonical)
-    out = {
-        "player": display,
-        "player_id": pid,
-        "wins": stat["wins"],
-        "top2": stat["top2"],
-        "top4": stat["top4"],
-        "top8": stat["top8"],
-        "points": stat["points"],
-        "deck_count": stat["deck_count"],
-        "decks": deck_summaries,
-    }
+    out = _player_detail_payload(all_player_decks, display, pid, date_from, date_to)
     if _database_available():
         with _db.session_scope() as session:
             if pid is not None:
@@ -4783,16 +4797,25 @@ def _player_analysis_cached(
     player_deck_dicts: list[dict],
     canonical_display: str,
     player_id: int | None,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> dict:
     key = (
         _player_analysis_cache_signature(),
         player_id if player_id is not None else canonical_display,
+        date_from or "",
+        date_to or "",
     )
     cached = _player_analysis_cache.get(key)
     if cached is not None:
         return cached
+    # Apply date filter consistently: the per_event rows, distributions, metagame
+    # comparison and leaderboard-rank history are all computed relative to the
+    # selected window so the dashboard stays internally consistent.
+    filtered_player = _filter_decks_by_date(player_deck_dicts, date_from, date_to)
+    filtered_all = _filter_decks_by_date(_decks, date_from, date_to)
     result = _build_player_analysis(
-        player_deck_dicts, _decks, canonical_display, player_id,
+        filtered_player, filtered_all, canonical_display, player_id,
     )
     # Bound cache size to avoid unbounded memory growth.
     if len(_player_analysis_cache) > 128:
