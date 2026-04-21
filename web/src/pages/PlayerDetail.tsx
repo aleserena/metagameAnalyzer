@@ -4,35 +4,40 @@ import toast from 'react-hot-toast'
 import { getPlayerDetail, getPlayerDetailById, getPlayerAnalysisById, getPlayerAnalysisByName, getSimilarPlayers, addPlayerAlias, getPlayerAliases, putPlayerEmail, sendPlayerMissingDeckLinks } from '../api'
 import type { PlayerAnalysis, PlayerDetail as PlayerDetailData } from '../api'
 import { useAuth } from '../contexts/AuthContext'
+import { useEventMetadata } from '../hooks/useEventMetadata'
 import { useFetch } from '../hooks/useFetch'
 import Modal from '../components/Modal'
 import PageError from '../components/PageError'
 import PageSkeleton from '../components/PageSkeleton'
 import PlayerAnalysisCharts from '../components/player/PlayerAnalysisCharts'
-import { reportError } from '../utils'
+import { getDateRangeFromPreset, reportError } from '../utils'
+import type { DatePreset } from '../utils'
 
 export default function PlayerDetail() {
   const { playerId: playerIdParam } = useParams<{ playerId: string }>()
   const navigate = useNavigate()
   const { user } = useAuth()
+  const { maxDate, lastEventDate, error: eventMetadataError } = useEventMetadata()
+  const [dateFrom, setDateFrom] = useState<string | null>(null)
+  const [dateTo, setDateTo] = useState<string | null>(null)
   const id = playerIdParam != null ? parseInt(playerIdParam, 10) : NaN
   const isId = !Number.isNaN(id) && String(id) === playerIdParam
   const { data, loading, error, refetch } = useFetch<PlayerDetailData>(
     () => {
       if (!playerIdParam) return Promise.reject(new Error('Missing player'))
-      if (isId) return getPlayerDetailById(id)
-      return getPlayerDetail(decodeURIComponent(playerIdParam))
+      if (isId) return getPlayerDetailById(id, dateFrom, dateTo)
+      return getPlayerDetail(decodeURIComponent(playerIdParam), dateFrom, dateTo)
     },
-    [playerIdParam ?? '', isId, id]
+    [playerIdParam ?? '', isId, id, dateFrom, dateTo]
   )
   const analysisKey = data?.player_id != null ? `id:${data.player_id}` : data?.player ? `name:${data.player}` : ''
   const { data: analysis } = useFetch<PlayerAnalysis | null>(
     () => {
-      if (data?.player_id != null) return getPlayerAnalysisById(data.player_id)
-      if (data?.player) return getPlayerAnalysisByName(data.player)
+      if (data?.player_id != null) return getPlayerAnalysisById(data.player_id, dateFrom, dateTo)
+      if (data?.player) return getPlayerAnalysisByName(data.player, dateFrom, dateTo)
       return Promise.resolve(null)
     },
-    [analysisKey],
+    [analysisKey, dateFrom, dateTo],
   )
   const [similarPlayers, setSimilarPlayers] = useState<string[]>([])
   const [aliases, setAliases] = useState<Record<string, string>>({})
@@ -50,6 +55,16 @@ export default function PlayerDetail() {
   useEffect(() => {
     if (error) toast.error(reportError(new Error(error)))
   }, [error])
+
+  useEffect(() => {
+    if (eventMetadataError) toast.error(reportError(new Error(eventMetadataError)))
+  }, [eventMetadataError])
+
+  const setPreset = (preset: DatePreset) => {
+    const { dateFrom: from, dateTo: to } = getDateRangeFromPreset(maxDate, lastEventDate, preset)
+    setDateFrom(from)
+    setDateTo(to)
+  }
 
   useEffect(() => {
     if (loading || error || data || !playerIdParam) return
@@ -103,7 +118,33 @@ export default function PlayerDetail() {
         Back
       </button>
 
-      <h1 className="page-title">{data.player}</h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
+        <h1 className="page-title" style={{ margin: 0 }}>{data.player}</h1>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Date range:</span>
+          <button type="button" className="btn" style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }} onClick={() => setPreset('all')}>
+            All time
+          </button>
+          <button type="button" className="btn" style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }} onClick={() => setPreset('thisYear')}>
+            This year
+          </button>
+          <button type="button" className="btn" style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }} onClick={() => setPreset('6months')}>
+            6 months
+          </button>
+          <button type="button" className="btn" style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }} onClick={() => setPreset('2months')}>
+            2 months
+          </button>
+          <button type="button" className="btn" style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }} onClick={() => setPreset('month')}>
+            Last month
+          </button>
+          <button type="button" className="btn" style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }} onClick={() => setPreset('2weeks')}>
+            Last 2 weeks
+          </button>
+          <button type="button" className="btn" style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }} onClick={() => setPreset('lastEvent')}>
+            Last event
+          </button>
+        </div>
+      </div>
 
       <div className="stat-card" style={{ marginBottom: '1.5rem' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: '1rem' }}>

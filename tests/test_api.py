@@ -1068,3 +1068,84 @@ def test_player_analysis_accepts_string_event_id(client):
     assert r.status_code == 200
     event_ids = [e["event_id"] for e in r.json()["per_event"]]
     assert "m1" in event_ids
+
+
+def test_player_detail_by_id_respects_date_range(client):
+    """/players/id/{id} stats and decks list are filtered to the date window."""
+    api_main._decks = _analysis_fixture_decks()
+    # Narrow to just Feb 2025 (only one of the three decks -> Event B / 15/02/25)
+    with patch.object(api_main, "_database_available", return_value=False):
+        r = client.get("/api/v1/players/id/9001?date_from=01/02/25&date_to=28/02/25")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["player_id"] == 9001
+    assert data["deck_count"] == 1
+    dates = [d["date"] for d in data["decks"]]
+    assert dates == ["15/02/25"]
+    # Top-8 count matches the single in-range deck (rank 3-4)
+    assert data["top8"] == 1
+    assert data["top2"] == 0
+    assert data["wins"] == 0
+
+
+def test_player_detail_by_name_respects_date_range(client):
+    api_main._decks = _analysis_fixture_decks()
+    with patch.object(api_main, "_database_available", return_value=False):
+        r = client.get("/api/v1/players/Target?date_from=01/03/25&date_to=31/03/25")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["deck_count"] == 1
+    assert [d["date"] for d in data["decks"]] == ["20/03/25"]
+
+
+def test_player_detail_existing_player_empty_window_returns_zeros(client):
+    """When a known player has no decks in the window, return zero stats (not 404)."""
+    api_main._decks = _analysis_fixture_decks()
+    with patch.object(api_main, "_database_available", return_value=False):
+        r = client.get("/api/v1/players/id/9001?date_from=01/01/30&date_to=31/12/30")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["player_id"] == 9001
+    assert data["deck_count"] == 0
+    assert data["wins"] == 0 and data["top8"] == 0
+    assert data["decks"] == []
+
+
+def test_player_analysis_respects_date_range(client):
+    """Analysis endpoint filters per_event and leaderboard history to the window."""
+    api_main._decks = _analysis_fixture_decks()
+    with patch.object(api_main, "_database_available", return_value=False):
+        r = client.get(
+            "/api/v1/players/id/9001/analysis?date_from=01/02/25&date_to=31/03/25"
+        )
+    assert r.status_code == 200
+    data = r.json()
+    dates = [e["date"] for e in data["per_event"]]
+    assert dates == ["15/02/25", "20/03/25"]
+    # Leaderboard history is recomputed over filtered window (one snapshot per player's event date)
+    lb_dates = [p["date"] for p in data["leaderboard_history"]]
+    assert lb_dates == ["15/02/25", "20/03/25"]
+
+
+def test_player_analysis_date_range_empty_window(client):
+    """Known player with no decks in window still returns a valid (empty) analysis shape."""
+    api_main._decks = _analysis_fixture_decks()
+    with patch.object(api_main, "_database_available", return_value=False):
+        r = client.get(
+            "/api/v1/players/id/9001/analysis?date_from=01/01/30&date_to=31/12/30"
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["per_event"] == []
+    assert data["leaderboard_history"] == []
+    assert data["archetype_distribution"] == []
+
+
+def test_player_analysis_by_name_date_range(client):
+    api_main._decks = _analysis_fixture_decks()
+    with patch.object(api_main, "_database_available", return_value=False):
+        r = client.get(
+            "/api/v1/players/Target/analysis?date_from=01/03/25&date_to=31/03/25"
+        )
+    assert r.status_code == 200
+    assert [e["date"] for e in r.json()["per_event"]] == ["20/03/25"]
