@@ -228,6 +228,235 @@ def test_get_archetype_detail_200(client, sample_decks):
     assert isinstance(data["top_cards_main"], list)
 
 
+def _trends_decks() -> list[dict]:
+    """Build decks spanning multiple events/dates for card-trends tests.
+
+    Archetype "Trend Deck":
+      - Older (events 100, 101, 102; Jan–Feb) play OldCard heavily.
+      - Recent (event 200; Apr) drops OldCard entirely and plays NewCard.
+    """
+    base = {
+        "format_id": "EDH",
+        "name": "Trend",
+        "player_count": 8,
+        "sideboard": [],
+        "commanders": [],
+        "archetype": "Trend Deck",
+    }
+
+    def mk(deck_id: int, event_id: int, date: str, mainboard: list[dict]) -> dict:
+        return {
+            **base,
+            "deck_id": deck_id,
+            "event_id": event_id,
+            "date": date,
+            "rank": "1",
+            "player": f"P{deck_id}",
+            "event_name": f"Event {event_id}",
+            "mainboard": mainboard,
+        }
+
+    old_main = [
+        {"qty": 4, "card": "OldCard"},
+        {"qty": 4, "card": "StapleCard"},
+    ]
+    new_main = [
+        {"qty": 4, "card": "NewCard"},
+        {"qty": 4, "card": "StapleCard"},
+    ]
+    return [
+        mk(1001, 100, "01/01/26", old_main),
+        mk(1002, 100, "01/01/26", old_main),
+        mk(1003, 101, "15/01/26", old_main),
+        mk(1004, 101, "15/01/26", old_main),
+        mk(1005, 102, "01/02/26", old_main),
+        mk(1006, 102, "01/02/26", old_main),
+        mk(1007, 200, "01/04/26", new_main),
+        mk(1008, 200, "01/04/26", new_main),
+    ]
+
+
+def test_archetype_card_trends_events_mode(client):
+    """recency_mode=events splits on last N distinct event IDs and flags new/legacy cards."""
+    api_main._decks = _trends_decks()
+    r = client.get(
+        "/api/v1/archetypes/Trend%20Deck/card-trends",
+        params={"recency_mode": "events", "recency_value": 1, "min_recent_play_rate": 50, "max_older_play_rate": 10},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["archetype"] == "Trend Deck"
+    assert data["recent"]["event_count"] == 1
+    assert data["recent"]["deck_count"] == 2
+    assert data["older"]["event_count"] == 3
+    assert data["older"]["deck_count"] == 6
+    new_names = [c["card"] for c in data["new_cards"]]
+    legacy_names = [c["card"] for c in data["legacy_cards"]]
+    assert "NewCard" in new_names
+    assert "OldCard" in legacy_names
+    assert "StapleCard" not in new_names
+    assert "StapleCard" not in legacy_names
+
+
+def test_archetype_card_trends_days_mode(client):
+    """recency_mode=days splits on date window."""
+    api_main._decks = _trends_decks()
+    r = client.get(
+        "/api/v1/archetypes/Trend%20Deck/card-trends",
+        params={"recency_mode": "days", "recency_value": 30, "min_recent_play_rate": 50, "max_older_play_rate": 10},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["recent"]["deck_count"] == 2  # only the April decks within 30 days of max
+    assert data["older"]["deck_count"] == 6
+    assert any(c["card"] == "NewCard" for c in data["new_cards"])
+    assert any(c["card"] == "OldCard" for c in data["legacy_cards"])
+
+
+def test_archetype_card_trends_ratio_mode(client):
+    """recency_mode=ratio splits the chronologically-sorted decks by percentage."""
+    api_main._decks = _trends_decks()
+    r = client.get(
+        "/api/v1/archetypes/Trend%20Deck/card-trends",
+        params={"recency_mode": "ratio", "recency_value": 25, "min_recent_play_rate": 50, "max_older_play_rate": 10},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["recent"]["deck_count"] == 2  # ceil(8 * 0.25) = 2
+    assert data["older"]["deck_count"] == 6
+    assert any(c["card"] == "NewCard" for c in data["new_cards"])
+
+
+def test_archetype_card_trends_custom_mode(client):
+    """recency_mode=custom uses recent_from date."""
+    api_main._decks = _trends_decks()
+    r = client.get(
+        "/api/v1/archetypes/Trend%20Deck/card-trends",
+        params={"recency_mode": "custom", "recent_from": "01/03/26", "min_recent_play_rate": 50, "max_older_play_rate": 10},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["recent"]["deck_count"] == 2
+    assert data["older"]["deck_count"] == 6
+
+
+def test_archetype_card_trends_custom_requires_dates(client):
+    """recency_mode=custom without recent_from or recent_to returns 400."""
+    api_main._decks = _trends_decks()
+    r = client.get(
+        "/api/v1/archetypes/Trend%20Deck/card-trends",
+        params={"recency_mode": "custom"},
+    )
+    assert r.status_code == 400
+
+
+def test_archetype_card_trends_empty_older_warning(client):
+    """When recency covers all events, the response includes a warning and empty legacy list."""
+    api_main._decks = _trends_decks()
+    r = client.get(
+        "/api/v1/archetypes/Trend%20Deck/card-trends",
+        params={"recency_mode": "events", "recency_value": 99},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["older"]["deck_count"] == 0
+    assert data["warning"]
+    assert data["legacy_cards"] == []
+
+
+def test_archetype_card_trends_unknown_404(client):
+    """Unknown archetype returns 404."""
+    r = client.get(
+        "/api/v1/archetypes/NonExistentArchetype/card-trends",
+        params={"recency_mode": "events", "recency_value": 3},
+    )
+    assert r.status_code == 404
+
+
+def test_archetype_detail_includes_top_players_and_typical_list(client):
+    """GET /api/v1/archetypes/{name} now includes top_players and typical_list buckets."""
+    api_main._decks = _trends_decks()
+    r = client.get("/api/v1/archetypes/Trend%20Deck")
+    assert r.status_code == 200
+    data = r.json()
+    assert "top_players" in data
+    assert isinstance(data["top_players"], list)
+    # 8 distinct players across trend decks
+    assert len(data["top_players"]) >= 1
+    assert all("player" in p and "deck_count" in p for p in data["top_players"])
+    assert "typical_list" in data
+    tl = data["typical_list"]
+    assert set(tl.keys()) == {"core", "staple", "flex", "tech"}
+    # StapleCard is in 100% of decks at 4 copies -> should land in core
+    core_cards = [e["card"] for e in tl["core"]]
+    assert "StapleCard" in core_cards
+
+
+def test_archetype_detail_mana_pips_by_color(client):
+    """average_analysis.mana_pips_by_color is present and parses colored pips correctly."""
+    decks = [{
+        "deck_id": 2001,
+        "event_id": 300,
+        "date": "10/03/26",
+        "rank": "1",
+        "player": "MP1",
+        "event_name": "Pip Event",
+        "format_id": "EDH",
+        "name": "Pip Test",
+        "player_count": 8,
+        "sideboard": [],
+        "commanders": [],
+        "archetype": "Pip Deck",
+        "mainboard": [
+            {"qty": 4, "card": "Lightning Bolt"},
+            {"qty": 4, "card": "Counterspell"},
+            {"qty": 20, "card": "Mountain"},
+        ],
+    }]
+    api_main._decks = decks
+
+    def fake_lookup(names):
+        meta = {
+            "Lightning Bolt": {"name": "Lightning Bolt", "mana_cost": "{R}", "cmc": 1, "type_line": "Instant", "colors": ["R"], "color_identity": ["R"]},
+            "Counterspell": {"name": "Counterspell", "mana_cost": "{U}{U}", "cmc": 2, "type_line": "Instant", "colors": ["U"], "color_identity": ["U"]},
+            "Mountain": {"name": "Mountain", "mana_cost": "", "cmc": 0, "type_line": "Basic Land — Mountain", "colors": [], "color_identity": ["R"]},
+        }
+        return {n: meta.get(n, {}) for n in names}
+
+    with patch("api.main.lookup_cards", side_effect=fake_lookup):
+        r = client.get("/api/v1/archetypes/Pip%20Deck")
+    assert r.status_code == 200
+    pips = r.json()["average_analysis"]["mana_pips_by_color"]
+    # 4 bolts = 4 red pips, 4 counterspells = 8 blue pips, Mountain is land (ignored)
+    assert pips["R"] == 4.0
+    assert pips["U"] == 8.0
+    assert pips["W"] == 0.0
+
+
+def test_archetype_weekly_stats_basic(client):
+    """weekly-stats returns one row per ISO week with archetype and global counts."""
+    api_main._decks = _trends_decks()
+    r = client.get("/api/v1/archetypes/Trend%20Deck/weekly-stats")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["archetype"] == "Trend Deck"
+    weeks = data["weeks"]
+    assert len(weeks) >= 3
+    assert all({"week", "week_start", "archetype_decks", "total_decks", "share_pct", "top8_rate_pct"}.issubset(w.keys()) for w in weeks)
+    # All decks are this archetype, so share should be 100% in every week.
+    for w in weeks:
+        assert w["share_pct"] == 100.0
+        assert w["archetype_decks"] == w["total_decks"]
+    # Totals across weeks equal total deck count.
+    assert sum(w["archetype_decks"] for w in weeks) == 8
+
+
+def test_archetype_weekly_stats_unknown_404(client):
+    """Unknown archetype returns 404."""
+    r = client.get("/api/v1/archetypes/NonExistentArchetype/weekly-stats")
+    assert r.status_code == 404
+
+
 def test_get_metagame_structure(client):
     """GET /api/v1/metagame returns structure with top_cards_main, commander_distribution."""
     r = client.get("/api/v1/metagame")

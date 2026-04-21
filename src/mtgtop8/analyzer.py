@@ -529,6 +529,8 @@ def archetype_aggregate_analysis(
             type_agg[t] = type_agg.get(t, 0) + count
     type_distribution = {t: round(type_agg[t] / n, 1) for t in sorted(type_agg.keys())}
 
+    mana_pips_by_color = mana_pips_by_color_avg(decks, card_metadata)
+
     return {
         "mana_curve": mana_curve,
         "mana_curve_permanent": mana_curve_permanent,
@@ -536,7 +538,139 @@ def archetype_aggregate_analysis(
         "color_distribution": color_distribution,
         "lands_distribution": lands_distribution,
         "type_distribution": type_distribution,
+        "mana_pips_by_color": mana_pips_by_color,
     }
+
+
+_PIP_RE = None
+
+
+def _count_color_pips(mana_cost: str) -> dict[str, float]:
+    """Count colored mana symbols in a Scryfall mana_cost string.
+
+    Hybrid symbols like {W/U} contribute 0.5 to each color. Phyrexian {W/P}
+    contributes 1.0 to W. Generic / numeric symbols are ignored.
+    """
+    import re as _re
+
+    global _PIP_RE
+    if _PIP_RE is None:
+        _PIP_RE = _re.compile(r"\{([^}]+)\}")
+    counts = {"W": 0.0, "U": 0.0, "B": 0.0, "R": 0.0, "G": 0.0, "C": 0.0}
+    if not mana_cost:
+        return counts
+    for raw in _PIP_RE.findall(mana_cost):
+        sym = raw.upper().replace("P", "").strip("/")
+        if not sym:
+            continue
+        if sym.isdigit() or sym in ("X", "Y", "Z"):
+            continue
+        parts = [p for p in sym.split("/") if p]
+        colors = [p for p in parts if p in counts]
+        if not colors:
+            continue
+        share = 1.0 / len(colors)
+        for c in colors:
+            counts[c] += share
+    return counts
+
+
+def mana_pips_by_color_avg(
+    decks: list[Deck], card_metadata: dict[str, dict]
+) -> dict[str, float]:
+    """Average colored mana pip count across non-land cards per deck, by color.
+
+    Represents mana demand per color (not land production). Uses mana_cost when
+    available. Returns totals rounded to 1 decimal place.
+    """
+    if not decks:
+        return {"W": 0.0, "U": 0.0, "B": 0.0, "R": 0.0, "G": 0.0, "C": 0.0}
+    totals = {"W": 0.0, "U": 0.0, "B": 0.0, "R": 0.0, "G": 0.0, "C": 0.0}
+    for d in decks:
+        per_deck = {"W": 0.0, "U": 0.0, "B": 0.0, "R": 0.0, "G": 0.0, "C": 0.0}
+        for qty, card in effective_mainboard(d):
+            meta = card_metadata.get(card) or {}
+            type_line = (meta.get("type_line") or "").upper()
+            if "LAND" in type_line:
+                continue
+            pips = _count_color_pips(meta.get("mana_cost") or "")
+            for k, v in pips.items():
+                per_deck[k] += v * qty
+        for k, v in per_deck.items():
+            totals[k] += v
+    n = len(decks)
+    return {k: round(totals[k] / n, 1) for k in totals}
+
+
+def card_stat_buckets(
+    decks: list[Deck],
+    ignore_lands: bool = False,
+    ignore_lands_cards: set[str] | None = None,
+    include_basic_lands: bool = False,
+    min_play_rate_pct: float = 5.0,
+) -> dict[str, list[dict[str, Any]]]:
+    """Classify cards into core / staple / flex / tech buckets based on play rate and copies.
+
+    - core: play_rate >= 80% and median_copies >= 3
+    - staple: play_rate >= 50% (and not core)
+    - flex: 20% <= play_rate < 50%
+    - tech: min_play_rate_pct <= play_rate < 20%
+    Cards below min_play_rate_pct are excluded.
+    """
+    if not decks:
+        return {"core": [], "staple": [], "flex": [], "tech": []}
+
+    deck_count = len(decks)
+    per_card_copies: dict[str, list[int]] = {}
+
+    for d in decks:
+        seen_cards_in_deck: dict[str, int] = {}
+        for qty, card in effective_mainboard(d):
+            if not include_basic_lands and card in BASIC_LANDS:
+                continue
+            if _should_ignore_land(card, ignore_lands, ignore_lands_cards):
+                continue
+            seen_cards_in_deck[card] = seen_cards_in_deck.get(card, 0) + qty
+        for card, q in seen_cards_in_deck.items():
+            per_card_copies.setdefault(card, []).append(q)
+
+    def _median(xs: list[float]) -> float:
+        if not xs:
+            return 0.0
+        s = sorted(xs)
+        m = len(s) // 2
+        return float(s[m]) if len(s) % 2 == 1 else (s[m - 1] + s[m]) / 2.0
+
+    buckets: dict[str, list[dict[str, Any]]] = {"core": [], "staple": [], "flex": [], "tech": []}
+    for card, copies_list in per_card_copies.items():
+        decks_with = len(copies_list)
+        play_rate = round(100 * decks_with / deck_count, 1)
+        if play_rate < min_play_rate_pct:
+            continue
+        # Include zeros for decks that don't play the card to get a true mean.
+        full_copies = copies_list + [0] * (deck_count - decks_with)
+        mean_copies = round(sum(full_copies) / deck_count, 2)
+        # median over decks that DO play it (more informative for "typical copy count")
+        median_copies = _median([float(c) for c in copies_list])
+        entry = {
+            "card": card,
+            "decks": decks_with,
+            "play_rate_pct": play_rate,
+            "mean_copies": mean_copies,
+            "median_copies": median_copies,
+        }
+        if play_rate >= 80 and median_copies >= 3:
+            buckets["core"].append(entry)
+        elif play_rate >= 50:
+            buckets["staple"].append(entry)
+        elif play_rate >= 20:
+            buckets["flex"].append(entry)
+        else:
+            buckets["tech"].append(entry)
+
+    for k in buckets:
+        buckets[k].sort(key=lambda e: (-e["play_rate_pct"], -e["mean_copies"], e["card"]))
+    return buckets
 
 
 def deck_diversity(decks: list[Deck]) -> dict[str, Any]:

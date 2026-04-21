@@ -6,7 +6,7 @@ import logging
 import math
 import os
 import secrets
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 # Load .env from project root so DATABASE_URL (and others) are set before any config.
@@ -125,6 +125,7 @@ from src.mtgtop8.analyzer import (
     analyze,
     archetype_aggregate_analysis,
     archetype_distribution,
+    card_stat_buckets,
     deck_analysis,
     effective_commanders,
     effective_mainboard,
@@ -581,6 +582,55 @@ def _parse_date_sortkey(date_str: str) -> str:
     if len(parts) == 3:
         return parts[2] + parts[1] + parts[0]
     return date_str
+
+
+def _date_yymmdd_to_parts(key: str) -> tuple[int, int, int] | None:
+    """Convert a YYMMDD sort key to (yy, mm, dd) ints, or None if invalid."""
+    if not key or not key.isdigit() or len(key) != 6:
+        return None
+    return int(key[0:2]), int(key[2:4]), int(key[4:6])
+
+
+def _yymmdd_to_ordinal(key: str) -> int | None:
+    """Convert a YYMMDD key to a day-ordinal (for day arithmetic).
+
+    Uses 2000 + yy heuristic matching the rest of the codebase, which treats
+    DD/MM/YY dates as 21st-century years.
+    """
+    parts = _date_yymmdd_to_parts(key)
+    if not parts:
+        return None
+    yy, mm, dd = parts
+    try:
+        return date(2000 + yy, mm, dd).toordinal()
+    except ValueError:
+        return None
+
+
+def _yymmdd_to_display(key: str) -> str | None:
+    """Convert a YYMMDD sort key back to DD/MM/YY display format."""
+    parts = _date_yymmdd_to_parts(key)
+    if not parts:
+        return None
+    yy, mm, dd = parts
+    return f"{dd:02d}/{mm:02d}/{yy:02d}"
+
+
+def _window_summary_from_dicts(deck_dicts: list[dict]) -> dict:
+    """Summarize a window: deck_count, event_count, date_from, date_to."""
+    if not deck_dicts:
+        return {"deck_count": 0, "event_count": 0, "date_from": None, "date_to": None}
+    keys = [_parse_date_sortkey(d.get("date", "") or "") for d in deck_dicts]
+    valid = [k for k in keys if k.isdigit() and len(k) == 6]
+    date_from = _yymmdd_to_display(min(valid)) if valid else None
+    date_to = _yymmdd_to_display(max(valid)) if valid else None
+    events = {str(d.get("event_id")) for d in deck_dicts if d.get("event_id") is not None}
+    return {
+        "deck_count": len(deck_dicts),
+        "event_count": len(events),
+        "date_from": date_from,
+        "date_to": date_to,
+    }
 
 
 def _deck_sort_key(d: dict) -> tuple:
@@ -2813,6 +2863,263 @@ def get_metagame(
     return result
 
 
+@app.get("/api/v1/archetypes/{archetype_name:path}/weekly-stats")
+def get_archetype_weekly_stats(
+    archetype_name: str,
+    date_from: str | None = Query(None, description="Filter from date (DD/MM/YY)"),
+    date_to: str | None = Query(None, description="Filter to date (DD/MM/YY)"),
+    event_id: str | None = Query(None),
+    event_ids: str | None = Query(None, description="Filter by event IDs (comma-separated)"),
+):
+    """Week-over-week popularity and top-8 conversion for this archetype.
+
+    Returns one row per ISO week in which the archetype has at least one deck,
+    plus the total deck count across all archetypes that week (for share %).
+    """
+    if not _decks:
+        raise HTTPException(status_code=404, detail="No data loaded")
+    decoded = unquote(archetype_name)
+    if (decoded or "").strip().lower() == "(unknown)":
+        raise HTTPException(status_code=404, detail="Archetype not found")
+    want_key = _db.archetype_canonical_key(decoded)
+    scoped = _filter_decks_for_query(_decks, event_id, event_ids, date_from, date_to)
+
+    def _week_key(d: dict) -> str | None:
+        key = _parse_date_sortkey(d.get("date", "") or "")
+        parts = _date_yymmdd_to_parts(key)
+        if not parts:
+            return None
+        yy, mm, dd = parts
+        try:
+            dt = date(2000 + yy, mm, dd)
+        except ValueError:
+            return None
+        iso = dt.isocalendar()
+        return f"{iso[0]:04d}-W{iso[1]:02d}"
+
+    def _week_monday(week_label: str) -> str | None:
+        try:
+            yr, wk = week_label.split("-W")
+            dt = date.fromisocalendar(int(yr), int(wk), 1)
+            return f"{dt.day:02d}/{dt.month:02d}/{dt.year % 100:02d}"
+        except Exception:
+            return None
+
+    total_per_week: dict[str, int] = {}
+    archetype_per_week: dict[str, int] = {}
+    top8_per_week: dict[str, int] = {}
+    matched_any = False
+    for d in scoped:
+        wk = _week_key(d)
+        if wk is None:
+            continue
+        total_per_week[wk] = total_per_week.get(wk, 0) + 1
+        if _db.archetype_canonical_key(d.get("archetype")) == want_key:
+            matched_any = True
+            archetype_per_week[wk] = archetype_per_week.get(wk, 0) + 1
+            if is_top8(d.get("rank") or ""):
+                top8_per_week[wk] = top8_per_week.get(wk, 0) + 1
+    if not matched_any:
+        raise HTTPException(status_code=404, detail="Archetype not found or no decks in range")
+
+    weeks = sorted(archetype_per_week.keys())
+    out = []
+    for wk in weeks:
+        a = archetype_per_week.get(wk, 0)
+        t = total_per_week.get(wk, 0)
+        t8 = top8_per_week.get(wk, 0)
+        share = round(100 * a / t, 1) if t else 0.0
+        top8_rate = round(100 * t8 / a, 1) if a else 0.0
+        out.append({
+            "week": wk,
+            "week_start": _week_monday(wk),
+            "archetype_decks": a,
+            "archetype_top8": t8,
+            "total_decks": t,
+            "share_pct": share,
+            "top8_rate_pct": top8_rate,
+        })
+
+    display_arch = _db.normalize_archetype_display(decoded.strip()) or decoded.strip()
+    return {
+        "archetype": display_arch,
+        "weeks": out,
+    }
+
+
+@app.get("/api/v1/archetypes/{archetype_name:path}/card-trends")
+def get_archetype_card_trends(
+    archetype_name: str,
+    date_from: str | None = Query(None, description="Filter from date (DD/MM/YY)"),
+    date_to: str | None = Query(None, description="Filter to date (DD/MM/YY)"),
+    event_id: str | None = Query(None),
+    event_ids: str | None = Query(None, description="Filter by event IDs (comma-separated)"),
+    ignore_lands: bool = Query(False),
+    recency_mode: str = Query("events", pattern="^(events|days|ratio|custom)$"),
+    recency_value: int = Query(3, ge=1, le=365),
+    recent_from: str | None = Query(None, description="DD/MM/YY; used when recency_mode=custom"),
+    recent_to: str | None = Query(None, description="DD/MM/YY; used when recency_mode=custom"),
+    min_recent_play_rate: float = Query(20.0, ge=0.0, le=100.0),
+    max_older_play_rate: float = Query(5.0, ge=0.0, le=100.0),
+    limit: int = Query(20, ge=1, le=200),
+):
+    """Return cards newly appearing and cards falling out of this archetype.
+
+    Splits the archetype's scoped decks into a "recent" window and an "older"
+    window (per `recency_mode`) and compares per-card play rates.
+    """
+    import math
+
+    if not _decks:
+        raise HTTPException(status_code=404, detail="No data loaded")
+    decoded = unquote(archetype_name)
+    if (decoded or "").strip().lower() == "(unknown)":
+        raise HTTPException(status_code=404, detail="Archetype not found")
+    want_key = _db.archetype_canonical_key(decoded)
+    filtered = _filter_decks_for_query(_decks, event_id, event_ids, date_from, date_to)
+    filtered = [
+        d for d in filtered
+        if _db.archetype_canonical_key(d.get("archetype")) == want_key
+    ]
+    if not filtered:
+        raise HTTPException(status_code=404, detail="Archetype not found or no decks in range")
+
+    sorted_dicts = sorted(
+        filtered,
+        key=lambda d: _parse_date_sortkey(d.get("date", "") or "") or "",
+    )
+    total = len(sorted_dicts)
+
+    warning: str | None = None
+    recent_dicts: list[dict] = []
+    older_dicts: list[dict] = []
+
+    if recency_mode == "events":
+        event_latest: dict[str, str] = {}
+        for d in sorted_dicts:
+            eid = str(d.get("event_id"))
+            k = _parse_date_sortkey(d.get("date", "") or "")
+            if not k.isdigit():
+                continue
+            if eid not in event_latest or k > event_latest[eid]:
+                event_latest[eid] = k
+        ordered_events = sorted(event_latest.items(), key=lambda kv: kv[1])
+        n = max(1, min(recency_value, len(ordered_events)))
+        recent_event_ids = {eid for eid, _ in ordered_events[-n:]}
+        recent_dicts = [d for d in sorted_dicts if str(d.get("event_id")) in recent_event_ids]
+        older_dicts = [d for d in sorted_dicts if str(d.get("event_id")) not in recent_event_ids]
+        if ordered_events and n >= len(ordered_events):
+            warning = "No older events to compare against."
+    elif recency_mode == "days":
+        max_ord = None
+        for d in sorted_dicts:
+            o = _yymmdd_to_ordinal(_parse_date_sortkey(d.get("date", "") or ""))
+            if o is not None and (max_ord is None or o > max_ord):
+                max_ord = o
+        if max_ord is None:
+            warning = "Deck dates could not be parsed."
+            recent_dicts = list(sorted_dicts)
+        else:
+            cutoff = max_ord - recency_value
+            for d in sorted_dicts:
+                o = _yymmdd_to_ordinal(_parse_date_sortkey(d.get("date", "") or ""))
+                if o is None:
+                    older_dicts.append(d)
+                elif o >= cutoff:
+                    recent_dicts.append(d)
+                else:
+                    older_dicts.append(d)
+    elif recency_mode == "ratio":
+        pct = max(1, min(recency_value, 99))
+        take = max(1, math.ceil(total * pct / 100))
+        take = min(take, total)
+        older_dicts = sorted_dicts[: total - take]
+        recent_dicts = sorted_dicts[total - take:]
+    else:  # custom
+        if not recent_from and not recent_to:
+            raise HTTPException(
+                status_code=400,
+                detail="recency_mode=custom requires recent_from or recent_to",
+            )
+        for d in sorted_dicts:
+            if _date_in_range(d.get("date", "") or "", recent_from, recent_to):
+                recent_dicts.append(d)
+            else:
+                older_dicts.append(d)
+
+    if not recent_dicts:
+        warning = warning or "No decks in the recent window."
+    if not older_dicts:
+        warning = warning or "No decks in the older window; nothing to compare against."
+
+    ignore_lands_cards = (
+        set(settings_service.get_ignore_lands_cards()) if ignore_lands else None
+    )
+    rank_weights = settings_service.get_rank_weights()
+
+    def _rates_for(dicts: list[dict]) -> dict[str, dict]:
+        if not dicts:
+            return {}
+        decks_objs = [Deck.from_dict(d) for d in dicts]
+        top = top_cards_main(
+            decks_objs,
+            placement_weighted=False,
+            ignore_lands=ignore_lands,
+            ignore_lands_cards=ignore_lands_cards,
+            rank_weights=rank_weights,
+            include_basic_lands=True,
+        )
+        return {row["card"]: row for row in top}
+
+    recent_map = _rates_for(recent_dicts)
+    older_map = _rates_for(older_dicts)
+
+    all_cards = set(recent_map.keys()) | set(older_map.keys())
+
+    new_cards: list[dict] = []
+    legacy_cards: list[dict] = []
+    for card in all_cards:
+        r = recent_map.get(card) or {}
+        o = older_map.get(card) or {}
+        r_rate = float(r.get("play_rate_pct") or 0.0)
+        o_rate = float(o.get("play_rate_pct") or 0.0)
+        r_decks = int(r.get("decks") or 0)
+        o_decks = int(o.get("decks") or 0)
+        if r_rate >= min_recent_play_rate and o_rate <= max_older_play_rate:
+            new_cards.append({
+                "card": card,
+                "recent_play_rate_pct": round(r_rate, 1),
+                "older_play_rate_pct": round(o_rate, 1),
+                "delta_pct": round(r_rate - o_rate, 1),
+                "recent_decks": r_decks,
+                "older_decks": o_decks,
+            })
+        if o_rate >= min_recent_play_rate and r_rate <= max_older_play_rate:
+            legacy_cards.append({
+                "card": card,
+                "recent_play_rate_pct": round(r_rate, 1),
+                "older_play_rate_pct": round(o_rate, 1),
+                "delta_pct": round(o_rate - r_rate, 1),
+                "recent_decks": r_decks,
+                "older_decks": o_decks,
+            })
+
+    new_cards.sort(key=lambda x: (-x["delta_pct"], -x["recent_play_rate_pct"], x["card"]))
+    legacy_cards.sort(key=lambda x: (-x["delta_pct"], -x["older_play_rate_pct"], x["card"]))
+    new_cards = new_cards[:limit]
+    legacy_cards = legacy_cards[:limit]
+
+    display_arch = _db.normalize_archetype_display(decoded.strip()) or decoded.strip()
+    return {
+        "archetype": display_arch,
+        "recent": _window_summary_from_dicts(recent_dicts),
+        "older": _window_summary_from_dicts(older_dicts),
+        "new_cards": new_cards,
+        "legacy_cards": legacy_cards,
+        "warning": warning,
+    }
+
+
 @app.get("/api/v1/archetypes/{archetype_name:path}")
 def get_archetype_detail(
     archetype_name: str,
@@ -2867,6 +3174,15 @@ def get_archetype_detail(
         rank_weights=rank_weights,
         include_basic_lands=True,
     )
+    top_players = player_leaderboard(
+        decks, normalize_player=_normalize_player, rank_weights=rank_weights
+    )[:10]
+    typical_list = card_stat_buckets(
+        decks,
+        ignore_lands=ignore_lands,
+        ignore_lands_cards=ignore_lands_cards,
+        include_basic_lands=True,
+    )
     deck_count_top8 = sum(1 for d in decks if is_top8(d.rank))
     display_arch = _db.normalize_archetype_display(decoded.strip()) or decoded.strip()
     return {
@@ -2875,6 +3191,8 @@ def get_archetype_detail(
         "deck_count_top8": deck_count_top8,
         "average_analysis": average_analysis,
         "top_cards_main": top_main,
+        "top_players": top_players,
+        "typical_list": typical_list,
     }
 
 

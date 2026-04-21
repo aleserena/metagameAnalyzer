@@ -12,7 +12,6 @@ import {
   PieChart,
   ResponsiveContainer,
   Scatter,
-  ScatterChart,
   Tooltip,
   XAxis,
   YAxis,
@@ -128,17 +127,34 @@ export default function PlayerAnalysisCharts({ analysis }: PlayerAnalysisChartsP
         rank: e.rank || '',
         archetype: e.archetype || '',
       }))
+      .sort((a, b) => a.x - b.x)
   }, [events])
 
-  const rollingAvgSeries = useMemo(() => {
+  // Merged series: per-event dot + running rolling avg (window 5) + running median.
+  // Running median is maintained via a sorted insertion so it O(n log n) updates per date.
+  const finishChartData = useMemo(() => {
     const window = 5
-    const rows: { x: number; rolling: number }[] = []
-    for (let i = 0; i < finishSeries.length; i++) {
+    const sorted: number[] = []
+    return finishSeries.map((s, i) => {
       const slice = finishSeries.slice(Math.max(0, i - window + 1), i + 1)
-      const avg = slice.reduce((acc, s) => acc + s.y, 0) / slice.length
-      rows.push({ x: finishSeries[i].x, rolling: Math.round(avg * 10) / 10 })
-    }
-    return rows
+      const rolling = slice.reduce((acc, p) => acc + p.y, 0) / slice.length
+      let lo = 0
+      let hi = sorted.length
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1
+        if (sorted[mid] < s.y) lo = mid + 1
+        else hi = mid
+      }
+      sorted.splice(lo, 0, s.y)
+      const n = sorted.length
+      const midIdx = Math.floor(n / 2)
+      const median = n % 2 === 0 ? (sorted[midIdx - 1] + sorted[midIdx]) / 2 : sorted[midIdx]
+      return {
+        ...s,
+        rolling: Math.round(rolling * 10) / 10,
+        median: Math.round(median * 10) / 10,
+      }
+    })
   }, [finishSeries])
 
   // Cumulative points with rolling top-8%
@@ -307,8 +323,8 @@ export default function PlayerAnalysisCharts({ analysis }: PlayerAnalysisChartsP
       <div className="deck-analysis-grid">
         <div className="chart-container">
           <h4 style={{ margin: '0 0 0.75rem', fontSize: '0.95rem' }}>Finish per event</h4>
-          <ResponsiveContainer width="100%" height={240}>
-            <ScatterChart margin={{ top: 10, right: 16, left: 30, bottom: 10 }}>
+          <ResponsiveContainer width="100%" height={260}>
+            <ComposedChart data={finishChartData} margin={{ top: 10, right: 16, left: 30, bottom: 10 }}>
               <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
               <XAxis
                 type="number"
@@ -316,10 +332,10 @@ export default function PlayerAnalysisCharts({ analysis }: PlayerAnalysisChartsP
                 domain={['dataMin', 'dataMax']}
                 tickFormatter={formatShortDate}
                 name="Date"
+                scale="time"
               />
               <YAxis
                 type="number"
-                dataKey="y"
                 reversed
                 domain={[1, finishMax]}
                 ticks={finishTicks}
@@ -331,9 +347,10 @@ export default function PlayerAnalysisCharts({ analysis }: PlayerAnalysisChartsP
               <Tooltip
                 contentStyle={BASE_CHART_TOOLTIP}
                 labelStyle={BASE_CHART_LABEL}
+                labelFormatter={(v) => formatShortDate(Number(v))}
                 content={({ active, payload }) => {
                   if (!active || !payload?.length) return null
-                  const p = payload[0]?.payload as typeof finishSeries[number]
+                  const p = payload[0]?.payload as typeof finishChartData[number] | undefined
                   if (!p) return null
                   return (
                     <PieChartTooltipContent
@@ -343,18 +360,44 @@ export default function PlayerAnalysisCharts({ analysis }: PlayerAnalysisChartsP
                       {p.archetype ? (
                         <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{p.archetype}</div>
                       ) : null}
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 4 }}>
+                        Rolling avg: {rankLabelFromNum(p.rolling)} ({p.rolling}) · Median: {rankLabelFromNum(p.median)} ({p.median})
+                      </div>
                     </PieChartTooltipContent>
                   )
                 }}
               />
-              <Scatter data={finishSeries} fill="#1d9bf0" />
-              {rollingAvgSeries.length > 1 ? (
-                <Scatter data={rollingAvgSeries} line={{ stroke: '#c2410c', strokeWidth: 2 }} dataKey="rolling" shape={() => <g />} legendType="none" />
+              <Legend wrapperStyle={{ fontSize: '0.75rem' }} />
+              <Scatter name="Event finish" dataKey="y" fill="#1d9bf0" />
+              {finishChartData.length > 1 ? (
+                <Line
+                  type="monotone"
+                  dataKey="rolling"
+                  name="Rolling avg (5)"
+                  stroke="#c2410c"
+                  strokeWidth={2}
+                  dot={false}
+                  activeDot={false}
+                  isAnimationActive={false}
+                />
               ) : null}
-            </ScatterChart>
+              {finishChartData.length > 1 ? (
+                <Line
+                  type="monotone"
+                  dataKey="median"
+                  name="Running median"
+                  stroke="#a855f7"
+                  strokeWidth={2}
+                  strokeDasharray="5 4"
+                  dot={false}
+                  activeDot={false}
+                  isAnimationActive={false}
+                />
+              ) : null}
+            </ComposedChart>
           </ResponsiveContainer>
           <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-            Dot size reflects field size. Orange line is a 5-event rolling average.
+            Dot size reflects field size. Orange is the 5-event rolling average; dashed purple is the running median finish over time.
           </div>
         </div>
 

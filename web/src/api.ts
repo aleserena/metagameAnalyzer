@@ -1,4 +1,4 @@
-import type { Deck, MetagameReport, Event, PlayerStats, SimilarDeck, ArchetypeDetail } from './types'
+import type { Deck, MetagameReport, Event, PlayerStats, SimilarDeck, ArchetypeDetail, ArchetypeWeeklyStats } from './types'
 import { getToken } from './contexts/AuthContext'
 import { fetchWithTimeout } from './utils'
 
@@ -723,6 +723,79 @@ export async function getArchetypeDetail(
   if (params?.ignoreLands !== undefined) search.set('ignore_lands', String(params.ignoreLands))
   const q = search.toString()
   return fetchApi(`/archetypes/${encodeURIComponent(archetypeName)}${q ? `?${q}` : ''}`)
+}
+
+export type RecencyMode = 'events' | 'days' | 'ratio' | 'custom'
+
+export interface ArchetypeCardTrend {
+  card: string
+  recent_play_rate_pct: number
+  older_play_rate_pct: number
+  delta_pct: number
+  recent_decks: number
+  older_decks: number
+}
+
+export interface ArchetypeTrendWindow {
+  deck_count: number
+  event_count: number
+  date_from: string | null
+  date_to: string | null
+}
+
+export interface ArchetypeCardTrends {
+  archetype: string
+  recent: ArchetypeTrendWindow
+  older: ArchetypeTrendWindow
+  new_cards: ArchetypeCardTrend[]
+  legacy_cards: ArchetypeCardTrend[]
+  warning?: string | null
+}
+
+export async function getArchetypeCardTrends(
+  archetypeName: string,
+  params: {
+    eventIds?: string | null
+    ignoreLands?: boolean
+    recencyMode: RecencyMode
+    recencyValue: number
+    recentFrom?: string | null
+    recentTo?: string | null
+    minRecentPlayRate?: number
+    maxOlderPlayRate?: number
+    limit?: number
+  }
+): Promise<ArchetypeCardTrends> {
+  const search = new URLSearchParams()
+  if (params.eventIds) search.set('event_ids', params.eventIds)
+  if (params.ignoreLands !== undefined) search.set('ignore_lands', String(params.ignoreLands))
+  search.set('recency_mode', params.recencyMode)
+  search.set('recency_value', String(params.recencyValue))
+  if (params.recentFrom) search.set('recent_from', params.recentFrom)
+  if (params.recentTo) search.set('recent_to', params.recentTo)
+  if (params.minRecentPlayRate !== undefined)
+    search.set('min_recent_play_rate', String(params.minRecentPlayRate))
+  if (params.maxOlderPlayRate !== undefined)
+    search.set('max_older_play_rate', String(params.maxOlderPlayRate))
+  if (params.limit !== undefined) search.set('limit', String(params.limit))
+  const q = search.toString()
+  return fetchApi(`/archetypes/${encodeURIComponent(archetypeName)}/card-trends${q ? `?${q}` : ''}`)
+}
+
+export async function getArchetypeWeeklyStats(
+  archetypeName: string,
+  params?: {
+    dateFrom?: string | null
+    dateTo?: string | null
+    eventIds?: string | null
+  }
+): Promise<ArchetypeWeeklyStats> {
+  const search = new URLSearchParams()
+  if (params?.dateFrom) search.set('date_from', params.dateFrom)
+  if (params?.dateTo) search.set('date_to', params.dateTo)
+  if (params?.eventIds) search.set('event_ids', params.eventIds)
+  const q = search.toString()
+  return fetchApi(`/archetypes/${encodeURIComponent(archetypeName)}/weekly-stats${q ? `?${q}` : ''}`)
 }
 
 export async function getPlayers(dateFrom?: string | null, dateTo?: string | null): Promise<{ players: PlayerStats[] }> {

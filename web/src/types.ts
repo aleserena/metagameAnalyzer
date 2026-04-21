@@ -160,6 +160,22 @@ export interface ArchetypeAverageAnalysis {
   color_distribution: Record<string, number>
   lands_distribution: { lands: number; nonlands: number }
   type_distribution: Record<string, number>
+  mana_pips_by_color?: Record<string, number>
+}
+
+export interface TypicalListEntry {
+  card: string
+  decks: number
+  play_rate_pct: number
+  mean_copies: number
+  median_copies: number
+}
+
+export interface TypicalList {
+  core: TypicalListEntry[]
+  staple: TypicalListEntry[]
+  flex: TypicalListEntry[]
+  tech: TypicalListEntry[]
 }
 
 export interface ArchetypeDetail {
@@ -168,4 +184,21 @@ export interface ArchetypeDetail {
   deck_count_top8?: number
   average_analysis: ArchetypeAverageAnalysis
   top_cards_main: TopCard[]
+  top_players?: PlayerStats[]
+  typical_list?: TypicalList
+}
+
+export interface ArchetypeWeeklyStat {
+  week: string
+  week_start: string | null
+  archetype_decks: number
+  archetype_top8: number
+  total_decks: number
+  share_pct: number
+  top8_rate_pct: number
+}
+
+export interface ArchetypeWeeklyStats {
+  archetype: string
+  weeks: ArchetypeWeeklyStat[]
 }
