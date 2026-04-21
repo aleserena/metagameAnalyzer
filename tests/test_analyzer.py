@@ -1,15 +1,18 @@
 """Tests for metagame analyzer."""
 
 from src.mtgtop8.analyzer import (
+    _count_color_pips,
     analyze,
     archetype_aggregate_analysis,
     archetype_distribution,
+    card_stat_buckets,
     commander_distribution,
     deck_analysis,
     deck_diversity,
     effective_commanders,
     effective_mainboard,
     is_top8,
+    mana_pips_by_color_avg,
     normalize_rank,
     player_leaderboard,
     top_cards_main,
@@ -202,3 +205,95 @@ def test_archetype_aggregate_analysis(sample_decks):
     # Averages: two decks => values should be numeric (averaged)
     assert isinstance(result["lands_distribution"]["lands"], (int, float))
     assert isinstance(result["lands_distribution"]["nonlands"], (int, float))
+    assert "mana_pips_by_color" in result
+
+
+def test_count_color_pips_basic():
+    """_count_color_pips tallies colored pips and ignores numeric/generic symbols."""
+    assert _count_color_pips("{R}") == {"W": 0.0, "U": 0.0, "B": 0.0, "R": 1.0, "G": 0.0, "C": 0.0}
+    assert _count_color_pips("{1}{U}{U}") == {"W": 0.0, "U": 2.0, "B": 0.0, "R": 0.0, "G": 0.0, "C": 0.0}
+    assert _count_color_pips("") == {"W": 0.0, "U": 0.0, "B": 0.0, "R": 0.0, "G": 0.0, "C": 0.0}
+    # Hybrid split half and half
+    hybrid = _count_color_pips("{W/U}")
+    assert hybrid["W"] == 0.5
+    assert hybrid["U"] == 0.5
+    # Phyrexian counts as the colored side
+    phy = _count_color_pips("{W/P}")
+    assert phy["W"] == 1.0
+    # X is skipped, B is kept
+    assert _count_color_pips("{X}{B}{B}")["B"] == 2.0
+
+
+def test_mana_pips_by_color_avg_ignores_lands():
+    """mana_pips_by_color_avg averages pips per deck, counting copies and skipping lands."""
+    decks = [
+        Deck(
+            deck_id=1,
+            event_id=1,
+            player="p",
+            rank="1",
+            date="01/01/26",
+            name="d",
+            format_id="EDH",
+            event_name="e",
+            player_count=1,
+            mainboard=[(4, "Bolt"), (2, "Counter"), (24, "Mountain")],
+            sideboard=[],
+            commanders=[],
+            archetype="a",
+        )
+    ]
+    meta = {
+        "Bolt": {"mana_cost": "{R}", "type_line": "Instant"},
+        "Counter": {"mana_cost": "{U}{U}", "type_line": "Instant"},
+        "Mountain": {"mana_cost": "", "type_line": "Basic Land — Mountain"},
+    }
+    pips = mana_pips_by_color_avg(decks, meta)
+    assert pips["R"] == 4.0
+    assert pips["U"] == 4.0
+    assert pips["W"] == 0.0
+
+
+def test_card_stat_buckets_classification():
+    """card_stat_buckets classifies cards into core/staple/flex/tech by play rate and median."""
+    def mk(i: int, main: list[tuple[int, str]]) -> Deck:
+        return Deck(
+            deck_id=i,
+            event_id=1,
+            player=f"p{i}",
+            rank="1",
+            date="01/01/26",
+            name=f"d{i}",
+            format_id="EDH",
+            event_name="e",
+            player_count=1,
+            mainboard=main,
+            sideboard=[],
+            commanders=[],
+            archetype="a",
+        )
+    # 10 decks. Core = in all decks at 4 copies. Staple = 6/10 decks. Flex = 3/10. Tech = 1/10.
+    decks: list[Deck] = []
+    for i in range(10):
+        main: list[tuple[int, str]] = [(4, "Core")]
+        if i < 6:
+            main.append((2, "Staple"))
+        if i < 3:
+            main.append((1, "Flex"))
+        if i < 1:
+            main.append((1, "Tech"))
+        decks.append(mk(i, main))
+    buckets = card_stat_buckets(decks)
+    core_names = [e["card"] for e in buckets["core"]]
+    staple_names = [e["card"] for e in buckets["staple"]]
+    flex_names = [e["card"] for e in buckets["flex"]]
+    tech_names = [e["card"] for e in buckets["tech"]]
+    assert "Core" in core_names
+    assert "Staple" in staple_names
+    assert "Flex" in flex_names
+    # Tech is 1/10 = 10% play rate, above default 5% threshold
+    assert "Tech" in tech_names
+    # Median copies for Core equals 4 (reported for decks that run it)
+    core_entry = next(e for e in buckets["core"] if e["card"] == "Core")
+    assert core_entry["median_copies"] == 4
+    assert core_entry["play_rate_pct"] == 100.0

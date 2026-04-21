@@ -1,4 +1,4 @@
-import type { Deck, MetagameReport, Event, PlayerStats, SimilarDeck, ArchetypeDetail } from './types'
+import type { Deck, MetagameReport, Event, PlayerStats, SimilarDeck, ArchetypeDetail, ArchetypeWeeklyStats } from './types'
 import { getToken } from './contexts/AuthContext'
 import { fetchWithTimeout } from './utils'
 
@@ -19,10 +19,12 @@ export function getEventEditToken(): string | null {
 }
 
 export function setEventEditToken(token: string): void {
+  if (typeof sessionStorage === 'undefined') return
   sessionStorage.setItem(EVENT_EDIT_TOKEN_KEY, token)
 }
 
 export function clearEventEditToken(): void {
+  if (typeof sessionStorage === 'undefined') return
   sessionStorage.removeItem(EVENT_EDIT_TOKEN_KEY)
 }
 
@@ -723,6 +725,79 @@ export async function getArchetypeDetail(
   return fetchApi(`/archetypes/${encodeURIComponent(archetypeName)}${q ? `?${q}` : ''}`)
 }
 
+export type RecencyMode = 'events' | 'days' | 'ratio' | 'custom'
+
+export interface ArchetypeCardTrend {
+  card: string
+  recent_play_rate_pct: number
+  older_play_rate_pct: number
+  delta_pct: number
+  recent_decks: number
+  older_decks: number
+}
+
+export interface ArchetypeTrendWindow {
+  deck_count: number
+  event_count: number
+  date_from: string | null
+  date_to: string | null
+}
+
+export interface ArchetypeCardTrends {
+  archetype: string
+  recent: ArchetypeTrendWindow
+  older: ArchetypeTrendWindow
+  new_cards: ArchetypeCardTrend[]
+  legacy_cards: ArchetypeCardTrend[]
+  warning?: string | null
+}
+
+export async function getArchetypeCardTrends(
+  archetypeName: string,
+  params: {
+    eventIds?: string | null
+    ignoreLands?: boolean
+    recencyMode: RecencyMode
+    recencyValue: number
+    recentFrom?: string | null
+    recentTo?: string | null
+    minRecentPlayRate?: number
+    maxOlderPlayRate?: number
+    limit?: number
+  }
+): Promise<ArchetypeCardTrends> {
+  const search = new URLSearchParams()
+  if (params.eventIds) search.set('event_ids', params.eventIds)
+  if (params.ignoreLands !== undefined) search.set('ignore_lands', String(params.ignoreLands))
+  search.set('recency_mode', params.recencyMode)
+  search.set('recency_value', String(params.recencyValue))
+  if (params.recentFrom) search.set('recent_from', params.recentFrom)
+  if (params.recentTo) search.set('recent_to', params.recentTo)
+  if (params.minRecentPlayRate !== undefined)
+    search.set('min_recent_play_rate', String(params.minRecentPlayRate))
+  if (params.maxOlderPlayRate !== undefined)
+    search.set('max_older_play_rate', String(params.maxOlderPlayRate))
+  if (params.limit !== undefined) search.set('limit', String(params.limit))
+  const q = search.toString()
+  return fetchApi(`/archetypes/${encodeURIComponent(archetypeName)}/card-trends${q ? `?${q}` : ''}`)
+}
+
+export async function getArchetypeWeeklyStats(
+  archetypeName: string,
+  params?: {
+    dateFrom?: string | null
+    dateTo?: string | null
+    eventIds?: string | null
+  }
+): Promise<ArchetypeWeeklyStats> {
+  const search = new URLSearchParams()
+  if (params?.dateFrom) search.set('date_from', params.dateFrom)
+  if (params?.dateTo) search.set('date_to', params.dateTo)
+  if (params?.eventIds) search.set('event_ids', params.eventIds)
+  const q = search.toString()
+  return fetchApi(`/archetypes/${encodeURIComponent(archetypeName)}/weekly-stats${q ? `?${q}` : ''}`)
+}
+
 export async function getPlayers(dateFrom?: string | null, dateTo?: string | null): Promise<{ players: PlayerStats[] }> {
   const params = new URLSearchParams()
   if (dateFrom) params.set('date_from', dateFrom)
@@ -751,6 +826,111 @@ export async function getPlayerDetail(playerName: string): Promise<PlayerDetail>
 
 export async function getPlayerDetailById(playerId: number): Promise<PlayerDetail> {
   return fetchApi(`/players/id/${playerId}`)
+}
+
+export interface PlayerAnalysisEvent {
+  deck_id: number
+  event_id: number | string | null
+  event_name: string
+  date: string
+  rank: string
+  normalized_rank: string
+  normalized_rank_num: number | null
+  points: number
+  player_count: number
+  format_id: string
+  archetype: string | null
+  color_identity: string[]
+  commanders: string[]
+}
+
+export interface PlayerAnalysisLeaderboardPoint {
+  date: string
+  rank: number
+  total_players: number
+}
+
+export interface PlayerAnalysisArchetypeRow {
+  archetype: string
+  count: number
+  pct: number
+}
+
+export interface PlayerAnalysisArchetypePerf {
+  archetype: string
+  count: number
+  avg_finish: number | null
+  best_finish: string
+  top8_pct: number
+  win_pct: number
+}
+
+export interface PlayerAnalysisFormatRow {
+  format_id: string
+  count: number
+  pct: number
+}
+
+export interface PlayerAnalysisCommanderRow {
+  commander: string
+  count: number
+  pct: number
+}
+
+export interface PlayerAnalysisCardRow {
+  card: string
+  deck_count: number
+  total_copies: number
+}
+
+export interface PlayerAnalysisFieldBucket {
+  bucket: string
+  count: number
+  avg_finish: number | null
+  top8_pct: number
+}
+
+export interface PlayerAnalysisMetagameRow {
+  archetype: string
+  player_pct: number
+  global_pct: number
+}
+
+export interface PlayerAnalysisHighlights {
+  best_finish: string
+  longest_top8_streak: number
+  biggest_field_win: number | null
+  total_events: number
+  avg_days_between_events: number | null
+  first_event_date: string | null
+  last_event_date: string | null
+}
+
+export interface PlayerAnalysis {
+  player: string
+  player_id: number | null
+  per_event: PlayerAnalysisEvent[]
+  leaderboard_history: PlayerAnalysisLeaderboardPoint[]
+  archetype_distribution: PlayerAnalysisArchetypeRow[]
+  archetype_performance: PlayerAnalysisArchetypePerf[]
+  color_distribution: Record<string, number>
+  color_count_distribution: Record<string, number>
+  format_distribution: PlayerAnalysisFormatRow[]
+  commander_distribution: PlayerAnalysisCommanderRow[]
+  average_mana_curve: Record<string, number>
+  top_cards: PlayerAnalysisCardRow[]
+  pet_cards: PlayerAnalysisCardRow[]
+  field_size_buckets: PlayerAnalysisFieldBucket[]
+  metagame_comparison: PlayerAnalysisMetagameRow[]
+  highlights: PlayerAnalysisHighlights
+}
+
+export async function getPlayerAnalysisById(playerId: number): Promise<PlayerAnalysis> {
+  return fetchApi(`/players/id/${playerId}/analysis`)
+}
+
+export async function getPlayerAnalysisByName(playerName: string): Promise<PlayerAnalysis> {
+  return fetchApi(`/players/${encodeURIComponent(playerName)}/analysis`)
 }
 
 export async function getPlayerAliases(): Promise<{ aliases: Record<string, string> }> {
