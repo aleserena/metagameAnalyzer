@@ -95,12 +95,14 @@ export default function Events() {
     () => new Set((missingDecksData?.event_ids ?? []).map((id) => String(id))),
     [missingDecksData]
   )
-  /** API returns event IDs with *complete* matchups; events NOT in this set have missing matchups */
+  /** API returns event IDs with *complete* matchups; events NOT in this set have missing matchups.
+   *  Treat missing data (not yet loaded or fetch failed) as unknown to avoid flagging every event. */
   const eventIdsWithCompleteMatchups = useMemo(
-    () => new Set((missingMatchupsData?.event_ids ?? []).map((id) => String(id))),
+    () => (missingMatchupsData ? new Set(missingMatchupsData.event_ids.map((id) => String(id))) : null),
     [missingMatchupsData]
   )
-  const eventHasMissingMatchups = (eventId: string | number) => !eventIdsWithCompleteMatchups.has(String(eventId))
+  const eventHasMissingMatchups = (eventId: string | number) =>
+    eventIdsWithCompleteMatchups !== null && !eventIdsWithCompleteMatchups.has(String(eventId))
 
   useEffect(() => {
     if (error) toast.error(reportError(new Error(error)))
