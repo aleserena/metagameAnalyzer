@@ -19,10 +19,12 @@ export function getEventEditToken(): string | null {
 }
 
 export function setEventEditToken(token: string): void {
+  if (typeof sessionStorage === 'undefined') return
   sessionStorage.setItem(EVENT_EDIT_TOKEN_KEY, token)
 }
 
 export function clearEventEditToken(): void {
+  if (typeof sessionStorage === 'undefined') return
   sessionStorage.removeItem(EVENT_EDIT_TOKEN_KEY)
 }
 

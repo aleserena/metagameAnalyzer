@@ -3,8 +3,10 @@ import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import CardListSection from './CardListSection'
 
+const routerFuture = { future: { v7_startTransition: true, v7_relativeSplatPath: true } as const }
+
 function wrap(ui: React.ReactElement) {
-  return <MemoryRouter>{ui}</MemoryRouter>
+  return <MemoryRouter {...routerFuture}>{ui}</MemoryRouter>
 }
 
 describe('CardListSection', () => {

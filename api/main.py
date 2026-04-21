@@ -2438,6 +2438,8 @@ def update_deck_endpoint(deck_id: int, body: UpdateDeckBody):
             _db.upsert_deck(session, current, origin=current.get("origin", _db.ORIGIN_MTGTOP8))
         _load_decks_from_db()
         return {"deck_id": deck_id, "message": "updated"}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Update deck failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

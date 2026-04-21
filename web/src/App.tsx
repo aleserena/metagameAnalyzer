@@ -1,24 +1,30 @@
+import { Suspense, lazy, type ReactElement } from 'react'
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import Layout from './components/Layout'
 import ErrorBoundary from './components/ErrorBoundary'
 import AdminGuard from './components/AdminGuard'
-import Dashboard from './pages/Dashboard'
-import Events from './pages/Events'
-import EventDetail from './pages/EventDetail'
-import Metagame from './pages/Metagame'
-import Decks from './pages/Decks'
-import DeckDetail from './pages/DeckDetail'
-import DeckCompare from './pages/DeckCompare'
-import Archetypes from './pages/Archetypes'
-import ArchetypeDetail from './pages/ArchetypeDetail'
-import Matchups from './pages/Matchups'
-import Players from './pages/Players'
-import PlayerDetail from './pages/PlayerDetail'
-import Scrape from './pages/Scrape'
-import Settings from './pages/Settings'
-import Login from './pages/Login'
-import UploadDeck from './pages/UploadDeck'
-import Feedback from './pages/Feedback'
+
+const Dashboard = lazy(() => import('./pages/Dashboard'))
+const Events = lazy(() => import('./pages/Events'))
+const EventDetail = lazy(() => import('./pages/EventDetail'))
+const Metagame = lazy(() => import('./pages/Metagame'))
+const Decks = lazy(() => import('./pages/Decks'))
+const DeckDetail = lazy(() => import('./pages/DeckDetail'))
+const DeckCompare = lazy(() => import('./pages/DeckCompare'))
+const Archetypes = lazy(() => import('./pages/Archetypes'))
+const ArchetypeDetail = lazy(() => import('./pages/ArchetypeDetail'))
+const Matchups = lazy(() => import('./pages/Matchups'))
+const Players = lazy(() => import('./pages/Players'))
+const PlayerDetail = lazy(() => import('./pages/PlayerDetail'))
+const Scrape = lazy(() => import('./pages/Scrape'))
+const Settings = lazy(() => import('./pages/Settings'))
+const Login = lazy(() => import('./pages/Login'))
+const UploadDeck = lazy(() => import('./pages/UploadDeck'))
+const Feedback = lazy(() => import('./pages/Feedback'))
+
+function routeElement(element: ReactElement) {
+  return <Suspense fallback={<div className="loading">Loading...</div>}>{element}</Suspense>
+}
 
 const router = createBrowserRouter(
   [
@@ -26,7 +32,7 @@ const router = createBrowserRouter(
       path: '/upload/:token',
       element: (
         <ErrorBoundary>
-          <UploadDeck />
+          {routeElement(<UploadDeck />)}
         </ErrorBoundary>
       ),
     },
@@ -34,27 +40,27 @@ const router = createBrowserRouter(
       path: '/',
       element: (
         <ErrorBoundary>
-          <Layout />
+          {routeElement(<Layout />)}
         </ErrorBoundary>
       ),
       children: [
-        { index: true, element: <Dashboard /> },
-        { path: 'login', element: <Login /> },
-        { path: 'events', element: <Events /> },
-        { path: 'events/:eventId', element: <EventDetail /> },
-        { path: 'metagame', element: <Metagame /> },
-        { path: 'archetypes', element: <Archetypes /> },
-        { path: 'archetypes/:archetypeName', element: <ArchetypeDetail /> },
-        { path: 'matchups', element: <Matchups /> },
-        { path: 'decks', element: <Decks /> },
-        { path: 'decks/compare', element: <DeckCompare /> },
-        { path: 'decks/:deckId', element: <DeckDetail /> },
-        { path: 'players', element: <Players /> },
-        { path: 'players/:playerId', element: <PlayerDetail /> },
-        { path: 'feedback', element: <Feedback /> },
+        { index: true, element: routeElement(<Dashboard />) },
+        { path: 'login', element: routeElement(<Login />) },
+        { path: 'events', element: routeElement(<Events />) },
+        { path: 'events/:eventId', element: routeElement(<EventDetail />) },
+        { path: 'metagame', element: routeElement(<Metagame />) },
+        { path: 'archetypes', element: routeElement(<Archetypes />) },
+        { path: 'archetypes/:archetypeName', element: routeElement(<ArchetypeDetail />) },
+        { path: 'matchups', element: routeElement(<Matchups />) },
+        { path: 'decks', element: routeElement(<Decks />) },
+        { path: 'decks/compare', element: routeElement(<DeckCompare />) },
+        { path: 'decks/:deckId', element: routeElement(<DeckDetail />) },
+        { path: 'players', element: routeElement(<Players />) },
+        { path: 'players/:playerId', element: routeElement(<PlayerDetail />) },
+        { path: 'feedback', element: routeElement(<Feedback />) },
         {
           path: 'scrape',
-          element: (
+          element: routeElement(
             <AdminGuard>
               <Scrape />
             </AdminGuard>
@@ -62,7 +68,7 @@ const router = createBrowserRouter(
         },
         {
           path: 'settings',
-          element: (
+          element: routeElement(
             <AdminGuard>
               <Settings />
             </AdminGuard>

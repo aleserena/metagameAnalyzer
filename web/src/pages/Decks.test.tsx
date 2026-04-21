@@ -4,6 +4,8 @@ import { MemoryRouter } from 'react-router-dom'
 import Decks from './Decks'
 import * as api from '../api'
 
+const routerFuture = { future: { v7_startTransition: true, v7_relativeSplatPath: true } as const }
+
 vi.mock('../api', () => ({
   getDecks: vi.fn(),
   getDuplicateDecks: vi.fn(),
@@ -31,7 +33,7 @@ describe('Decks page', () => {
 
   it('renders page with Decks heading and filters', async () => {
     render(
-      <MemoryRouter>
+      <MemoryRouter {...routerFuture}>
         <Decks />
       </MemoryRouter>
     )
