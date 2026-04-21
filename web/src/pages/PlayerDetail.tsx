@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { getPlayerDetail, getPlayerDetailById, getSimilarPlayers, addPlayerAlias, getPlayerAliases, putPlayerEmail, sendPlayerMissingDeckLinks } from '../api'
-import type { PlayerDetail as PlayerDetailData } from '../api'
+import { getPlayerDetail, getPlayerDetailById, getPlayerAnalysisById, getPlayerAnalysisByName, getSimilarPlayers, addPlayerAlias, getPlayerAliases, putPlayerEmail, sendPlayerMissingDeckLinks } from '../api'
+import type { PlayerAnalysis, PlayerDetail as PlayerDetailData } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import { useFetch } from '../hooks/useFetch'
 import Modal from '../components/Modal'
 import PageError from '../components/PageError'
 import PageSkeleton from '../components/PageSkeleton'
+import PlayerAnalysisCharts from '../components/player/PlayerAnalysisCharts'
 import { reportError } from '../utils'
 
 export default function PlayerDetail() {
@@ -23,6 +24,15 @@ export default function PlayerDetail() {
       return getPlayerDetail(decodeURIComponent(playerIdParam))
     },
     [playerIdParam ?? '', isId, id]
+  )
+  const analysisKey = data?.player_id != null ? `id:${data.player_id}` : data?.player ? `name:${data.player}` : ''
+  const { data: analysis } = useFetch<PlayerAnalysis | null>(
+    () => {
+      if (data?.player_id != null) return getPlayerAnalysisById(data.player_id)
+      if (data?.player) return getPlayerAnalysisByName(data.player)
+      return Promise.resolve(null)
+    },
+    [analysisKey],
   )
   const [similarPlayers, setSimilarPlayers] = useState<string[]>([])
   const [aliases, setAliases] = useState<Record<string, string>>({})
@@ -123,6 +133,8 @@ export default function PlayerDetail() {
           </div>
         </div>
       </div>
+
+      {analysis ? <PlayerAnalysisCharts analysis={analysis} /> : null}
 
       {user === 'admin' && (
         <div className="chart-container" style={{ marginBottom: '1.5rem' }}>

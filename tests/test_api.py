@@ -680,3 +680,162 @@ def test_post_load_new_event_creates_and_attaches(client_with_overrides, sample_
     assert api_main._decks[0]["event_id"] == "m1"
     assert api_main._decks[0]["event_name"] == "Fresh"
     assert api_main._decks[0]["deck_id"] == 2_000_600
+
+
+# ---------- Player analysis endpoint ---------------------------------------
+
+
+def _analysis_fixture_decks():
+    """Decks for analysis tests: one player with 3 events across time, plus opponents."""
+    return [
+        {
+            "deck_id": 100001, "event_id": 5001, "format_id": "LE", "name": "Target 1",
+            "player": "Target", "player_id": 9001,
+            "event_name": "Event A", "date": "01/01/25", "rank": "1", "player_count": 32,
+            "mainboard": [{"qty": 4, "card": "Lightning Bolt"}, {"qty": 20, "card": "Mountain"}],
+            "sideboard": [], "commanders": [], "archetype": "Red Aggro",
+        },
+        {
+            "deck_id": 100002, "event_id": 5002, "format_id": "LE", "name": "Target 2",
+            "player": "Target", "player_id": 9001,
+            "event_name": "Event B", "date": "15/02/25", "rank": "3-4", "player_count": 64,
+            "mainboard": [{"qty": 4, "card": "Lightning Bolt"}, {"qty": 2, "card": "Goblin Guide"}, {"qty": 20, "card": "Mountain"}],
+            "sideboard": [], "commanders": [], "archetype": "Red Aggro",
+        },
+        {
+            "deck_id": 100003, "event_id": 5003, "format_id": "MO", "name": "Target 3",
+            "player": "Target", "player_id": 9001,
+            "event_name": "Event C", "date": "20/03/25", "rank": "5-8", "player_count": 128,
+            "mainboard": [{"qty": 4, "card": "Counterspell"}, {"qty": 20, "card": "Island"}],
+            "sideboard": [], "commanders": [], "archetype": "UW Control",
+        },
+        {
+            "deck_id": 100010, "event_id": 5001, "format_id": "LE", "name": "Opp 1",
+            "player": "Rival", "player_id": 9002,
+            "event_name": "Event A", "date": "01/01/25", "rank": "2", "player_count": 32,
+            "mainboard": [{"qty": 20, "card": "Plains"}], "sideboard": [],
+            "commanders": [], "archetype": "UW Control",
+        },
+    ]
+
+
+def test_player_analysis_by_id_shape(client):
+    api_main._decks = _analysis_fixture_decks()
+    with patch.object(api_main, "_database_available", return_value=False):
+        r = client.get("/api/v1/players/id/9001/analysis")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["player"] == "Target"
+    assert data["player_id"] == 9001
+    # Required top-level keys
+    for key in (
+        "per_event", "leaderboard_history", "archetype_distribution",
+        "archetype_performance", "color_distribution", "color_count_distribution",
+        "format_distribution", "commander_distribution", "average_mana_curve",
+        "top_cards", "pet_cards", "field_size_buckets", "metagame_comparison",
+        "highlights",
+    ):
+        assert key in data, f"missing key {key}"
+    assert len(data["per_event"]) == 3
+    # per_event is sorted by date ascending
+    dates = [e["date"] for e in data["per_event"]]
+    assert dates == ["01/01/25", "15/02/25", "20/03/25"]
+
+
+def test_player_analysis_leaderboard_history_chronological(client):
+    api_main._decks = _analysis_fixture_decks()
+    with patch.object(api_main, "_database_available", return_value=False):
+        r = client.get("/api/v1/players/id/9001/analysis")
+    assert r.status_code == 200
+    hist = r.json()["leaderboard_history"]
+    assert len(hist) == 3  # one snapshot per target event date
+    # Dates in ascending order
+    keys = [p["date"] for p in hist]
+    assert keys == sorted(keys, key=lambda s: s.split("/")[::-1])
+    # After first event (win with 8pts), target is #1
+    assert hist[0]["rank"] == 1
+    assert hist[0]["total_players"] >= 2
+
+
+def test_player_analysis_archetype_performance(client):
+    api_main._decks = _analysis_fixture_decks()
+    with patch.object(api_main, "_database_available", return_value=False):
+        r = client.get("/api/v1/players/id/9001/analysis")
+    assert r.status_code == 200
+    rows = r.json()["archetype_performance"]
+    red = next(row for row in rows if row["archetype"] == "Red Aggro")
+    assert red["count"] == 2
+    assert red["win_pct"] == 50.0  # 1 win of 2
+    assert red["top8_pct"] == 100.0  # 1 and 3-4 both top-8
+    assert red["best_finish"] == "1"
+
+
+def test_player_analysis_highlights_streak_and_field_win(client):
+    api_main._decks = _analysis_fixture_decks()
+    with patch.object(api_main, "_database_available", return_value=False):
+        r = client.get("/api/v1/players/id/9001/analysis")
+    h = r.json()["highlights"]
+    assert h["total_events"] == 3
+    assert h["longest_top8_streak"] == 3  # all three decks are top-8
+    assert h["biggest_field_win"] == 32
+    assert h["best_finish"] == "1"
+    assert h["first_event_date"] == "01/01/25"
+    assert h["last_event_date"] == "20/03/25"
+
+
+def test_player_analysis_format_and_color_count(client):
+    api_main._decks = _analysis_fixture_decks()
+    with patch.object(api_main, "_database_available", return_value=False):
+        r = client.get("/api/v1/players/id/9001/analysis")
+    data = r.json()
+    # Two decks in LE, one in MO
+    by_fmt = {row["format_id"]: row["count"] for row in data["format_distribution"]}
+    assert by_fmt["LE"] == 2
+    assert by_fmt["MO"] == 1
+    # Color count distribution has three decks across buckets
+    assert sum(data["color_count_distribution"].values()) == 3
+    # Commander distribution is empty for non-EDH player
+    assert data["commander_distribution"] == []
+
+
+def test_player_analysis_by_name(client):
+    api_main._decks = _analysis_fixture_decks()
+    with patch.object(api_main, "_database_available", return_value=False):
+        r = client.get("/api/v1/players/Target/analysis")
+    assert r.status_code == 200
+    assert r.json()["player"] == "Target"
+
+
+def test_player_analysis_404(client):
+    api_main._decks = _analysis_fixture_decks()
+    with patch.object(api_main, "_database_available", return_value=False):
+        r = client.get("/api/v1/players/id/99999/analysis")
+    assert r.status_code == 404
+
+
+def test_player_analysis_top_cards_excludes_basics(client):
+    api_main._decks = _analysis_fixture_decks()
+    with patch.object(api_main, "_database_available", return_value=False):
+        r = client.get("/api/v1/players/id/9001/analysis")
+    cards = {c["card"] for c in r.json()["top_cards"]}
+    assert "Mountain" not in cards
+    assert "Island" not in cards
+    assert "Plains" not in cards
+
+
+def test_player_analysis_accepts_string_event_id(client):
+    """Manually-created events use string IDs like 'm1'; response must serialize cleanly."""
+    decks = _analysis_fixture_decks()
+    manual_deck = {
+        "deck_id": 100099, "event_id": "m1", "format_id": "LE", "name": "Manual",
+        "player": "Target", "player_id": 9001,
+        "event_name": "Manual Event", "date": "05/04/25", "rank": "1", "player_count": 16,
+        "mainboard": [{"qty": 4, "card": "Lightning Bolt"}],
+        "sideboard": [], "commanders": [], "archetype": "Red Aggro",
+    }
+    api_main._decks = decks + [manual_deck]
+    with patch.object(api_main, "_database_available", return_value=False):
+        r = client.get("/api/v1/players/id/9001/analysis")
+    assert r.status_code == 200
+    event_ids = [e["event_id"] for e in r.json()["per_event"]]
+    assert "m1" in event_ids

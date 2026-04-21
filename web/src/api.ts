@@ -755,6 +755,111 @@ export async function getPlayerDetailById(playerId: number): Promise<PlayerDetai
   return fetchApi(`/players/id/${playerId}`)
 }
 
+export interface PlayerAnalysisEvent {
+  deck_id: number
+  event_id: number | string | null
+  event_name: string
+  date: string
+  rank: string
+  normalized_rank: string
+  normalized_rank_num: number | null
+  points: number
+  player_count: number
+  format_id: string
+  archetype: string | null
+  color_identity: string[]
+  commanders: string[]
+}
+
+export interface PlayerAnalysisLeaderboardPoint {
+  date: string
+  rank: number
+  total_players: number
+}
+
+export interface PlayerAnalysisArchetypeRow {
+  archetype: string
+  count: number
+  pct: number
+}
+
+export interface PlayerAnalysisArchetypePerf {
+  archetype: string
+  count: number
+  avg_finish: number | null
+  best_finish: string
+  top8_pct: number
+  win_pct: number
+}
+
+export interface PlayerAnalysisFormatRow {
+  format_id: string
+  count: number
+  pct: number
+}
+
+export interface PlayerAnalysisCommanderRow {
+  commander: string
+  count: number
+  pct: number
+}
+
+export interface PlayerAnalysisCardRow {
+  card: string
+  deck_count: number
+  total_copies: number
+}
+
+export interface PlayerAnalysisFieldBucket {
+  bucket: string
+  count: number
+  avg_finish: number | null
+  top8_pct: number
+}
+
+export interface PlayerAnalysisMetagameRow {
+  archetype: string
+  player_pct: number
+  global_pct: number
+}
+
+export interface PlayerAnalysisHighlights {
+  best_finish: string
+  longest_top8_streak: number
+  biggest_field_win: number | null
+  total_events: number
+  avg_days_between_events: number | null
+  first_event_date: string | null
+  last_event_date: string | null
+}
+
+export interface PlayerAnalysis {
+  player: string
+  player_id: number | null
+  per_event: PlayerAnalysisEvent[]
+  leaderboard_history: PlayerAnalysisLeaderboardPoint[]
+  archetype_distribution: PlayerAnalysisArchetypeRow[]
+  archetype_performance: PlayerAnalysisArchetypePerf[]
+  color_distribution: Record<string, number>
+  color_count_distribution: Record<string, number>
+  format_distribution: PlayerAnalysisFormatRow[]
+  commander_distribution: PlayerAnalysisCommanderRow[]
+  average_mana_curve: Record<string, number>
+  top_cards: PlayerAnalysisCardRow[]
+  pet_cards: PlayerAnalysisCardRow[]
+  field_size_buckets: PlayerAnalysisFieldBucket[]
+  metagame_comparison: PlayerAnalysisMetagameRow[]
+  highlights: PlayerAnalysisHighlights
+}
+
+export async function getPlayerAnalysisById(playerId: number): Promise<PlayerAnalysis> {
+  return fetchApi(`/players/id/${playerId}/analysis`)
+}
+
+export async function getPlayerAnalysisByName(playerName: string): Promise<PlayerAnalysis> {
+  return fetchApi(`/players/${encodeURIComponent(playerName)}/analysis`)
+}
+
 export async function getPlayerAliases(): Promise<{ aliases: Record<string, string> }> {
   return fetchApi('/player-aliases')
 }
