@@ -2188,6 +2188,7 @@ def get_upload_link_info(token: str):
                                 "opponent_player": reporting_player,
                                 "result": inv_result,
                                 "intentional_draw": _is_intentional_draw_result(res),
+                                "round": r.get("round"),
                             })
                     deck_out["opponent_reported_matchups"] = inverted
                 out["deck"] = deck_out
@@ -2554,6 +2555,7 @@ def get_deck_matchups(deck_id: int):
                         "opponent_player": reporting_player,
                         "result": inv_result,
                         "intentional_draw": _is_intentional_draw_result(res),
+                        "round": r.get("round"),
                     })
     return {"matchups": rows, "opponent_reported_matchups": opponent_reported_matchups}
 

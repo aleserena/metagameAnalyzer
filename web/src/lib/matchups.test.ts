@@ -40,6 +40,28 @@ describe('apiMatchupsToPhases', () => {
     expect(top8).toHaveLength(1)
     expect(top8[0].opponent_player).toBe('Bob')
   })
+
+  it('does not duplicate a Top 8 opponent into Swiss from reported matchups without round', () => {
+    const { swiss, top8 } = apiMatchupsToPhases(
+      [{ opponent_player: 'Bob', result: 'win', round: 4 }],
+      3,
+      [{ opponent_player: 'Bob', result: 'loss' }]
+    )
+    expect(top8).toHaveLength(1)
+    expect(top8[0].opponent_player).toBe('Bob')
+    expect(swiss.filter((s) => s.opponent_player === 'Bob')).toHaveLength(0)
+  })
+
+  it('places reported Top 8 matchups in the Top 8 section when round is present', () => {
+    const { swiss, top8 } = apiMatchupsToPhases(
+      [],
+      3,
+      [{ opponent_player: 'Bob', result: 'loss', round: 4 }]
+    )
+    expect(swiss.filter((s) => s.opponent_player === 'Bob')).toHaveLength(0)
+    expect(top8).toHaveLength(1)
+    expect(top8[0].opponent_player).toBe('Bob')
+  })
 })
 
 describe('phasesToApiMatchups', () => {

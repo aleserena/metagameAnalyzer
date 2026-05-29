@@ -123,6 +123,9 @@ export function apiMatchupsToPhases(
   const swiss: MatchupRow[] = []
   const top8: MatchupRow[] = []
   const ownSwissKeys = new Set<string>()
+  const ownTop8Keys = new Set<string>()
+  /** Opponents we already have in our saved matchups (any phase); blocks orphan reported rows. */
+  const ownOpponentNames = new Set<string>()
   let legacyRound = 0
 
   for (const m of ourMatchups) {
@@ -132,12 +135,18 @@ export function apiMatchupsToPhases(
       legacyRound += 1
       round = legacyRound
     }
+    if (row.opponent_player && !isBye(row.result) && !isDrop(row.result)) {
+      ownOpponentNames.add(row.opponent_player.toLowerCase())
+    }
     if (round <= swissRounds) {
       if (row.opponent_player && !isBye(row.result) && !isDrop(row.result)) {
         ownSwissKeys.add(matchupKey(row.opponent_player, round))
       }
       swiss.push({ ...row, phase: 'swiss' })
     } else {
+      if (row.opponent_player && !isBye(row.result) && !isDrop(row.result)) {
+        ownTop8Keys.add(matchupKey(row.opponent_player, round))
+      }
       top8.push({ ...row, phase: 'top8' })
     }
   }
@@ -146,7 +155,15 @@ export function apiMatchupsToPhases(
     const row = matchupItemToRow(m)
     if (!row.opponent_player || isBye(row.result) || isDrop(row.result)) continue
     const round = m.round ?? null
-    if (round != null && round > swissRounds) continue
+    if (round != null && round > swissRounds) {
+      const key = matchupKey(row.opponent_player, round)
+      if (!ownTop8Keys.has(key)) {
+        ownTop8Keys.add(key)
+        top8.push({ ...row, phase: 'top8' })
+      }
+      continue
+    }
+    if (ownOpponentNames.has(row.opponent_player.toLowerCase())) continue
     if (round != null) {
       const key = matchupKey(row.opponent_player, round)
       if (ownSwissKeys.has(key)) continue
