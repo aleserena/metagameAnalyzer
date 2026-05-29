@@ -1805,6 +1805,7 @@ def list_matchups_with_deck_info(session: Session) -> list[dict]:
             "opponent_archetype": matchup_aggregate_archetype_label(m.opponent_archetype),
             "result": m.result or "loss",
             "result_note": m.result_note or "",
+            "round": m.round,
         }
         for m, d in rows
     ]
