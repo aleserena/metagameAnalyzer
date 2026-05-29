@@ -651,7 +651,12 @@ export async function getDeckMatchups(deckId: number): Promise<{
     result_note: string
     round: number | null
   }>
-  opponent_reported_matchups?: Array<{ opponent_player: string; result: string; intentional_draw?: boolean }>
+  opponent_reported_matchups?: Array<{
+    opponent_player: string
+    result: string
+    intentional_draw?: boolean
+    round?: number | null
+  }>
 }> {
   return fetchApi(`/decks/${deckId}/matchups`)
 }

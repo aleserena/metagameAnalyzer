@@ -1238,7 +1238,11 @@ def list_matchups_reported_against_player_id(session: Session, event_id: str, op
         .all()
     )
     return [
-        {"reporting_player": (d.player or "").strip(), "result": (m.result or "").strip()}
+        {
+            "reporting_player": (d.player or "").strip(),
+            "result": (m.result or "").strip(),
+            "round": m.round,
+        }
         for m, d in rows
     ]
 
