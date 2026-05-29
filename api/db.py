@@ -941,13 +941,27 @@ def upsert_matchups_for_deck(
     When opponent_deck_id is set (real opponent), also upserts the inverse row for the opponent so both sides
     of the matchup are stored (if A beats B, B is recorded as having lost to A).
 
-    Deletes existing rows for ``deck_id`` (this deck's report) and rows where ``opponent_deck_id == deck_id``
-    (other decks' mirrored rows vs this deck) so removing a matchup from the form drops both sides.
+    Deletes existing rows for ``deck_id`` (this deck's report), rows where ``opponent_deck_id == deck_id``
+    (mirrored rows vs this deck), and other event decks' rows where ``opponent_player_id`` is this deck's
+    player (orphan reports without opponent_deck_id) so removing a matchup from the form drops both sides.
     """
-    session.query(MatchupRow).filter(MatchupRow.deck_id == deck_id).delete(synchronize_session=False)
-    session.query(MatchupRow).filter(MatchupRow.opponent_deck_id == deck_id).delete(synchronize_session=False)
     deck_row = session.query(DeckRow).filter(DeckRow.deck_id == deck_id).first()
     my_player_id = deck_row.player_id if deck_row else None
+    event_id = _event_id_str(deck_row.event_id) if deck_row and deck_row.event_id else None
+    event_deck_ids: list[int] = []
+    if event_id:
+        event_deck_ids = [
+            r.deck_id
+            for r in session.query(DeckRow.deck_id).filter(DeckRow.event_id == event_id).all()
+        ]
+
+    session.query(MatchupRow).filter(MatchupRow.deck_id == deck_id).delete(synchronize_session=False)
+    session.query(MatchupRow).filter(MatchupRow.opponent_deck_id == deck_id).delete(synchronize_session=False)
+    if my_player_id is not None and event_deck_ids:
+        session.query(MatchupRow).filter(
+            MatchupRow.deck_id.in_(event_deck_ids),
+            MatchupRow.opponent_player_id == my_player_id,
+        ).delete(synchronize_session=False)
     my_player = (deck_row.player or "").strip() or "(unknown)" if deck_row else "(unknown)"
     if my_player_id is not None:
         prow = get_player_by_id(session, my_player_id)
