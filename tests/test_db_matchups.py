@@ -11,10 +11,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from api.schemas.matchups import MatchupItem
 
 from api.db import (
+    DeckRow,
     _swiss_rounds_for_players,
     create_event,
     list_event_ids_with_complete_matchups,
     list_matchups_by_deck,
+    list_matchups_reported_against_player_id,
     list_missing_matchups_for_event,
     upsert_deck,
     upsert_matchups_for_deck,
@@ -339,6 +341,34 @@ def test_list_matchups_by_deck_includes_opponent_player_id(db_session_rollback):
     assert opp_rows[0]["opponent_player"] == "Alpha"
     assert opp_rows[0]["result"] == "loss"
     assert opp_rows[0]["opponent_deck_id"] == base
+
+
+def test_upsert_matchups_removes_orphan_reports_against_player(db_session_rollback):
+    """Saving deck A without a matchup removes B's report vs A even when opponent_deck_id was NULL."""
+    session = db_session_rollback
+    eid = _TEST_EVENT_PREFIX + "orphan_del"
+    base = _TEST_DECK_ID_BASE + 960
+    create_event(
+        session, event_name="OrphanDel", date="01/01/25", format_id="ST", origin="manual", event_id=eid, player_count=2
+    )
+    upsert_deck(session, _make_deck(base, eid, "Alice"))
+    upsert_deck(session, _make_deck(base + 1, eid, "Bob"))
+    session.flush()
+    alice_row = session.query(DeckRow).filter_by(deck_id=base).first()
+    alice_pid = alice_row.player_id
+
+    upsert_matchups_for_deck(
+        session,
+        base + 1,
+        [{"opponent_player": "Alice", "opponent_deck_id": None, "result": "loss", "round": 1}],
+    )
+    session.flush()
+    assert len(list_matchups_reported_against_player_id(session, eid, alice_pid)) == 1
+
+    upsert_matchups_for_deck(session, base, [])
+    session.flush()
+    assert list_matchups_reported_against_player_id(session, eid, alice_pid) == []
+    assert list_matchups_by_deck(session, base) == []
 
 
 def test_upsert_same_opponent_different_rounds(db_session_rollback):
