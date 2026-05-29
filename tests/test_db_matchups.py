@@ -339,3 +339,34 @@ def test_list_matchups_by_deck_includes_opponent_player_id(db_session_rollback):
     assert opp_rows[0]["opponent_player"] == "Alpha"
     assert opp_rows[0]["result"] == "loss"
     assert opp_rows[0]["opponent_deck_id"] == base
+
+
+def test_upsert_same_opponent_different_rounds(db_session_rollback):
+    """Same opponent in Swiss and Top 8 (different round) is stored as two rows."""
+    session = db_session_rollback
+    eid = _TEST_EVENT_PREFIX + "dup_round"
+    base = _TEST_DECK_ID_BASE + 950
+    create_event(
+        session, event_name="DupRound", date="01/01/25", format_id="ST", origin="manual", event_id=eid, player_count=8
+    )
+    deck_a = _make_deck(base, eid, "Alice")
+    deck_a["rank"] = "1"
+    deck_b = _make_deck(base + 1, eid, "Bob")
+    deck_b["rank"] = "2"
+    upsert_deck(session, deck_a)
+    upsert_deck(session, deck_b)
+    session.flush()
+    upsert_matchups_for_deck(
+        session,
+        base,
+        [
+            {"opponent_player": "Bob", "opponent_deck_id": base + 1, "result": "win", "round": 1},
+            {"opponent_player": "Bob", "opponent_deck_id": base + 1, "result": "loss", "round": 4},
+        ],
+    )
+    session.flush()
+    rows = list_matchups_by_deck(session, base)
+    bob_rows = [r for r in rows if r["opponent_player"] == "Bob"]
+    assert len(bob_rows) == 2
+    rounds = sorted(r["round"] for r in bob_rows)
+    assert rounds == [1, 4]

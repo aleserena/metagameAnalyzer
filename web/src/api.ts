@@ -658,7 +658,7 @@ export async function getDeckMatchups(deckId: number): Promise<{
 
 export async function updateDeckMatchups(
   deckId: number,
-  body: { matchups: Array<{ opponent_player: string; result: string }> }
+  body: { matchups: Array<{ opponent_player: string; result: string; round?: number | null }> }
 ): Promise<{ deck_id: number; message: string }> {
   return fetchApi(`/decks/${deckId}/matchups`, { method: 'PUT', body: JSON.stringify(body) })
 }

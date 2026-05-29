@@ -2323,8 +2323,8 @@ def submit_feedback_with_upload_link(token: str, body: EventFeedbackBody):
     """Submit event feedback (archetype + matchups) via one-time feedback link. Deck must exist; deck list not required."""
     if not (body.archetype or "").strip():
         raise HTTPException(status_code=400, detail="archetype is required")
-    if len(body.matchups or []) > 10:
-        raise HTTPException(status_code=400, detail="Maximum 10 matchups allowed")
+    if len(body.matchups or []) > 12:
+        raise HTTPException(status_code=400, detail="Maximum 12 matchups allowed")
     with _db.session_scope() as session:
         row, ev = _get_validated_upload_link(
             session,
@@ -2564,8 +2564,8 @@ def update_deck_matchups(deck_id: int, body: AdminMatchupsBody):
     deck_dict = _get_deck_by_id(deck_id)
     if not deck_dict:
         raise HTTPException(status_code=404, detail="Deck not found")
-    if len(body.matchups or []) > 10:
-        raise HTTPException(status_code=400, detail="Maximum 10 matchups allowed")
+    if len(body.matchups or []) > 12:
+        raise HTTPException(status_code=400, detail="Maximum 12 matchups allowed")
     event_id = str(deck_dict.get("event_id", ""))
     if not event_id:
         raise HTTPException(status_code=400, detail="Deck has no event")
@@ -3698,13 +3698,15 @@ def get_matchups_summary(
     paired_rows = [r for r in filtered if r.get("opponent_deck_id") is not None]
     unpaired_rows = [r for r in filtered if r.get("opponent_deck_id") is None]
 
-    by_match: dict[tuple[int, int], list[dict]] = {}
+    by_match: dict[tuple[int, int, int | None], list[dict]] = {}
     for r in paired_rows:
-        key = tuple(sorted([r["deck_id"], r["opponent_deck_id"]]))
+        d_a, d_b = sorted([r["deck_id"], r["opponent_deck_id"]])
+        rnd = r.get("round")
+        key = (d_a, d_b, rnd)
         by_match.setdefault(key, []).append(r)
 
     for match_key, match_rows in by_match.items():
-        d_a, d_b = match_key
+        d_a, d_b, _rnd = match_key
         from_ab = [r for r in match_rows if (r["deck_id"], r["opponent_deck_id"]) == (d_a, d_b)]
         from_ba = [r for r in match_rows if (r["deck_id"], r["opponent_deck_id"]) == (d_b, d_a)]
         from_ab.sort(key=lambda x: (x.get("round") or 0, x.get("deck_id")))
@@ -4010,14 +4012,17 @@ def get_matchup_discrepancies(event_id: str):
         rows = _db.list_matchups_for_event(session, event_id)
         by_pair = {}
         for r in rows:
-            key = tuple(sorted([r["deck_id"], r["opponent_deck_id"]]))
+            deck_a, deck_b = sorted([r["deck_id"], r["opponent_deck_id"]])
+            rnd = r.get("round")
+            key = (deck_a, deck_b, rnd)
             if key not in by_pair:
                 by_pair[key] = []
             by_pair[key].append(r)
         discrepancies = []
-        for (deck_a, deck_b), matchups in by_pair.items():
+        for (_deck_a, _deck_b, _round), matchups in by_pair.items():
             if len(matchups) != 2:
                 continue
+            deck_a, deck_b = _deck_a, _deck_b
             from_a = next((m for m in matchups if m["deck_id"] == deck_a), None)
             from_b = next((m for m in matchups if m["deck_id"] == deck_b), None)
             if from_a is None or from_b is None:

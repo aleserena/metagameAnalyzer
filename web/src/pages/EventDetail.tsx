@@ -39,7 +39,15 @@ import PageSkeleton from '../components/PageSkeleton'
 import CardSearchInput from '../components/CardSearchInput'
 import { parseMoxfieldDeckList, formatMoxfieldDeckList } from '../lib/deckListParser'
 import { normalizeDeckListByLookup } from '../lib/deckUtils'
-import { isBye, isDrop, matchupItemToRow } from '../lib/matchups'
+import {
+  apiMatchupsToPhases,
+  isTop8Rank,
+  MAX_MATCHUPS_TOTAL,
+  MAX_TOP8_MATCHUP_ROWS,
+  phasesToApiMatchups,
+  swissRoundsForPlayerCount,
+  type MatchupRow,
+} from '../lib/matchups'
 import { reportError, ddMmYyToIso, isoToDdMmYy } from '../utils'
 
 /** Coerce value for display; avoid [object Object]. */
@@ -119,7 +127,8 @@ export default function EventDetail() {
   const [missingMatchups, setMissingMatchups] = useState<Awaited<ReturnType<typeof getMissingMatchups>>['missing'] | null>(null)
   const [fixingPairKey, setFixingPairKey] = useState<string | null>(null)
   const [matchupsDeckId, setMatchupsDeckId] = useState<number | null>(null)
-  const [matchupsList, setMatchupsList] = useState<Array<{ opponent_player: string; result: string; intentional_draw: boolean }>>([])
+  const [swissMatchups, setSwissMatchups] = useState<MatchupRow[]>([])
+  const [top8Matchups, setTop8Matchups] = useState<MatchupRow[]>([])
   const [loadingMatchups, setLoadingMatchups] = useState(false)
   const [savingMatchups, setSavingMatchups] = useState(false)
   const [exportingEvent, setExportingEvent] = useState(false)
@@ -516,23 +525,33 @@ export default function EventDetail() {
     }
   }
 
+  const matchupsSwissRounds = useMemo(() => {
+    const n = event?.player_count ?? decks.length
+    return swissRoundsForPlayerCount(n)
+  }, [event?.player_count, decks.length])
+
+  const matchupsShowTop8 = useMemo(() => {
+    if (matchupsDeckId == null) return false
+    const deck = decks.find((d) => d.deck_id === matchupsDeckId)
+    return deck ? isTop8Rank(deck.rank) : false
+  }, [matchupsDeckId, decks])
+
   const openUpdateMatchupsModal = (deckId: number) => {
     setMatchupsDeckId(deckId)
-    setMatchupsList([])
+    setSwissMatchups([])
+    setTop8Matchups([])
     setLoadingMatchups(true)
+    const playerCount = event?.player_count ?? decks.length
+    const swissRounds = swissRoundsForPlayerCount(playerCount)
     getDeckMatchups(deckId)
       .then((res) => {
-        const ourMatchups = (res.matchups || []).map((m) => matchupItemToRow(m))
-        const reportedAgainstMe = (res.opponent_reported_matchups || []).map((m) => matchupItemToRow(m))
-        const byOpponent = new Map<string, { opponent_player: string; result: string; intentional_draw: boolean }>()
-        for (const m of reportedAgainstMe) {
-          if (m.opponent_player) byOpponent.set(m.opponent_player, m)
-        }
-        for (const m of ourMatchups) {
-          if (m.opponent_player) byOpponent.set(m.opponent_player, m)
-        }
-        const merged = Array.from(byOpponent.values())
-        setMatchupsList(merged.length > 0 ? merged : [{ opponent_player: '', result: 'draw', intentional_draw: false }])
+        const { swiss, top8 } = apiMatchupsToPhases(
+          res.matchups || [],
+          swissRounds,
+          res.opponent_reported_matchups || []
+        )
+        setSwissMatchups(swiss)
+        setTop8Matchups(top8)
       })
       .catch((e) => {
         toast.error(reportError(e))
@@ -543,26 +562,48 @@ export default function EventDetail() {
 
   const closeUpdateMatchupsModal = () => {
     setMatchupsDeckId(null)
-    setMatchupsList([])
+    setSwissMatchups([])
+    setTop8Matchups([])
   }
 
-  const addMatchupRow = () =>
-    setMatchupsList((prev) =>
-      prev.length >= 10 ? prev : [...prev, { opponent_player: '', result: 'draw', intentional_draw: false }]
+  const emptyRow = (phase: 'swiss' | 'top8'): MatchupRow => ({
+    opponent_player: '',
+    result: 'draw',
+    intentional_draw: false,
+    phase,
+  })
+
+  const addSwissMatchupRow = () =>
+    setSwissMatchups((prev) =>
+      prev.length >= matchupsSwissRounds || prev.length + top8Matchups.length >= MAX_MATCHUPS_TOTAL
+        ? prev
+        : [...prev, emptyRow('swiss')]
     )
-  const updateMatchupRow = (i: number, field: 'opponent_player' | 'result' | 'intentional_draw', value: string | boolean) =>
-    setMatchupsList((prev) => prev.map((m, j) => (j === i ? { ...m, [field]: value } : m)))
-  const removeMatchupRow = (i: number) => setMatchupsList((prev) => prev.filter((_, j) => j !== i))
+  const updateSwissMatchupRow = (
+    i: number,
+    field: 'opponent_player' | 'result' | 'intentional_draw',
+    value: string | boolean
+  ) => setSwissMatchups((prev) => prev.map((m, j) => (j === i ? { ...m, [field]: value } : m)))
+  const removeSwissMatchupRow = (i: number) =>
+    setSwissMatchups((prev) => (prev.length <= 1 ? prev : prev.filter((_, j) => j !== i)))
+
+  const addTop8MatchupRow = () =>
+    setTop8Matchups((prev) =>
+      prev.length >= MAX_TOP8_MATCHUP_ROWS || prev.length + swissMatchups.length >= MAX_MATCHUPS_TOTAL
+        ? prev
+        : [...prev, emptyRow('top8')]
+    )
+  const updateTop8MatchupRow = (
+    i: number,
+    field: 'opponent_player' | 'result' | 'intentional_draw',
+    value: string | boolean
+  ) => setTop8Matchups((prev) => prev.map((m, j) => (j === i ? { ...m, [field]: value } : m)))
+  const removeTop8MatchupRow = (i: number) => setTop8Matchups((prev) => prev.filter((_, j) => j !== i))
 
   const handleSaveMatchups = () => {
     if (matchupsDeckId == null) return
     const payload = {
-      matchups: matchupsList
-        .filter((m) => (m.opponent_player || '').trim() || isBye(m.result) || isDrop(m.result))
-        .map((m) => ({
-          opponent_player: isBye(m.result) || isDrop(m.result) ? '' : (m.opponent_player || '').trim(),
-          result: m.result || 'draw',
-        })),
+      matchups: phasesToApiMatchups(swissMatchups, top8Matchups, matchupsSwissRounds),
     }
     setSavingMatchups(true)
     updateDeckMatchups(matchupsDeckId, payload)
@@ -1230,13 +1271,19 @@ export default function EventDetail() {
           size={520}
         >
           <MatchupsForm
-            matchupsList={matchupsList}
+            swissMatchups={swissMatchups}
+            top8Matchups={top8Matchups}
+            showTop8Section={matchupsShowTop8}
+            swissRounds={matchupsSwissRounds}
             opponentOptions={matchupsOpponentOptions}
             loading={loadingMatchups}
             saving={savingMatchups}
-            onUpdateRow={updateMatchupRow}
-            onRemoveRow={removeMatchupRow}
-            onAddRow={addMatchupRow}
+            onUpdateSwissRow={updateSwissMatchupRow}
+            onRemoveSwissRow={removeSwissMatchupRow}
+            onAddSwissRow={addSwissMatchupRow}
+            onUpdateTop8Row={updateTop8MatchupRow}
+            onRemoveTop8Row={removeTop8MatchupRow}
+            onAddTop8Row={addTop8MatchupRow}
             onSave={handleSaveMatchups}
             onCancel={closeUpdateMatchupsModal}
           />
