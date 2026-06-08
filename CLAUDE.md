@@ -63,6 +63,35 @@ metagameAnalyzer/
 
 **Supported formats:** EDH (Duel Commander), Standard, Pioneer, Modern, Legacy, Vintage, Pauper, cEDH, Premodern.
 
+## Backend Patterns
+
+**Adding a new API route:** Add the endpoint directly to `api/main.py` (where all routes live). Define request/response Pydantic models in the appropriate file under `api/schemas/`. Use `_db.session_scope()` for DB access and the `_decks` in-memory list for fast read queries.
+
+**DB access pattern:**
+```python
+with _db.session_scope() as session:
+    rows = session.query(MatchupRow).filter(...).all()
+```
+
+**Key DB models** (`api/db.py`):
+- `DeckRow` — deck with `player_id`, `event_id`, `archetype`, `format_id`
+- `MatchupRow` — per-round match result: `deck_id`, `opponent_player_id`, `opponent_deck_id`, `opponent_archetype`, `result` (`win|loss|draw|intentional_draw`), `round`. Both sides stored (inverse written automatically by `upsert_matchups_for_deck`).
+- `PlayerRow` — canonical player with `display_name`
+
+**In-memory data:** `_decks` is a list of dicts loaded from DB on startup. Most read endpoints query this list directly for speed. Mutations go to DB then trigger a reload.
+
+## Frontend Patterns
+
+**No component library or Tailwind.** Styles are inline (`style={{ ... }}`) or in `web/src/style.css` using plain CSS class names. Follow existing patterns — don't introduce a new styling system.
+
+**Adding a new API call:** Add the function to `web/src/api.ts`. Return type is inferred from the response shape; add matching TypeScript types to `web/src/types.ts` if needed.
+
+**Tooltip pattern:** `Matchups.tsx` has a self-contained tooltip positioning helper (`getTooltipPosition`) using `DOMRect` + `window.innerWidth/innerHeight`. Reuse this pattern for any hover-based popups.
+
+**Scroll containers:** The matrix pages use `<div className="card" style={{ overflow: 'auto' }}>` as the scroll wrapper. `style.css` provides `.table-wrap` (with `-webkit-overflow-scrolling: touch`) and `.table-wrap-outer` (with gradient right-edge indicator). Use these classes for new scrollable tables.
+
+**Scryfall integration** (`src/mtgtop8/card_lookup.py`): `lookup_cards(names)` returns `{name: {image_uris, mana_cost, cmc, type_line, colors, color_identity, card_faces}}`. The raw Scryfall card object has a `prices` field (`{usd, usd_foil, eur, eur_foil, tix}`) that `_build_entry()` currently discards — add it there to expose prices through the cache.
+
 ## Non-obvious Caveats
 
 - Use `python3`, not `python` — the environment does not alias `python`.
