@@ -13,6 +13,7 @@ SCRYFALL_AUTOCOMPLETE = "https://api.scryfall.com/cards/autocomplete"
 CACHE_FILE = Path(__file__).resolve().parent.parent.parent / ".scryfall_cache.json"
 REQUEST_DELAY = 0.1  # ~10 req/s rate limit
 AUTOCOMPLETE_MIN_LEN = 2
+SCRYFALL_HEADERS = {"User-Agent": "MTGMetagameAnalyzer/1.0 (metagame-analyzer)"}
 
 
 _card_cache: dict[str, dict] = {}
@@ -63,6 +64,7 @@ def _fetch_paper_printing(card_name: str) -> dict | None:
         r = requests.get(
             SCRYFALL_SEARCH,
             params={"q": q, "unique": "cards"},
+            headers=SCRYFALL_HEADERS,
             timeout=15,
         )
         r.raise_for_status()
@@ -86,6 +88,7 @@ def _search_by_flavor_name(typed_name: str) -> dict | None:
         r = requests.get(
             SCRYFALL_SEARCH,
             params={"q": q, "unique": "cards"},
+            headers=SCRYFALL_HEADERS,
             timeout=15,
         )
         r.raise_for_status()
@@ -174,6 +177,7 @@ def lookup_cards(card_names: list[str]) -> dict[str, dict]:
             r = requests.post(
                 SCRYFALL_COLLECTION,
                 json={"identifiers": identifiers},
+                headers=SCRYFALL_HEADERS,
                 timeout=30,
             )
             r.raise_for_status()
@@ -238,6 +242,7 @@ def autocomplete_cards(prefix: str) -> list[str]:
         r = requests.get(
             SCRYFALL_AUTOCOMPLETE,
             params={"q": q},
+            headers=SCRYFALL_HEADERS,
             timeout=10,
         )
         r.raise_for_status()
