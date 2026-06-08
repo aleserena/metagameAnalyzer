@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { getPlayerDetail, getPlayerDetailById, getPlayerAnalysisById, getPlayerAnalysisByName, getSimilarPlayers, addPlayerAlias, getPlayerAliases, putPlayerEmail, sendPlayerMissingDeckLinks } from '../api'
+import { getPlayerDetail, getPlayerDetailById, getPlayerAnalysisById, getPlayerAnalysisByName, getSimilarPlayers, addPlayerAlias, getPlayerAliases, putPlayerEmail, sendPlayerMissingDeckLinks, getPlayerHeadToHead, getPlayerHeadToHeadDetail } from '../api'
 import type { PlayerAnalysis, PlayerDetail as PlayerDetailData } from '../api'
+import type { H2HSummary, H2HDetail } from '../types'
 import { useAuth } from '../contexts/AuthContext'
 import { useEventMetadata } from '../hooks/useEventMetadata'
 import { useFetch } from '../hooks/useFetch'
@@ -39,6 +40,10 @@ export default function PlayerDetail() {
     },
     [analysisKey, dateFrom, dateTo],
   )
+  const [h2h, setH2h] = useState<H2HSummary | null>(null)
+  const [h2hDetail, setH2hDetail] = useState<H2HDetail | null>(null)
+  const [h2hDetailOpponentId, setH2hDetailOpponentId] = useState<number | null>(null)
+  const [h2hLoading, setH2hLoading] = useState(false)
   const [similarPlayers, setSimilarPlayers] = useState<string[]>([])
   const [aliases, setAliases] = useState<Record<string, string>>({})
   const [mergeLoading, setMergeLoading] = useState(false)
@@ -91,6 +96,32 @@ export default function PlayerDetail() {
       .then((r) => setAliases(r.aliases))
       .catch(() => setAliases({}))
   }, [data?.player])
+
+  useEffect(() => {
+    if (!data?.player_id) return
+    setH2hLoading(true)
+    setH2h(null)
+    setH2hDetail(null)
+    setH2hDetailOpponentId(null)
+    getPlayerHeadToHead(data.player_id)
+      .then(setH2h)
+      .catch(() => setH2h(null))
+      .finally(() => setH2hLoading(false))
+  }, [data?.player_id])
+
+  const loadH2hDetail = (opponentId: number) => {
+    if (!data?.player_id) return
+    if (h2hDetailOpponentId === opponentId) {
+      setH2hDetail(null)
+      setH2hDetailOpponentId(null)
+      return
+    }
+    setH2hDetailOpponentId(opponentId)
+    setH2hDetail(null)
+    getPlayerHeadToHeadDetail(data.player_id, opponentId)
+      .then(setH2hDetail)
+      .catch(() => setH2hDetail(null))
+  }
 
   if (loading) return <PageSkeleton titleWidth={200} blocks={2} />
   if (error) {
@@ -176,6 +207,117 @@ export default function PlayerDetail() {
       </div>
 
       {analysis ? <PlayerAnalysisCharts analysis={analysis} /> : null}
+
+      {/* Rivals / Head-to-Head */}
+      {(h2hLoading || (h2h && h2h.opponents.length > 0)) && (
+        <div className="chart-container" style={{ marginBottom: '1.5rem' }}>
+          <h3 style={{ margin: '0 0 1rem' }}>Rivals</h3>
+          {h2hLoading ? (
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>Loading…</p>
+          ) : (
+            <div className="table-wrap-outer">
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th scope="col">Opponent</th>
+                      <th scope="col" style={{ textAlign: 'center' }}>W</th>
+                      <th scope="col" style={{ textAlign: 'center' }}>L</th>
+                      <th scope="col" style={{ textAlign: 'center' }}>D</th>
+                      <th scope="col" style={{ textAlign: 'right' }}>Win%</th>
+                      <th scope="col" style={{ textAlign: 'right' }}>Matches</th>
+                      <th scope="col" style={{ textAlign: 'right' }}>Formats</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {h2h!.opponents.map((opp) => {
+                      const isExpanded = h2hDetailOpponentId === opp.opponent_player_id
+                      const winColor = opp.win_pct >= 60 ? 'var(--success, #50c878)' : opp.win_pct <= 40 ? 'var(--danger, #dc5050)' : 'var(--text)'
+                      return (
+                        <>
+                          <tr
+                            key={opp.opponent_player_id}
+                            className="clickable"
+                            onClick={() => loadH2hDetail(opp.opponent_player_id)}
+                            style={{ background: isExpanded ? 'var(--bg-hover)' : undefined }}
+                          >
+                            <td>
+                              <a href={`/players/${opp.opponent_player_id}`} style={{ color: 'var(--accent)' }} onClick={(e) => e.stopPropagation()}>
+                                {opp.opponent_player}
+                              </a>
+                            </td>
+                            <td style={{ textAlign: 'center', color: 'var(--success, #50c878)', fontWeight: 600 }}>{opp.wins}</td>
+                            <td style={{ textAlign: 'center', color: 'var(--danger, #dc5050)', fontWeight: 600 }}>{opp.losses}</td>
+                            <td style={{ textAlign: 'center', color: 'var(--text-muted)' }}>{opp.draws}</td>
+                            <td style={{ textAlign: 'right', color: winColor, fontWeight: 600 }}>{opp.win_pct}%</td>
+                            <td style={{ textAlign: 'right' }}>{opp.matches}</td>
+                            <td style={{ textAlign: 'right', color: 'var(--text-muted)', fontSize: '0.8125rem' }}>
+                              {opp.formats.map((f) => f.format_id).join(', ')}
+                            </td>
+                          </tr>
+                          {isExpanded && (
+                            <tr key={`detail-${opp.opponent_player_id}`}>
+                              <td colSpan={7} style={{ padding: '0.5rem 1rem 1rem', background: 'var(--bg)' }}>
+                                {!h2hDetail ? (
+                                  <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', margin: 0 }}>Loading…</p>
+                                ) : (
+                                  <table style={{ width: '100%', fontSize: '0.8125rem' }}>
+                                    <thead>
+                                      <tr>
+                                        <th scope="col">Date</th>
+                                        <th scope="col">Event</th>
+                                        <th scope="col">Format</th>
+                                        <th scope="col">Rd</th>
+                                        <th scope="col">Result</th>
+                                        <th scope="col">Your deck</th>
+                                        <th scope="col">Their deck</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {h2hDetail.matches.map((m, i) => {
+                                        const rc = m.result === 'win' ? 'var(--success, #50c878)' : m.result === 'loss' ? 'var(--danger, #dc5050)' : 'var(--text-muted)'
+                                        return (
+                                          <tr key={i}>
+                                            <td>{m.date}</td>
+                                            <td>
+                                              <a href={`/events/${encodeURIComponent(String(m.event_id))}`} style={{ color: 'var(--accent)' }}>
+                                                {m.event_name || m.event_id}
+                                              </a>
+                                            </td>
+                                            <td>{m.format_id}</td>
+                                            <td style={{ color: 'var(--text-muted)' }}>{m.round ?? '—'}</td>
+                                            <td style={{ color: rc, fontWeight: 600, textTransform: 'capitalize' }}>
+                                              {m.result === 'intentional_draw' ? 'ID' : m.result}
+                                            </td>
+                                            <td>
+                                              {m.player_archetype ? (
+                                                <a href={`/decks/${m.deck_id}`} style={{ color: 'var(--accent)' }}>{m.player_archetype}</a>
+                                              ) : (
+                                                <a href={`/decks/${m.deck_id}`} style={{ color: 'var(--accent)' }}>Deck #{m.deck_id}</a>
+                                              )}
+                                            </td>
+                                            <td style={{ color: 'var(--text-muted)' }}>
+                                              {m.opponent_archetype ?? (m.opponent_deck_id ? `Deck #${m.opponent_deck_id}` : '—')}
+                                            </td>
+                                          </tr>
+                                        )
+                                      })}
+                                    </tbody>
+                                  </table>
+                                )}
+                              </td>
+                            </tr>
+                          )}
+                        </>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {user === 'admin' && (
         <div className="chart-container" style={{ marginBottom: '1.5rem' }}>

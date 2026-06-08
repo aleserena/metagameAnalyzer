@@ -384,6 +384,7 @@ def deck_analysis(deck: Deck, card_metadata: dict[str, dict]) -> dict[str, Any]:
                 "cmc": meta.get("cmc", 0),
                 "type_line": meta.get("type_line", ""),
                 "colors": meta.get("colors", []),
+                "prices": meta.get("prices"),
             }
 
         if is_land:
@@ -433,6 +434,7 @@ def deck_analysis(deck: Deck, card_metadata: dict[str, dict]) -> dict[str, Any]:
                 "cmc": meta.get("cmc", 0),
                 "type_line": meta.get("type_line", ""),
                 "colors": meta.get("colors", []),
+                "prices": meta.get("prices"),
             }
 
     sorted_types = sorted(

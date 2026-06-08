@@ -1,4 +1,4 @@
-import type { Deck, MetagameReport, Event, PlayerStats, SimilarDeck, ArchetypeDetail, ArchetypeWeeklyStats } from './types'
+import type { Deck, MetagameReport, Event, PlayerStats, SimilarDeck, ArchetypeDetail, ArchetypeWeeklyStats, CardHeatmap, ChurnReport, HealthReport, H2HSummary, H2HDetail, CommanderSynergy } from './types'
 import { getToken } from './contexts/AuthContext'
 import { fetchWithTimeout } from './utils'
 
@@ -205,6 +205,7 @@ export interface CardMeta {
   cmc: number
   type_line: string
   colors: string[]
+  prices?: { usd?: string | null; usd_foil?: string | null; eur?: string | null; eur_foil?: string | null; tix?: string | null }
 }
 
 export interface DeckAnalysis {
@@ -503,6 +504,7 @@ export async function getMatchupsPlayersSummary(params?: {
   }>
   min_matches: number
   include_opponents_below_min: boolean
+  player_ids: Record<string, number>
 }> {
   const search = new URLSearchParams()
   if (params?.format_id) search.set('format_id', params.format_id)
@@ -712,6 +714,30 @@ export async function getMetagame(
   return fetchApi(`/metagame?${params.toString()}`)
 }
 
+export async function getMetagameHealth(
+  format?: string | null,
+  eventIds?: string | null
+): Promise<HealthReport> {
+  const params = new URLSearchParams()
+  if (format) params.set('format', format)
+  if (eventIds) params.set('event_ids', eventIds)
+  return fetchApi(`/metagame/health?${params.toString()}`)
+}
+
+export async function getMetagameChurn(
+  format?: string | null,
+  weeks = 4,
+  topN: number = 8,
+  eventIds?: string | null
+): Promise<ChurnReport> {
+  const params = new URLSearchParams()
+  if (format) params.set('format', format)
+  params.set('weeks', String(weeks))
+  params.set('top_n', String(topN))
+  if (eventIds) params.set('event_ids', eventIds)
+  return fetchApi(`/metagame/churn?${params.toString()}`)
+}
+
 export async function getArchetypeDetail(
   archetypeName: string,
   params?: {
@@ -801,6 +827,24 @@ export async function getArchetypeWeeklyStats(
   if (params?.eventIds) search.set('event_ids', params.eventIds)
   const q = search.toString()
   return fetchApi(`/archetypes/${encodeURIComponent(archetypeName)}/weekly-stats${q ? `?${q}` : ''}`)
+}
+
+export async function getArchetypeCardHeatmap(
+  archetypeName: string,
+  params?: {
+    dateFrom?: string | null
+    dateTo?: string | null
+    eventIds?: string | null
+    ignoreLands?: boolean
+  }
+): Promise<CardHeatmap> {
+  const search = new URLSearchParams()
+  if (params?.dateFrom) search.set('date_from', params.dateFrom)
+  if (params?.dateTo) search.set('date_to', params.dateTo)
+  if (params?.eventIds) search.set('event_ids', params.eventIds)
+  if (params?.ignoreLands) search.set('ignore_lands', 'true')
+  const q = search.toString()
+  return fetchApi(`/archetypes/${encodeURIComponent(archetypeName)}/card-heatmap${q ? `?${q}` : ''}`)
 }
 
 export async function getPlayers(dateFrom?: string | null, dateTo?: string | null): Promise<{ players: PlayerStats[] }> {
@@ -1030,6 +1074,14 @@ export async function getSimilarPlayers(name: string, limit = 10): Promise<{ sim
   return fetchApi(`/players/similar?name=${encodeURIComponent(name)}&limit=${limit}`)
 }
 
+export async function getPlayerHeadToHead(playerId: number): Promise<H2HSummary> {
+  return fetchApi(`/players/id/${playerId}/head-to-head`)
+}
+
+export async function getPlayerHeadToHeadDetail(playerId: number, opponentId: number): Promise<H2HDetail> {
+  return fetchApi(`/players/id/${playerId}/head-to-head/${opponentId}`)
+}
+
 export async function loadDecks(file: File): Promise<{ loaded: number; message: string }> {
   const form = new FormData()
   form.append('file', file)
@@ -1064,4 +1116,17 @@ export async function runScrape(params: {
 
 export async function stopScrape(): Promise<{ message: string }> {
   return fetchApi('/scrape/stop', { method: 'POST' })
+}
+
+export async function getCommanderSynergies(
+  commanderName: string,
+  params?: { date_from?: string; date_to?: string; event_id?: string; event_ids?: string },
+): Promise<CommanderSynergy> {
+  const qs = new URLSearchParams()
+  if (params?.date_from) qs.set('date_from', params.date_from)
+  if (params?.date_to) qs.set('date_to', params.date_to)
+  if (params?.event_id) qs.set('event_id', params.event_id)
+  if (params?.event_ids) qs.set('event_ids', params.event_ids)
+  const query = qs.toString() ? `?${qs.toString()}` : ''
+  return fetchApi(`/commanders/${encodeURIComponent(commanderName)}/synergies${query}`)
 }

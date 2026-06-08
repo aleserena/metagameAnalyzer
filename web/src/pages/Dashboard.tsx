@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { getMetagame } from '../api'
-import type { MetagameReport, Event } from '../types'
+import { getMetagame, getMetagameHealth } from '../api'
+import type { MetagameReport, Event, HealthReport } from '../types'
 import { useEventMetadata } from '../hooks/useEventMetadata'
 import CardHover from '../components/CardHover'
 import EventSelector from '../components/EventSelector'
@@ -12,6 +12,7 @@ import { reportError } from '../utils'
 export default function Dashboard() {
   const { events, maxDate, lastEventDate, error: eventMetadataError } = useEventMetadata()
   const [metagame, setMetagame] = useState<MetagameReport | null>(null)
+  const [health, setHealth] = useState<HealthReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [ignoreLands, setIgnoreLands] = useState(false)
@@ -25,8 +26,11 @@ export default function Dashboard() {
     setLoading(true)
     setError(null)
     const eventIdsParam = eventIds.length ? eventIds.map(String).join(',') : undefined
-    getMetagame(false, ignoreLands, undefined, undefined, undefined, eventIdsParam)
-      .then(setMetagame)
+    Promise.all([
+      getMetagame(false, ignoreLands, undefined, undefined, undefined, eventIdsParam),
+      getMetagameHealth(null, eventIdsParam),
+    ])
+      .then(([m, h]) => { setMetagame(m); setHealth(h) })
       .catch((e) => {
         setError(e instanceof Error ? e.message : String(e))
         toast.error(reportError(e))
@@ -78,8 +82,11 @@ export default function Dashboard() {
               setError(null)
               setLoading(true)
               const eventIdsParam = eventIds.length ? eventIds.map(String).join(',') : undefined
-              getMetagame(false, ignoreLands, undefined, undefined, undefined, eventIdsParam)
-                .then(setMetagame)
+              Promise.all([
+                getMetagame(false, ignoreLands, undefined, undefined, undefined, eventIdsParam),
+                getMetagameHealth(null, eventIdsParam),
+              ])
+                .then(([m, h]) => { setMetagame(m); setHealth(h) })
                 .catch((e) => {
                   setError(e instanceof Error ? e.message : String(e))
                   toast.error(reportError(e))
@@ -155,6 +162,13 @@ export default function Dashboard() {
           <Link to="/archetypes" className="stat-card" style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}>
             <div className="value">{summary.unique_archetypes}</div>
             <div className="label">Archetypes</div>
+          </Link>
+          <Link to="/metagame#health" className="stat-card" style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}>
+            <div className="value" style={{ color: health?.health_score != null ? (health.health_score >= 70 ? 'var(--success, #50c878)' : health.health_score >= 40 ? 'var(--warning, #f0b432)' : 'var(--danger, #dc5050)') : undefined }}>
+              {health?.health_score != null ? health.health_score : '—'}
+              {health?.health_score != null && <span style={{ fontSize: '0.75em', marginLeft: 2 }}>/100</span>}
+            </div>
+            <div className="label">Health Score</div>
           </Link>
         </div>
         <div

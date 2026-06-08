@@ -20,6 +20,7 @@ import {
   getArchetypeDetail,
   getArchetypeCardTrends,
   getArchetypeWeeklyStats,
+  getArchetypeCardHeatmap,
   getCardLookup,
   getDecks,
   getMatchupsSummary,
@@ -30,7 +31,7 @@ import type {
   RecencyMode,
 } from '../api'
 import CardHover from '../components/CardHover'
-import type { ArchetypeDetail as ArchetypeDetailType, ArchetypeWeeklyStats, Deck, TypicalListEntry } from '../types'
+import type { ArchetypeDetail as ArchetypeDetailType, ArchetypeWeeklyStats, CardHeatmap, CardHeatmapEntry, Deck, TypicalListEntry } from '../types'
 import ManaSymbols from '../components/ManaSymbols'
 import Skeleton from '../components/Skeleton'
 import TopCardsSection from '../components/TopCardsSection'
@@ -68,6 +69,10 @@ export default function ArchetypeDetail() {
     flex: false,
     tech: false,
   })
+  const [heatmap, setHeatmap] = useState<CardHeatmap | null>(null)
+  const [loadingHeatmap, setLoadingHeatmap] = useState(false)
+  const [heatmapOpen, setHeatmapOpen] = useState(false)
+  const [heatmapCategory, setHeatmapCategory] = useState<string>('All')
 
   const navigate = useNavigate()
   const eventIdsParam = searchParams.get('event_ids') ?? undefined
@@ -175,6 +180,20 @@ export default function ArchetypeDetail() {
       window.clearTimeout(handle)
     }
   }, [archetypeName, eventIdsParam, ignoreLands, recencyMode, recencyValue, customRecentFrom])
+
+  useEffect(() => {
+    if (!archetypeName || !heatmapOpen) return
+    let cancelled = false
+    setLoadingHeatmap(true)
+    getArchetypeCardHeatmap(decodeURIComponent(archetypeName), {
+      eventIds: eventIdsParam ?? undefined,
+      ignoreLands,
+    })
+      .then((h) => { if (!cancelled) setHeatmap(h) })
+      .catch(() => { if (!cancelled) setHeatmap(null) })
+      .finally(() => { if (!cancelled) setLoadingHeatmap(false) })
+    return () => { cancelled = true }
+  }, [archetypeName, eventIdsParam, ignoreLands, heatmapOpen])
 
   if (!archetypeName) {
     return (
@@ -323,13 +342,21 @@ export default function ArchetypeDetail() {
             </>
           )}
         </p>
-        <div style={{ marginTop: '0.5rem' }}>
+        <div style={{ marginTop: '0.5rem', display: 'flex', flexWrap: 'wrap', gap: '1rem' }}>
           <Link
             to={`/decks?archetype=${encodeURIComponent(detail.archetype)}${eventIdsParam ? `&event_ids=${encodeURIComponent(eventIdsParam)}` : ''}`}
             style={{ fontSize: '0.875rem', color: 'var(--accent)' }}
           >
             View all decks for this archetype
           </Link>
+          {topDecks.length > 0 && ['EDH', 'CEDH', 'COMMANDER'].includes((topDecks[0]?.format_id ?? '').toUpperCase()) && (
+            <Link
+              to={`/commanders/${encodeURIComponent(detail.archetype)}`}
+              style={{ fontSize: '0.875rem', color: 'var(--accent)' }}
+            >
+              View Commander Synergies
+            </Link>
+          )}
         </div>
       </div>
 
@@ -929,6 +956,94 @@ export default function ArchetypeDetail() {
             )}
           </div>
         </div>
+      </div>
+
+      <div style={{ marginTop: '1.5rem' }}>
+        <button
+          type="button"
+          onClick={() => setHeatmapOpen((v) => !v)}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.4rem',
+            background: 'none',
+            border: 'none',
+            padding: 0,
+            cursor: 'pointer',
+            color: 'inherit',
+            font: 'inherit',
+          }}
+        >
+          <h3 style={{ margin: 0 }}>Card Usage Heatmap</h3>
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>{heatmapOpen ? '▲' : '▼'}</span>
+        </button>
+        {heatmapOpen && (
+          <div style={{ marginTop: '0.75rem' }}>
+            {loadingHeatmap ? (
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>Loading…</p>
+            ) : heatmap && heatmap.cards.length > 0 ? (
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '0.8125rem' }}>
+                    {heatmap.deck_count} deck{heatmap.deck_count !== 1 ? 's' : ''}
+                  </span>
+                  <select
+                    value={heatmapCategory}
+                    onChange={(e) => setHeatmapCategory(e.target.value)}
+                    style={{ fontSize: '0.8125rem', padding: '0.2rem 0.5rem', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, color: 'inherit' }}
+                  >
+                    <option value="All">All categories</option>
+                    {Array.from(new Set(heatmap.cards.map((c: CardHeatmapEntry) => c.category))).map((cat) => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="table-wrap-outer">
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th scope="col">Card</th>
+                          <th scope="col">Category</th>
+                          <th scope="col" title="% of decks with this card in mainboard">Main %</th>
+                          <th scope="col" title="% of decks with this card in sideboard">Side %</th>
+                          <th scope="col" title="% of decks with this card anywhere">Total %</th>
+                          <th scope="col" style={{ minWidth: 120 }}>Inclusion</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {heatmap.cards
+                          .filter((c: CardHeatmapEntry) => heatmapCategory === 'All' || c.category === heatmapCategory)
+                          .map((c: CardHeatmapEntry) => {
+                            const pct = c.inclusion_rate_pct
+                            const barColor = pct >= 75 ? 'var(--success, #50c878)' : pct >= 40 ? 'var(--accent)' : pct >= 15 ? 'var(--warning, #f0b432)' : 'var(--text-muted)'
+                            return (
+                              <tr key={c.card}>
+                                <td><CardHover cardName={c.card} linkTo>{c.card}</CardHover></td>
+                                <td style={{ color: 'var(--text-muted)', fontSize: '0.8125rem' }}>{c.category}</td>
+                                <td>{c.main_rate_pct > 0 ? `${c.main_rate_pct}%` : '—'}</td>
+                                <td>{c.side_rate_pct > 0 ? `${c.side_rate_pct}%` : '—'}</td>
+                                <td style={{ fontWeight: 600 }}>{pct}%</td>
+                                <td>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                    <div style={{ flex: 1, background: 'var(--border)', borderRadius: 3, height: 8, minWidth: 60 }}>
+                                      <div style={{ width: `${pct}%`, height: '100%', background: barColor, borderRadius: 3, transition: 'width 0.3s' }} />
+                                    </div>
+                                  </div>
+                                </td>
+                              </tr>
+                            )
+                          })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>No card data available.</p>
+            )}
+          </div>
+        )}
       </div>
 
       {matchupRowsFiltered.length > 0 && (

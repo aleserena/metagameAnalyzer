@@ -48,7 +48,7 @@ export function sortEntries(
 }
 
 function CardRow({
-  qty, card, meta, highlight, showVsMetagame, playRate,
+  qty, card, meta, highlight, showVsMetagame, playRate, price,
 }: {
   qty: number
   card: string
@@ -56,12 +56,14 @@ function CardRow({
   highlight: string | null
   showVsMetagame: boolean
   playRate?: number
+  price?: string | null
 }) {
   const rowClass = [
     'deck-card-row',
     highlight === 'above' ? 'deck-card-row--above' : '',
     highlight === 'below' ? 'deck-card-row--below' : '',
   ].filter(Boolean).join(' ')
+  const priceVal = price ? parseFloat(price) : 0
   return (
     <div className={rowClass}>
       <span className="qty">{qty}</span>
@@ -72,6 +74,9 @@ function CardRow({
         {meta ? <ManaSymbols manaCost={meta.mana_cost} size={14} /> : null}
         {showVsMetagame && playRate != null && (
           <span className="deck-card-play-rate">{playRate}%</span>
+        )}
+        {priceVal > 0 && (
+          <span className="deck-card-price">${priceVal.toFixed(2)}</span>
         )}
       </span>
     </div>
@@ -87,6 +92,7 @@ export interface CardListSectionProps {
   getCardHighlight: (card: string) => string | null
   showVsMetagame: boolean
   playRateByCard: Record<string, number>
+  showPrices?: boolean
 }
 
 export default function CardListSection({
@@ -98,6 +104,7 @@ export default function CardListSection({
   getCardHighlight,
   showVsMetagame,
   playRateByCard,
+  showPrices,
 }: CardListSectionProps) {
   const renderCards = (entries: [number, string][]) =>
     sortEntries(entries, cardMeta, sortMode).map(([qty, card]) => (
@@ -109,6 +116,7 @@ export default function CardListSection({
         highlight={getCardHighlight(card)}
         showVsMetagame={showVsMetagame}
         playRate={playRateByCard[card]}
+        price={showPrices ? cardMeta?.[card]?.prices?.usd : undefined}
       />
     ))
 
@@ -164,6 +172,7 @@ export default function CardListSection({
             highlight={getCardHighlight(card)}
             showVsMetagame={showVsMetagame}
             playRate={playRateByCard[card]}
+            price={showPrices ? cardMeta?.[card]?.prices?.usd : undefined}
           />
         ))}
       </div>
@@ -177,6 +186,7 @@ export default function CardListSection({
             highlight={getCardHighlight(card)}
             showVsMetagame={showVsMetagame}
             playRate={playRateByCard[card]}
+            price={showPrices ? cardMeta?.[card]?.prices?.usd : undefined}
           />
         ))}
       </div>

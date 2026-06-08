@@ -103,11 +103,6 @@ Win/loss/draw record between two specific players, using the existing round-by-r
 
 ---
 
-### Sideboard Recommendations
-Given a deck, suggest sideboard cards based on what decks with strong records against the expected field play. Endpoint: `GET /api/v1/matchups/{deck_id}/recommendations`. Requires matchup data to be populated for the relevant format.
-
----
-
 ## Commander / EDH
 
 ### Commander Synergy View
@@ -190,17 +185,3 @@ Make the matchups matrix usable on phones and small screens. Two-phase approach:
 
 ---
 
-### Card Rotation / Legality Checker
-Full legality check for any deck against its declared format. Covers banned cards (explicitly on the ban list) and cards not printed in legal sets for the format.
-
-**Content per flagged card:**
-- Why it's illegal (banned vs not legal in format)
-- Scryfall-sourced replacement suggestions where possible
-
-**API:** `GET /api/v1/decks/{deck_id}/legality-check`
-
-**Implementation notes:**
-- Scryfall card objects (already cached via `card_lookup.py`) include a `legalities` field: `{"standard": "not_legal", "pioneer": "legal", "modern": "legal", ...}`. Adding `"legalities": card.get("legalities", {})` to `_build_entry()` exposes this through the cache at zero extra API cost.
-- Format name mapping: Scryfall format keys (`standard`, `pioneer`, `modern`, `legacy`, `vintage`, `pauper`, `commander`) need to be mapped from the app's internal `format_id` values (e.g. `EDH` → `commander`, `cEDH` → `commander`).
-- Banned cards: Scryfall legality values are `"legal"`, `"not_legal"`, `"banned"`, or `"restricted"` — "banned" covers cards on the format ban list explicitly.
-- Replacement suggestions: query `_decks` for the same archetype/format, find cards in the same slot (creature/instant/etc.) with high inclusion rate that are legal — surface those as alternatives.
