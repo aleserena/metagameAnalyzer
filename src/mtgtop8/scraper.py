@@ -64,7 +64,7 @@ def _fetch(url: str, session: requests.Session) -> str:
             if attempt == 2:
                 raise
             time.sleep(2 ** attempt)
-    return ""
+    raise RuntimeError("unreachable")
 
 
 def _parse_card_line(line: str) -> tuple[int, str] | None:

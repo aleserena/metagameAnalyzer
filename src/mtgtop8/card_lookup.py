@@ -1,5 +1,6 @@
 """Scryfall API client for card metadata and images."""
 
+import json
 import time
 from pathlib import Path
 
@@ -38,7 +39,7 @@ def clear_cache() -> None:
     try:
         if CACHE_FILE.exists():
             CACHE_FILE.unlink()
-    except Exception:
+    except OSError:
         pass
 
 
@@ -72,7 +73,7 @@ def _fetch_paper_printing(card_name: str) -> dict | None:
         cards = data.get("data", [])
         if cards:
             return cards[0]
-    except Exception:
+    except (requests.RequestException, json.JSONDecodeError):
         pass
     return None
 
@@ -99,7 +100,7 @@ def _search_by_flavor_name(typed_name: str) -> dict | None:
             fn = card.get("flavor_name") or ""
             if fn.strip().lower() == normalized.lower():
                 return card
-    except Exception:
+    except (requests.RequestException, json.JSONDecodeError):
         pass
     return None
 
@@ -182,7 +183,7 @@ def lookup_cards(card_names: list[str]) -> dict[str, dict]:
             )
             r.raise_for_status()
             data = r.json()
-        except Exception:
+        except (requests.RequestException, json.JSONDecodeError):
             continue
 
         not_found_lookup_names = set()
@@ -248,5 +249,5 @@ def autocomplete_cards(prefix: str) -> list[str]:
         r.raise_for_status()
         data = r.json()
         return data.get("data") or []
-    except Exception:
+    except (requests.RequestException, json.JSONDecodeError):
         return []

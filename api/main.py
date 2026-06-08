@@ -6,7 +6,7 @@ import logging
 import math
 import os
 import secrets
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 # Load .env from project root so DATABASE_URL (and others) are set before any config.
@@ -294,7 +294,7 @@ def require_admin_or_event_edit(
         with _db.session_scope() as session:
             row = _db.get_upload_link(session, x_event_edit_token.strip())
             if row and getattr(row, "link_type", None) == _db.LINK_TYPE_EVENT_EDIT and row.event_id == _db._event_id_str(event_id):
-                if row.expires_at is not None and row.expires_at < datetime.utcnow():
+                if row.expires_at is not None and row.expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
                     raise HTTPException(status_code=401, detail="Event edit link expired")
                 return "event_edit"
     raise HTTPException(status_code=401, detail="Invalid or expired token")
@@ -318,7 +318,7 @@ def require_admin_or_event_edit_deck(
         with _db.session_scope() as session:
             row = _db.get_upload_link(session, x_event_edit_token.strip())
             if row and getattr(row, "link_type", None) == _db.LINK_TYPE_EVENT_EDIT and row.event_id == _db._event_id_str(event_id):
-                if row.expires_at is not None and row.expires_at < datetime.utcnow():
+                if row.expires_at is not None and row.expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
                     raise HTTPException(status_code=401, detail="Event edit link expired")
                 return "event_edit"
     raise HTTPException(status_code=401, detail="Invalid or expired token")
@@ -2022,7 +2022,7 @@ def _get_validated_upload_link(
     if row.used_at is not None:
         raise HTTPException(status_code=404, detail="Link already used")
 
-    if row.expires_at is not None and row.expires_at < datetime.utcnow():
+    if row.expires_at is not None and row.expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
         raise HTTPException(status_code=404, detail="Link expired")
 
     ev = _db.get_event(session, row.event_id)
@@ -2041,7 +2041,7 @@ def create_upload_links(event_id: str, request: Request, body: CreateUploadLinks
     body = body or CreateUploadLinksBody()
     expires_at = None
     if body.expires_in_days is not None and body.expires_in_days > 0:
-        expires_at = datetime.utcnow() + timedelta(days=body.expires_in_days)
+        expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=body.expires_in_days)
     with _db.session_scope() as session:
         ev = _db.get_event(session, event_id)
         if not ev:
@@ -4284,7 +4284,7 @@ def get_player_analysis_by_name(
     player_decks = [d for d in _decks if _normalize_player(d.get("player") or "") == canonical]
     if not player_decks:
         raise HTTPException(status_code=404, detail="Player not found")
-    pid = player_decks[0].get("player_id") if player_decks else None
+    pid = player_decks[0].get("player_id")
     display = _normalize_player(canonical)
     if _database_available() and pid is not None:
         try:
@@ -4309,7 +4309,7 @@ def get_player_detail(
     all_player_decks = [d for d in _decks if _normalize_player(d.get("player") or "") == canonical]
     if not all_player_decks:
         raise HTTPException(status_code=404, detail="Player not found")
-    pid = all_player_decks[0].get("player_id") if all_player_decks else None
+    pid = all_player_decks[0].get("player_id")
     display = _normalize_player(canonical)
     out = _player_detail_payload(all_player_decks, display, pid, date_from, date_to)
     if _database_available():
