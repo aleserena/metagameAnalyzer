@@ -57,6 +57,103 @@ export interface TopCard {
   conversion_rate_pct?: number
 }
 
+export interface HealthReport {
+  health_score: number | null
+  factors: {
+    archetype_diversity: number | null
+    top_card_concentration: number | null
+    win_rate_parity: number | null
+    meta_shift_rate: number | null
+  }
+  details: {
+    viable_archetype_count: number
+    avg_top5_card_inclusion_pct: number
+    archetype_win_rate_stddev: number | null
+    stability_index: number | null
+  }
+}
+
+export interface H2HFormatRecord {
+  format_id: string
+  wins: number
+  losses: number
+  draws: number
+}
+
+export interface H2HOpponent {
+  opponent_player_id: number
+  opponent_player: string
+  wins: number
+  losses: number
+  draws: number
+  matches: number
+  win_pct: number
+  formats: H2HFormatRecord[]
+}
+
+export interface H2HSummary {
+  player_id: number
+  opponents: H2HOpponent[]
+}
+
+export interface H2HMatch {
+  deck_id: number
+  event_id: number | string
+  event_name: string
+  date: string
+  format_id: string
+  round: number | null
+  result: 'win' | 'loss' | 'draw' | 'intentional_draw'
+  player_archetype: string | null
+  opponent_deck_id: number | null
+  opponent_archetype: string | null
+}
+
+export interface H2HDetail {
+  player_id: number
+  opponent_id: number
+  opponent_player: string
+  wins: number
+  losses: number
+  draws: number
+  matches: H2HMatch[]
+}
+
+export interface ChurnWindowSummary {
+  deck_count: number
+  event_count: number
+  date_from: string | null
+  date_to: string | null
+}
+
+export interface ChurnArchetypeChange {
+  archetype: string
+  status: 'entered' | 'exited' | 'stable'
+  current_rank: number | null
+  previous_rank: number | null
+  rank_delta: number | null
+  current_play_rate_pct: number
+  previous_play_rate_pct: number
+  play_rate_delta_pct: number
+}
+
+export interface ChurnVolatileCard {
+  card: string
+  current_inclusion_pct: number
+  previous_inclusion_pct: number
+  delta_pct: number
+}
+
+export interface ChurnReport {
+  stability_index: number | null
+  current_window: ChurnWindowSummary
+  previous_window: ChurnWindowSummary
+  archetype_changes: ChurnArchetypeChange[]
+  most_volatile_cards: ChurnVolatileCard[]
+  params: { format: string | null; weeks: number; top_n: number }
+  message?: string
+}
+
 export interface CardSynergy {
   card_a: string
   card_b: string
@@ -188,6 +285,22 @@ export interface ArchetypeDetail {
   typical_list?: TypicalList
 }
 
+export interface CardHeatmapEntry {
+  card: string
+  category: string
+  main_decks: number
+  side_decks: number
+  main_rate_pct: number
+  side_rate_pct: number
+  inclusion_rate_pct: number
+}
+
+export interface CardHeatmap {
+  archetype: string
+  deck_count: number
+  cards: CardHeatmapEntry[]
+}
+
 export interface ArchetypeWeeklyStat {
   week: string
   week_start: string | null
@@ -201,4 +314,32 @@ export interface ArchetypeWeeklyStat {
 export interface ArchetypeWeeklyStats {
   archetype: string
   weeks: ArchetypeWeeklyStat[]
+}
+
+export interface CoCommander {
+  name: string
+  count: number
+  pct: number
+}
+
+export interface CommanderCardEntry {
+  card: string
+  inclusion_rate_pct: number
+}
+
+export interface CommanderTechCardEntry {
+  card: string
+  top_rate_pct: number
+  overall_rate_pct: number
+  delta_pct: number
+}
+
+export interface CommanderSynergy {
+  commander: string
+  deck_count: number
+  co_commanders: CoCommander[]
+  shell_composition: Record<string, number>
+  core_cards: CommanderCardEntry[]
+  flex_cards: CommanderCardEntry[]
+  tech_cards: CommanderTechCardEntry[]
 }

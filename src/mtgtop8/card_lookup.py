@@ -1,5 +1,6 @@
 """Scryfall API client for card metadata and images."""
 
+import json
 import time
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import requests
 from .storage import load_json, save_json
 
 SCRYFALL_COLLECTION = "https://api.scryfall.com/cards/collection"
+SCRYFALL_NAMED = "https://api.scryfall.com/cards/named"
 SCRYFALL_SEARCH = "https://api.scryfall.com/cards/search"
 SCRYFALL_AUTOCOMPLETE = "https://api.scryfall.com/cards/autocomplete"
 CACHE_FILE = Path(__file__).resolve().parent.parent.parent / ".scryfall_cache.json"
@@ -38,7 +40,7 @@ def clear_cache() -> None:
     try:
         if CACHE_FILE.exists():
             CACHE_FILE.unlink()
-    except Exception:
+    except OSError:
         pass
 
 
@@ -52,6 +54,25 @@ def _scryfall_lookup_name(name: str) -> str:
 def _name_for_scryfall(name: str) -> str:
     """Normalize name for Scryfall collection API without rewriting punctuation/casing."""
     return _scryfall_lookup_name(name).strip()
+
+
+def _fetch_named(card_name: str) -> dict | None:
+    """Fetch a card by exact name via /cards/named. Returns card object or None."""
+    if not card_name:
+        return None
+    time.sleep(REQUEST_DELAY)
+    try:
+        r = requests.get(
+            SCRYFALL_NAMED,
+            params={"fuzzy": card_name},
+            headers=SCRYFALL_HEADERS,
+            timeout=15,
+        )
+        if r.status_code == 200:
+            return r.json()
+    except (requests.RequestException, json.JSONDecodeError):
+        pass
+    return None
 
 
 def _fetch_paper_printing(card_name: str) -> dict | None:
@@ -72,7 +93,7 @@ def _fetch_paper_printing(card_name: str) -> dict | None:
         cards = data.get("data", [])
         if cards:
             return cards[0]
-    except Exception:
+    except (requests.RequestException, json.JSONDecodeError):
         pass
     return None
 
@@ -99,7 +120,7 @@ def _search_by_flavor_name(typed_name: str) -> dict | None:
             fn = card.get("flavor_name") or ""
             if fn.strip().lower() == normalized.lower():
                 return card
-    except Exception:
+    except (requests.RequestException, json.JSONDecodeError):
         pass
     return None
 
@@ -135,6 +156,7 @@ def _build_entry(card: dict) -> dict:
         "type_line": type_line,
         "colors": colors,
         "color_identity": card.get("color_identity", []),
+        "prices": card.get("prices"),
     }
     if len(faces) >= 2:
         entry["card_faces"] = [
@@ -157,7 +179,9 @@ def lookup_cards(card_names: list[str]) -> dict[str, dict]:
 
     for name in names:
         cached = _card_cache.get(name)
-        if cached and "error" not in cached and "card_faces" in cached:
+        prices = cached.get("prices") if cached else None
+        has_price = bool(prices and prices.get("usd") is not None)
+        if cached and "error" not in cached and "card_faces" in cached and "prices" in cached and has_price:
             result[name] = cached
         else:
             to_fetch.append(name)
@@ -182,7 +206,7 @@ def lookup_cards(card_names: list[str]) -> dict[str, dict]:
             )
             r.raise_for_status()
             data = r.json()
-        except Exception:
+        except (requests.RequestException, json.JSONDecodeError):
             continue
 
         not_found_lookup_names = set()
@@ -208,6 +232,12 @@ def lookup_cards(card_names: list[str]) -> dict[str, dict]:
                 if paper_card:
                     card = paper_card
 
+            # If prices are still null, fall back to /cards/named which picks a priced printing
+            if not (card.get("prices") or {}).get("usd"):
+                named_card = _fetch_named(card.get("name", "") or orig_name)
+                if named_card and (named_card.get("prices") or {}).get("usd"):
+                    card = named_card
+
             entry = _build_entry(card)
             result[orig_name] = entry
             _card_cache[orig_name] = entry
@@ -223,6 +253,10 @@ def lookup_cards(card_names: list[str]) -> dict[str, dict]:
             paper_card = _fetch_paper_printing(card.get("name", ""))
             if paper_card:
                 card = paper_card
+        if not (card.get("prices") or {}).get("usd"):
+            named_card = _fetch_named(card.get("name", "") or orig_name)
+            if named_card and (named_card.get("prices") or {}).get("usd"):
+                card = named_card
         entry = _build_entry(card)
         result[orig_name] = entry
         _card_cache[orig_name] = entry
@@ -248,5 +282,5 @@ def autocomplete_cards(prefix: str) -> list[str]:
         r.raise_for_status()
         data = r.json()
         return data.get("data") or []
-    except Exception:
+    except (requests.RequestException, json.JSONDecodeError):
         return []

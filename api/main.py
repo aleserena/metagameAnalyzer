@@ -6,7 +6,7 @@ import logging
 import math
 import os
 import secrets
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 # Load .env from project root so DATABASE_URL (and others) are set before any config.
@@ -294,7 +294,7 @@ def require_admin_or_event_edit(
         with _db.session_scope() as session:
             row = _db.get_upload_link(session, x_event_edit_token.strip())
             if row and getattr(row, "link_type", None) == _db.LINK_TYPE_EVENT_EDIT and row.event_id == _db._event_id_str(event_id):
-                if row.expires_at is not None and row.expires_at < datetime.utcnow():
+                if row.expires_at is not None and row.expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
                     raise HTTPException(status_code=401, detail="Event edit link expired")
                 return "event_edit"
     raise HTTPException(status_code=401, detail="Invalid or expired token")
@@ -318,7 +318,7 @@ def require_admin_or_event_edit_deck(
         with _db.session_scope() as session:
             row = _db.get_upload_link(session, x_event_edit_token.strip())
             if row and getattr(row, "link_type", None) == _db.LINK_TYPE_EVENT_EDIT and row.event_id == _db._event_id_str(event_id):
-                if row.expires_at is not None and row.expires_at < datetime.utcnow():
+                if row.expires_at is not None and row.expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
                     raise HTTPException(status_code=401, detail="Event edit link expired")
                 return "event_edit"
     raise HTTPException(status_code=401, detail="Invalid or expired token")
@@ -2022,7 +2022,7 @@ def _get_validated_upload_link(
     if row.used_at is not None:
         raise HTTPException(status_code=404, detail="Link already used")
 
-    if row.expires_at is not None and row.expires_at < datetime.utcnow():
+    if row.expires_at is not None and row.expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
         raise HTTPException(status_code=404, detail="Link expired")
 
     ev = _db.get_event(session, row.event_id)
@@ -2041,7 +2041,7 @@ def create_upload_links(event_id: str, request: Request, body: CreateUploadLinks
     body = body or CreateUploadLinksBody()
     expires_at = None
     if body.expires_in_days is not None and body.expires_in_days > 0:
-        expires_at = datetime.utcnow() + timedelta(days=body.expires_in_days)
+        expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=body.expires_in_days)
     with _db.session_scope() as session:
         ev = _db.get_event(session, event_id)
         if not ev:
@@ -2704,6 +2704,388 @@ def import_moxfield_deck(body: ImportMoxfieldBody):
         raise HTTPException(status_code=502, detail="Invalid response from Moxfield")
 
 
+@app.get("/api/v1/metagame/health")
+def get_metagame_health(
+    format_id: str | None = Query(None, alias="format", description="Format ID (e.g. EDH, Modern)"),
+    event_id: str | None = Query(None, description="Filter by single event ID"),
+    event_ids: str | None = Query(None, description="Filter by event IDs (comma-separated)"),
+    date_from: str | None = Query(None, description="Filter from date (DD/MM/YY)"),
+    date_to: str | None = Query(None, description="Filter to date (DD/MM/YY)"),
+):
+    """Metagame health score (0–100) for a format.
+
+    Four equally-weighted factors:
+    1. Archetype diversity   — how many viable archetypes (>2% play rate) exist
+    2. Top-card concentration — avg inclusion rate of the top-5 most-played cards
+    3. Win-rate parity       — std-dev of archetype win rates from matchup data
+    4. Meta shift rate       — stability index from the churn metric (last 4 weeks)
+    """
+    source = _filter_decks_for_query(_decks, event_id, event_ids, date_from, date_to)
+    if format_id:
+        fmt_upper = format_id.strip().upper()
+        source = [d for d in source if (d.get("format_id") or "").upper() == fmt_upper]
+
+    empty = {
+        "health_score": None,
+        "factors": {
+            "archetype_diversity": None,
+            "top_card_concentration": None,
+            "win_rate_parity": None,
+            "meta_shift_rate": None,
+        },
+        "details": {},
+    }
+
+    if not source:
+        return empty
+
+    total = len(source)
+
+    # ── Factor 1: Archetype diversity ────────────────────────────────────────
+    # Count archetypes with play rate > 2%. Normalize: 1 arch → 0, 10+ arches → 100.
+    arch_counts: dict[str, int] = {}
+    for d in source:
+        arch = (d.get("archetype") or "").strip()
+        if arch and arch.lower() != "(unknown)":
+            arch_counts[arch] = arch_counts.get(arch, 0) + 1
+    viable_archetypes = [a for a, c in arch_counts.items() if c / total >= 0.02]
+    n_viable = len(viable_archetypes)
+    diversity_score = round(min(100.0, (n_viable - 1) / 9 * 100)) if n_viable >= 1 else 0
+
+    # ── Factor 2: Top-card concentration ────────────────────────────────────
+    # Avg inclusion rate of the top-5 most-played cards. High concentration → unhealthy.
+    # Score: 0% avg → 100 (healthy), 100% avg → 0 (solved).
+    card_counts: dict[str, int] = {}
+    for d in source:
+        seen: set[str] = set()
+        for entry in d.get("mainboard") or []:
+            name = (entry.get("name") or entry.get("card") or "").strip()
+            if name and name not in seen:
+                card_counts[name] = card_counts.get(name, 0) + 1
+                seen.add(name)
+    top5_rates = sorted((c / total for c in card_counts.values()), reverse=True)[:5]
+    avg_top5 = sum(top5_rates) / len(top5_rates) if top5_rates else 0.0
+    concentration_score = round(max(0.0, 100.0 - avg_top5 * 100))
+
+    # ── Factor 3: Win-rate parity ────────────────────────────────────────────
+    # Std-dev of overall win rates across archetypes from MatchupRow data.
+    # Low std-dev → balanced → healthy. Score: stddev 0 → 100, stddev ≥ 0.20 → 0.
+    parity_score: int | None = None
+    arch_win_rates: list[float] = []
+    if _database_available():
+        try:
+            with _db.session_scope() as session:
+                rows = _db.list_matchups_with_deck_info(session)
+            # Filter to the same scope
+            ev_set = _parse_event_id_filter(event_id, event_ids)
+            filtered_rows = []
+            for r in rows:
+                if format_id and (r.get("format_id") or "").upper() != format_id.strip().upper():
+                    continue
+                if ev_set and str(r.get("event_id")) not in ev_set:
+                    continue
+                if not _date_in_range(r.get("date") or "", date_from, date_to):
+                    continue
+                if (r.get("result") or "").lower() in ("bye", "drop"):
+                    continue
+                filtered_rows.append(r)
+            # Aggregate wins + matches per archetype
+            arch_agg: dict[str, dict] = {}
+            for r in filtered_rows:
+                arch = (r.get("archetype") or "(unknown)").strip()
+                if arch == "(unknown)":
+                    continue
+                result = (r.get("result") or "").lower()
+                if result not in ("win", "loss", "draw", "intentional_draw"):
+                    continue
+                if arch not in arch_agg:
+                    arch_agg[arch] = {"wins": 0.0, "matches": 0}
+                arch_agg[arch]["matches"] += 1
+                if result == "win":
+                    arch_agg[arch]["wins"] += 1.0
+                elif result in ("draw", "intentional_draw"):
+                    arch_agg[arch]["wins"] += 0.5
+            # Only archetypes with ≥ 5 matches
+            arch_win_rates = [
+                v["wins"] / v["matches"]
+                for v in arch_agg.values()
+                if v["matches"] >= 5
+            ]
+            if len(arch_win_rates) >= 2:
+                mean_wr = sum(arch_win_rates) / len(arch_win_rates)
+                variance = sum((w - mean_wr) ** 2 for w in arch_win_rates) / len(arch_win_rates)
+                stddev = math.sqrt(variance)
+                # stddev of 0 → 100, stddev ≥ 0.20 → 0
+                parity_score = round(max(0.0, min(100.0, (1 - stddev / 0.20) * 100)))
+            elif arch_win_rates:
+                parity_score = 100  # only one archetype — trivially "balanced"
+        except Exception:
+            logger.exception("Failed to compute win-rate parity for health score")
+
+    # ── Factor 4: Meta shift rate (stability) ────────────────────────────────
+    # Reuse the churn stability index (last 4 weeks) as the shift-rate factor.
+    shift_score: int | None = None
+    try:
+        churn_result = get_metagame_churn(
+            format_id=format_id,
+            weeks=4,
+            top_n=8,
+            event_id=event_id,
+            event_ids=event_ids,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        if isinstance(churn_result, dict):
+            shift_score = churn_result.get("stability_index")
+    except Exception:
+        logger.exception("Failed to compute meta shift rate for health score")
+
+    # ── Aggregate ────────────────────────────────────────────────────────────
+    available_factors = [
+        s for s in [diversity_score, concentration_score, parity_score, shift_score]
+        if s is not None
+    ]
+    health_score = round(sum(available_factors) / len(available_factors)) if available_factors else None
+
+    return {
+        "health_score": health_score,
+        "factors": {
+            "archetype_diversity": diversity_score,
+            "top_card_concentration": concentration_score,
+            "win_rate_parity": parity_score,
+            "meta_shift_rate": shift_score,
+        },
+        "details": {
+            "viable_archetype_count": n_viable,
+            "avg_top5_card_inclusion_pct": round(avg_top5 * 100, 1),
+            "archetype_win_rate_stddev": round(math.sqrt(
+                sum((w - sum(arch_win_rates) / len(arch_win_rates)) ** 2 for w in arch_win_rates) / len(arch_win_rates)
+            ), 4) if len(arch_win_rates) >= 2 else None,
+            "stability_index": shift_score,
+        },
+    }
+
+
+@app.get("/api/v1/metagame/churn")
+def get_metagame_churn(
+    format_id: str | None = Query(None, alias="format", description="Format ID (e.g. EDH, Modern)"),
+    weeks: int = Query(4, ge=1, le=52, description="Length of each window in weeks"),
+    top_n: int = Query(8, ge=0, le=200, description="Top N archetypes to track for rank deltas (0 = all)"),
+    event_id: str | None = Query(None, description="Filter by single event ID"),
+    event_ids: str | None = Query(None, description="Filter by event IDs (comma-separated)"),
+    date_from: str | None = Query(None, description="Filter from date (DD/MM/YY)"),
+    date_to: str | None = Query(None, description="Filter to date (DD/MM/YY)"),
+):
+    """Format volatility / churn metric.
+
+    Two modes:
+    - No filter (no event_ids / date range): splits all data into two consecutive
+      `weeks`-wide windows anchored to the most recent event.
+    - With filter (event_ids or date_from/date_to selected): treats the filtered
+      decks as the CURRENT window and automatically looks back an equal calendar
+      span into the full dataset to build the PREVIOUS window.
+
+    Returns:
+    - stability_index (0–100, higher = more stable)
+    - archetype_changes: rank delta, entry/exit for top-N archetypes
+    - most_volatile_cards: cards whose play-rate changed most between windows
+    - window metadata (date ranges, deck counts)
+    """
+    has_filter = bool(event_id or event_ids or date_from or date_to)
+
+    # Format filter applied to the full corpus for previous-window lookups
+    fmt_upper = format_id.strip().upper() if format_id else None
+    def _fmt_ok(d: dict) -> bool:
+        return not fmt_upper or (d.get("format_id") or "").upper() == fmt_upper
+
+    current_decks = _filter_decks_for_query(_decks, event_id, event_ids, date_from, date_to)
+    current_decks = [d for d in current_decks if _fmt_ok(d)]
+
+    if not current_decks:
+        return {
+            "stability_index": None,
+            "current_window": {"deck_count": 0, "event_count": 0, "date_from": None, "date_to": None},
+            "previous_window": {"deck_count": 0, "event_count": 0, "date_from": None, "date_to": None},
+            "archetype_changes": [],
+            "most_volatile_cards": [],
+            "message": "No data available for the requested format/window.",
+        }
+
+    def deck_ordinal(d: dict) -> int | None:
+        key = _parse_date_sortkey(d.get("date", "") or "")
+        return _yymmdd_to_ordinal(key) if key.isdigit() and len(key) == 6 else None
+
+    cur_ordinals = [o for o in (deck_ordinal(d) for d in current_decks) if o is not None]
+    if not cur_ordinals:
+        return {
+            "stability_index": None,
+            "current_window": {"deck_count": 0, "event_count": 0, "date_from": None, "date_to": None},
+            "previous_window": {"deck_count": 0, "event_count": 0, "date_from": None, "date_to": None},
+            "archetype_changes": [],
+            "most_volatile_cards": [],
+            "message": "No dated decks found.",
+        }
+
+    if has_filter:
+        # Current window = the filtered selection.
+        # Previous window = same calendar span shifted back by the span length,
+        # drawn from the full corpus (format-filtered only, no event/date filter).
+        cur_min = min(cur_ordinals)
+        cur_max = max(cur_ordinals)
+        span = max(cur_max - cur_min, 0)  # days covered by the selection
+        prev_end = cur_min - 1
+        prev_start = prev_end - span
+        full_corpus = [d for d in _decks if _fmt_ok(d)]
+        previous_decks = [
+            d for d in full_corpus
+            if (o := deck_ordinal(d)) is not None and prev_start <= o <= prev_end
+        ]
+    else:
+        # No filter: split all data into two consecutive weeks-wide windows.
+        week_days = weeks * 7
+        anchor = max(cur_ordinals)
+        cur_start = anchor - week_days + 1
+        prev_start_wk = cur_start - week_days
+        current_decks = [d for d in current_decks if (o := deck_ordinal(d)) is not None and cur_start <= o <= anchor]
+        full_corpus = [d for d in _decks if _fmt_ok(d)]
+        previous_decks = [
+            d for d in full_corpus
+            if (o := deck_ordinal(d)) is not None and prev_start_wk <= o < cur_start
+        ]
+
+    def archetype_playrates(decks: list[dict]) -> dict[str, float]:
+        """Return {archetype: play_rate (0–1)} for non-null archetypes."""
+        total = len(decks)
+        if not total:
+            return {}
+        counts: dict[str, int] = {}
+        for d in decks:
+            arch = (d.get("archetype") or "").strip()
+            if arch and arch.lower() != "(unknown)":
+                counts[arch] = counts.get(arch, 0) + 1
+        return {a: c / total for a, c in counts.items()}
+
+    cur_rates = archetype_playrates(current_decks)
+    prev_rates = archetype_playrates(previous_decks)
+
+    # Rank archetypes in each window by play rate (rank 1 = most played)
+    def ranked(rates: dict[str, float]) -> dict[str, int]:
+        sorted_archs = sorted(rates, key=lambda a: rates[a], reverse=True)
+        return {a: i + 1 for i, a in enumerate(sorted_archs)}
+
+    cur_rank = ranked(cur_rates)
+    prev_rank = ranked(prev_rates)
+
+    # Build archetype_changes for the union of top-N from both windows (0 = all)
+    effective_n = top_n if top_n > 0 else max(len(cur_rank), len(prev_rank))
+    all_archs_cur = set(list(cur_rank.keys())[:effective_n])
+    all_archs_prev = set(list(prev_rank.keys())[:effective_n])
+    tracked = all_archs_cur | all_archs_prev
+
+    archetype_changes = []
+    for arch in tracked:
+        in_cur = arch in cur_rank
+        in_prev = arch in prev_rank
+        c_rank = cur_rank.get(arch)
+        p_rank = prev_rank.get(arch)
+        c_rate = cur_rates.get(arch, 0.0)
+        p_rate = prev_rates.get(arch, 0.0)
+
+        if in_cur and in_prev:
+            status = "stable"
+            rank_delta = p_rank - c_rank  # positive = moved up
+        elif in_cur and not in_prev:
+            status = "entered"
+            rank_delta = None
+        else:
+            status = "exited"
+            rank_delta = None
+
+        archetype_changes.append({
+            "archetype": arch,
+            "status": status,
+            "current_rank": c_rank,
+            "previous_rank": p_rank,
+            "rank_delta": rank_delta,
+            "current_play_rate_pct": round(c_rate * 100, 1),
+            "previous_play_rate_pct": round(p_rate * 100, 1),
+            "play_rate_delta_pct": round((c_rate - p_rate) * 100, 1),
+        })
+
+    # Sort: entered first, then exited, then stable sorted by |rank_delta| desc
+    def _change_sort_key(x):
+        order = {"entered": 0, "exited": 1, "stable": 2}
+        delta_abs = abs(x["rank_delta"]) if x["rank_delta"] is not None else 0
+        return (order.get(x["status"], 3), -delta_abs)
+
+    archetype_changes.sort(key=_change_sort_key)
+
+    # Most volatile cards: compare inclusion rate per card across all decks in each window
+    def card_inclusion_rates(decks: list[dict]) -> dict[str, float]:
+        """Return {card_name: inclusion_rate (0–1)} across all decks (mainboard)."""
+        total = len(decks)
+        if not total:
+            return {}
+        counts: dict[str, int] = {}
+        for d in decks:
+            seen = set()
+            for entry in d.get("mainboard") or []:
+                name = (entry.get("name") or entry.get("card") or "").strip()
+                if name and name not in seen:
+                    counts[name] = counts.get(name, 0) + 1
+                    seen.add(name)
+        return {c: n / total for c, n in counts.items()}
+
+    cur_card_rates = card_inclusion_rates(current_decks)
+    prev_card_rates = card_inclusion_rates(previous_decks)
+
+    # Only consider cards that appear in at least one window with ≥1% inclusion
+    all_cards = {c for c, r in cur_card_rates.items() if r >= 0.01} | \
+                {c for c, r in prev_card_rates.items() if r >= 0.01}
+
+    card_volatility = []
+    for card in all_cards:
+        c_rate = cur_card_rates.get(card, 0.0)
+        p_rate = prev_card_rates.get(card, 0.0)
+        delta = c_rate - p_rate
+        card_volatility.append({
+            "card": card,
+            "current_inclusion_pct": round(c_rate * 100, 1),
+            "previous_inclusion_pct": round(p_rate * 100, 1),
+            "delta_pct": round(delta * 100, 1),
+        })
+
+    card_volatility.sort(key=lambda x: abs(x["delta_pct"]), reverse=True)
+    most_volatile_cards = card_volatility[:20]
+
+    # Stability index (0–100)
+    # Components:
+    #   1. Entry/exit rate: (entered + exited) / top_n  — penalizes archetype turnover
+    #   2. Average rank delta (normalised): mean(|rank_delta|) / top_n for stable archetypes
+    # stability = 100 - clamp(churn_score * 100, 0, 100)
+    entered_count = sum(1 for x in archetype_changes if x["status"] == "entered")
+    exited_count = sum(1 for x in archetype_changes if x["status"] == "exited")
+    stable_changes = [x for x in archetype_changes if x["status"] == "stable" and x["rank_delta"] is not None]
+
+    entry_exit_rate = (entered_count + exited_count) / max(effective_n, 1)
+    avg_rank_delta_norm = (
+        sum(abs(x["rank_delta"]) for x in stable_changes) / (len(stable_changes) * max(effective_n, 1))
+        if stable_changes else 0.0
+    )
+    # Weight entry/exit (60%) more than rank movement (40%)
+    churn_score = 0.6 * entry_exit_rate + 0.4 * avg_rank_delta_norm
+    stability_index = round(max(0.0, min(100.0, 100.0 - churn_score * 100.0)))
+
+    return {
+        "stability_index": stability_index,
+        "current_window": _window_summary_from_dicts(current_decks),
+        "previous_window": _window_summary_from_dicts(previous_decks),
+        "archetype_changes": archetype_changes,
+        "most_volatile_cards": most_volatile_cards,
+        "params": {"format": format_id, "weeks": weeks, "top_n": top_n},
+    }
+
+
 @app.get("/api/v1/metagame")
 def get_metagame(
     placement_weighted: bool = Query(False),
@@ -3119,6 +3501,263 @@ def get_archetype_card_trends(
         "new_cards": new_cards,
         "legacy_cards": legacy_cards,
         "warning": warning,
+    }
+
+
+@app.get("/api/v1/commanders/{commander_name:path}/synergies")
+def get_commander_synergies(
+    commander_name: str,
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    event_id: str | None = Query(None),
+    event_ids: str | None = Query(None),
+):
+    """Commander synergy view: co-commanders, shell composition, core/flex/tech cards."""
+    if not _decks:
+        raise HTTPException(status_code=404, detail="No data loaded")
+    decoded = unquote(commander_name).strip()
+    if not decoded:
+        raise HTTPException(status_code=404, detail="Commander name required")
+
+    want_key = _db.archetype_canonical_key(decoded)
+    filtered = _filter_decks_for_query(_decks, event_id, event_ids, date_from, date_to)
+    filtered = [
+        d for d in filtered
+        if (d.get("format_id") or "").upper() in {"EDH", "CEDH", "COMMANDER"}
+        and any(
+            _db.archetype_canonical_key(c) == want_key
+            for c in (d.get("commanders") or [])
+        )
+    ]
+    if not filtered:
+        raise HTTPException(status_code=404, detail="No EDH decks found for this commander")
+
+    decks_objs = [Deck.from_dict(d) for d in filtered]
+    total = len(decks_objs)
+
+    # Co-commanders: count other commanders across all filtered decks
+    co_cmd_count: dict[str, int] = {}
+    for d in filtered:
+        for c in (d.get("commanders") or []):
+            if _db.archetype_canonical_key(c) != want_key:
+                co_cmd_count[c] = co_cmd_count.get(c, 0) + 1
+    co_commanders = sorted(
+        [{"name": name, "count": cnt, "pct": round(100 * cnt / total, 1)} for name, cnt in co_cmd_count.items()],
+        key=lambda x: -x["count"],
+    )
+
+    # Collect all mainboard cards
+    all_card_names: set[str] = set()
+    for d in decks_objs:
+        for _, c in d.mainboard:
+            all_card_names.add(c)
+
+    # Fetch metadata for category classification
+    metadata = lookup_cards(list(all_card_names)) if all_card_names else {}
+
+    def _classify_category(card_name: str) -> str:
+        meta = metadata.get(card_name) or {}
+        type_line = (meta.get("type_line") or "").lower()
+        if "land" in type_line:
+            return "Land"
+        if "creature" in type_line:
+            return "Creature"
+        if "planeswalker" in type_line:
+            return "Planeswalker"
+        if "instant" in type_line or "sorcery" in type_line:
+            return "Spell"
+        if "artifact" in type_line:
+            return "Artifact"
+        if "enchantment" in type_line:
+            return "Enchantment"
+        return "Other"
+
+    # Shell composition: average category % across all decks
+    category_totals: dict[str, float] = {}
+    for d in decks_objs:
+        if not d.mainboard:
+            continue
+        deck_total = sum(q for q, _ in d.mainboard)
+        if deck_total == 0:
+            continue
+        cat_counts: dict[str, int] = {}
+        for qty, card in d.mainboard:
+            cat = _classify_category(card)
+            cat_counts[cat] = cat_counts.get(cat, 0) + qty
+        for cat, cnt in cat_counts.items():
+            category_totals[cat] = category_totals.get(cat, 0) + (cnt / deck_total * 100)
+    decks_with_mainboard = sum(1 for d in decks_objs if d.mainboard)
+    shell_composition = {
+        cat: round(total_pct / decks_with_mainboard, 1)
+        for cat, total_pct in category_totals.items()
+    } if decks_with_mainboard > 0 else {}
+
+    # Inclusion rates per card (main only)
+    main_count: dict[str, int] = {}
+    for d in decks_objs:
+        seen = set()
+        for _, c in d.mainboard:
+            if c not in seen:
+                main_count[c] = main_count.get(c, 0) + 1
+                seen.add(c)
+
+    # Top-placing decks (rank 1–4)
+    top_decks = [d for d in filtered if (d.get("rank") or "").strip() in {"1", "2", "3", "4"}]
+    top_total = len(top_decks)
+    top_count: dict[str, int] = {}
+    if top_total > 0:
+        for d in top_decks:
+            d_obj = Deck.from_dict(d)
+            seen = set()
+            for _, c in d_obj.mainboard:
+                if c not in seen:
+                    top_count[c] = top_count.get(c, 0) + 1
+                    seen.add(c)
+
+    core_cards = []
+    flex_cards = []
+    tech_cards = []
+    for card, cnt in main_count.items():
+        overall_rate = round(100 * cnt / total, 1)
+        if overall_rate >= 75:
+            core_cards.append({"card": card, "inclusion_rate_pct": overall_rate})
+        elif overall_rate >= 20:
+            flex_cards.append({"card": card, "inclusion_rate_pct": overall_rate})
+
+        if top_total >= 3:
+            top_rate = round(100 * top_count.get(card, 0) / top_total, 1)
+            delta = round(top_rate - overall_rate, 1)
+            if delta >= 15:
+                tech_cards.append({
+                    "card": card,
+                    "top_rate_pct": top_rate,
+                    "overall_rate_pct": overall_rate,
+                    "delta_pct": delta,
+                })
+
+    core_cards.sort(key=lambda x: -x["inclusion_rate_pct"])
+    flex_cards.sort(key=lambda x: -x["inclusion_rate_pct"])
+    tech_cards.sort(key=lambda x: -x["delta_pct"])
+
+    display_name = decoded
+    return {
+        "commander": display_name,
+        "deck_count": total,
+        "co_commanders": co_commanders,
+        "shell_composition": shell_composition,
+        "core_cards": core_cards,
+        "flex_cards": flex_cards,
+        "tech_cards": tech_cards,
+    }
+
+
+@app.get("/api/v1/archetypes/{archetype_name:path}/card-heatmap")
+def get_archetype_card_heatmap(
+    archetype_name: str,
+    date_from: str | None = Query(None, description="Filter from date (DD/MM/YY)"),
+    date_to: str | None = Query(None, description="Filter to date (DD/MM/YY)"),
+    event_id: str | None = Query(None),
+    event_ids: str | None = Query(None, description="Filter by event IDs (comma-separated)"),
+    ignore_lands: bool = Query(False),
+):
+    """Card usage heatmap for an archetype.
+
+    Returns each card with inclusion rate (main/side split) and an auto-detected
+    category derived from the Scryfall type_line / oracle_text.
+    """
+    if not _decks:
+        raise HTTPException(status_code=404, detail="No data loaded")
+    decoded = unquote(archetype_name)
+    if (decoded or "").strip().lower() == "(unknown)":
+        raise HTTPException(status_code=404, detail="Archetype not found")
+    want_key = _db.archetype_canonical_key(decoded)
+    filtered = _filter_decks_for_query(_decks, event_id, event_ids, date_from, date_to)
+    filtered = [
+        d for d in filtered
+        if _db.archetype_canonical_key(d.get("archetype")) == want_key
+    ]
+    if not filtered:
+        raise HTTPException(status_code=404, detail="Archetype not found or no decks in range")
+
+    decks = [Deck.from_dict(d) for d in filtered]
+    total = len(decks)
+
+    ignore_lands_cards = set(settings_service.get_ignore_lands_cards()) if ignore_lands else None
+
+    # Count main/side appearances per card
+    main_count: dict[str, int] = {}
+    side_count: dict[str, int] = {}
+    for d in decks:
+        seen_main = set()
+        for _, c in d.mainboard:
+            if ignore_lands_cards and c in ignore_lands_cards:
+                continue
+            if c not in seen_main:
+                main_count[c] = main_count.get(c, 0) + 1
+                seen_main.add(c)
+        seen_side = set()
+        for _, c in d.sideboard:
+            if ignore_lands_cards and c in ignore_lands_cards:
+                continue
+            if c not in seen_side:
+                side_count[c] = side_count.get(c, 0) + 1
+                seen_side.add(c)
+
+    all_cards = set(main_count) | set(side_count)
+    # Fetch Scryfall metadata for category classification
+    metadata = lookup_cards(list(all_cards))
+
+    def _classify_category(card_name: str) -> str:
+        """Best-effort card category from type_line."""
+        meta = metadata.get(card_name) or {}
+        type_line = (meta.get("type_line") or "").lower()
+        if "land" in type_line:
+            return "Land"
+        if "creature" in type_line:
+            return "Creature"
+        if "planeswalker" in type_line:
+            return "Planeswalker"
+        if "instant" in type_line or "sorcery" in type_line:
+            return "Spell"
+        if "artifact" in type_line:
+            return "Artifact"
+        if "enchantment" in type_line:
+            return "Enchantment"
+        return "Other"
+
+    CATEGORY_ORDER = ["Creature", "Spell", "Artifact", "Enchantment", "Planeswalker", "Land", "Other"]
+
+    entries = []
+    for card in all_cards:
+        m = main_count.get(card, 0)
+        s = side_count.get(card, 0)
+        inclusion = m + s  # any deck that has it in either zone
+        # Only include if it appears in at least 1 deck
+        if inclusion == 0:
+            continue
+        # Inclusion rate: fraction of decks with card in main
+        main_rate = round(100 * m / total, 1)
+        side_rate = round(100 * s / total, 1)
+        total_rate = round(100 * inclusion / total, 1)
+        entries.append({
+            "card": card,
+            "category": _classify_category(card),
+            "main_decks": m,
+            "side_decks": s,
+            "main_rate_pct": main_rate,
+            "side_rate_pct": side_rate,
+            "inclusion_rate_pct": total_rate,
+        })
+
+    # Sort by category order then by inclusion rate descending
+    cat_idx = {c: i for i, c in enumerate(CATEGORY_ORDER)}
+    entries.sort(key=lambda e: (cat_idx.get(e["category"], 99), -e["inclusion_rate_pct"], e["card"]))
+
+    display_arch = _db.normalize_archetype_display(decoded.strip()) or decoded.strip()
+    return {
+        "archetype": display_arch,
+        "deck_count": total,
+        "cards": entries,
     }
 
 
@@ -3884,6 +4523,15 @@ def get_matchups_players_summary(
             if raw and raw.lower() not in ("bye", "drop"):
                 canonical_player.setdefault(raw.lower(), raw)
 
+    # Map canonical player name -> player_id (first non-None occurrence)
+    player_id_map: dict[str, int] = {}
+    for r in filtered:
+        for name_key, id_key in (("player", "player_id"), ("opponent_player", "opponent_player_id")):
+            name = _front_face_name((r.get(name_key) or "").strip())
+            pid = r.get(id_key)
+            if name and pid is not None and name not in player_id_map:
+                player_id_map[name] = pid
+
     def norm_player(name: str) -> str:
         return canonical_player.get((name or "").lower(), name or "(unknown)")
 
@@ -3989,6 +4637,7 @@ def get_matchups_players_summary(
         "matchups_list": matchups_list_out,
         "min_matches": min_matches,
         "include_opponents_below_min": include_opponents_below_min,
+        "player_ids": player_id_map,
     }
 
 
@@ -4284,7 +4933,7 @@ def get_player_analysis_by_name(
     player_decks = [d for d in _decks if _normalize_player(d.get("player") or "") == canonical]
     if not player_decks:
         raise HTTPException(status_code=404, detail="Player not found")
-    pid = player_decks[0].get("player_id") if player_decks else None
+    pid = player_decks[0].get("player_id")
     display = _normalize_player(canonical)
     if _database_available() and pid is not None:
         try:
@@ -4295,6 +4944,141 @@ def get_player_analysis_by_name(
         except Exception:
             logger.exception("DB lookup failed for player analysis display name")
     return _player_analysis_cached(player_decks, display, pid, date_from, date_to)
+
+
+@app.get("/api/v1/players/id/{player_id}/head-to-head", dependencies=[Depends(require_database)])
+def get_player_head_to_head(player_id: int):
+    """All opponents with aggregated W/L/D record for a given player."""
+    with _db.session_scope() as session:
+        rows = (
+            session.query(_db.MatchupRow, _db.DeckRow)
+            .join(_db.DeckRow, _db.MatchupRow.deck_id == _db.DeckRow.deck_id)
+            .filter(_db.DeckRow.player_id == player_id)
+            .filter(_db.MatchupRow.opponent_player_id.isnot(None))
+            .filter(_db.MatchupRow.result.in_(["win", "loss", "draw", "intentional_draw"]))
+            .all()
+        )
+
+    if not rows:
+        return {"player_id": player_id, "opponents": []}
+
+    # Aggregate per opponent
+    opp_stats: dict[int, dict] = {}
+    for matchup, deck in rows:
+        oid = matchup.opponent_player_id
+        if oid not in opp_stats:
+            opp_stats[oid] = {
+                "opponent_player_id": oid,
+                "opponent_player": matchup.opponent_player or "",
+                "wins": 0, "losses": 0, "draws": 0,
+                "matches": 0,
+                "formats": {},
+            }
+        s = opp_stats[oid]
+        s["matches"] += 1
+        result = (matchup.result or "").lower()
+        if result == "win":
+            s["wins"] += 1
+        elif result == "loss":
+            s["losses"] += 1
+        else:
+            s["draws"] += 1
+        fmt = deck.format_id or "Unknown"
+        if fmt not in s["formats"]:
+            s["formats"][fmt] = {"wins": 0, "losses": 0, "draws": 0}
+        if result == "win":
+            s["formats"][fmt]["wins"] += 1
+        elif result == "loss":
+            s["formats"][fmt]["losses"] += 1
+        else:
+            s["formats"][fmt]["draws"] += 1
+
+    # Build response list, sorted by matches desc
+    opponents = []
+    for s in opp_stats.values():
+        total = s["matches"]
+        win_pct = round(s["wins"] / total * 100, 1) if total else 0.0
+        opponents.append({
+            "opponent_player_id": s["opponent_player_id"],
+            "opponent_player": s["opponent_player"],
+            "wins": s["wins"],
+            "losses": s["losses"],
+            "draws": s["draws"],
+            "matches": total,
+            "win_pct": win_pct,
+            "formats": [
+                {"format_id": fmt, **counts}
+                for fmt, counts in sorted(s["formats"].items())
+            ],
+        })
+
+    opponents.sort(key=lambda x: x["matches"], reverse=True)
+    return {"player_id": player_id, "opponents": opponents}
+
+
+@app.get("/api/v1/players/id/{player_id}/head-to-head/{opponent_id}", dependencies=[Depends(require_database)])
+def get_player_head_to_head_detail(player_id: int, opponent_id: int):
+    """Full per-match encounter history between two players."""
+    with _db.session_scope() as session:
+        rows = (
+            session.query(_db.MatchupRow, _db.DeckRow)
+            .join(_db.DeckRow, _db.MatchupRow.deck_id == _db.DeckRow.deck_id)
+            .filter(_db.DeckRow.player_id == player_id)
+            .filter(_db.MatchupRow.opponent_player_id == opponent_id)
+            .filter(_db.MatchupRow.result.in_(["win", "loss", "draw", "intentional_draw"]))
+            .all()
+        )
+
+    if not rows:
+        return {"player_id": player_id, "opponent_id": opponent_id, "matches": []}
+
+    # Look up display names from _decks
+    def _display_name(pid: int) -> str:
+        for d in _decks:
+            if d.get("player_id") == pid:
+                return d.get("player") or ""
+        return ""
+
+    opponent_name = _display_name(opponent_id)
+
+    encounters = []
+    for matchup, deck in rows:
+        # Look up opponent deck archetype from _decks
+        opp_archetype = matchup.opponent_archetype
+        if opp_archetype is None and matchup.opponent_deck_id is not None:
+            opp_d = next((d for d in _decks if d.get("deck_id") == matchup.opponent_deck_id), None)
+            if opp_d:
+                opp_archetype = opp_d.get("archetype")
+
+        encounters.append({
+            "deck_id": deck.deck_id,
+            "event_id": deck.event_id,
+            "event_name": deck.event_name or "",
+            "date": deck.date or "",
+            "format_id": deck.format_id or "",
+            "round": matchup.round,
+            "result": matchup.result,
+            "player_archetype": deck.archetype,
+            "opponent_deck_id": matchup.opponent_deck_id,
+            "opponent_archetype": opp_archetype,
+        })
+
+    # Sort by date descending
+    encounters.sort(key=lambda x: _parse_date_sortkey(x["date"] or ""), reverse=True)
+
+    wins = sum(1 for e in encounters if e["result"] == "win")
+    losses = sum(1 for e in encounters if e["result"] == "loss")
+    draws = sum(1 for e in encounters if e["result"] in ("draw", "intentional_draw"))
+
+    return {
+        "player_id": player_id,
+        "opponent_id": opponent_id,
+        "opponent_player": opponent_name,
+        "wins": wins,
+        "losses": losses,
+        "draws": draws,
+        "matches": encounters,
+    }
 
 
 @app.get("/api/v1/players/{player_name:path}")
@@ -4309,7 +5093,7 @@ def get_player_detail(
     all_player_decks = [d for d in _decks if _normalize_player(d.get("player") or "") == canonical]
     if not all_player_decks:
         raise HTTPException(status_code=404, detail="Player not found")
-    pid = all_player_decks[0].get("player_id") if all_player_decks else None
+    pid = all_player_decks[0].get("player_id")
     display = _normalize_player(canonical)
     out = _player_detail_payload(all_player_decks, display, pid, date_from, date_to)
     if _database_available():

@@ -36,3 +36,18 @@ Start the API first, then the frontend. The Vite dev server proxies `/api` to `h
 - The root `package.json` has husky pre-commit hooks that run build + both test suites. Use `--no-verify` on commits when iterating, and ensure all checks pass before the final push.
 - Environment variables are documented in `.env.example`. A `.env` file with `DATABASE_URL` is required to run the backend. Set `DB_ENV=dev|staging|prod` to load `.env.dev`, `.env.staging`, or `.env.prod` instead (the API loads the base `.env` first, then the env-specific override).
 - Logging: `LOG_LEVEL` (default INFO) and `LOG_FORMAT=json` for production/Railway. On Railway, JSON format is auto-enabled; logs go to stdout with request method, path, status_code, duration_ms.
+
+### Architecture shortcuts
+
+**Backend — adding a route:** All routes live in `api/main.py`. Pydantic schemas go in `api/schemas/` (one file per domain). DB access uses `_db.session_scope()` (context manager). Heavy read queries use the in-memory `_decks` list (populated at startup) instead of hitting the DB.
+
+**Backend — DB models** (`api/db.py`):
+- `MatchupRow`: `deck_id`, `opponent_player_id`, `opponent_deck_id`, `opponent_archetype`, `result` (`win|loss|draw|intentional_draw`), `round`. Both sides of each match are stored (inverse written by `upsert_matchups_for_deck`).
+- `DeckRow`: `player_id`, `event_id`, `archetype`, `format_id`
+- `PlayerRow`: `id`, `display_name`
+
+**Frontend — styling:** No Tailwind, no component library. Use inline styles or plain CSS classes in `web/src/style.css`. Existing scroll containers: `.table-wrap` (horizontal scroll + `-webkit-overflow-scrolling: touch`) and `.table-wrap-outer` (adds right-edge gradient indicator). The matchup matrix uses `<div className="card" style={{ overflow: 'auto' }}>` directly at `web/src/pages/Matchups.tsx:889` and `:1210`.
+
+**Frontend — API layer:** All API calls are in `web/src/api.ts`. TypeScript types in `web/src/types.ts`. No GraphQL, no React Query — plain `fetch` wrapped in async functions.
+
+**Scryfall prices:** The `_build_entry()` function in `src/mtgtop8/card_lookup.py` builds the cached card entry. The raw Scryfall object has a `prices` dict (`usd`, `usd_foil`, `eur`, `eur_foil`, `tix`) that is currently dropped. Add it to `_build_entry()` to expose prices through the existing cache.

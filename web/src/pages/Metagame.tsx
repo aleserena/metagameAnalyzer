@@ -13,8 +13,9 @@ import {
   Cell,
   Legend,
 } from 'recharts'
-import { getMetagame, getFormatInfo, getCardLookup } from '../api'
+import { getMetagame, getFormatInfo, getCardLookup, getMetagameChurn, getMetagameHealth } from '../api'
 import type { CardLookupResult } from '../api'
+import type { ChurnReport, HealthReport } from '../types'
 import CardHover from '../components/CardHover'
 import EmptyState from '../components/EmptyState'
 import EventSelector from '../components/EventSelector'
@@ -27,6 +28,12 @@ import { MTG_COLOR_FILL } from '../constants'
 import { PIE_TOOLTIP_STYLE, PieChartTooltipContent } from '../components/PieChartTooltip'
 
 const COLORS = ['#1d9bf0', '#00ba7c', '#f7931a', '#e91e63', '#9c27b0', '#00bcd4', '#ff9800', '#4caf50']
+
+function HelpTip({ text }: { text: string }) {
+  return (
+    <span className="helptip" data-tip={text} aria-label={text}>?</span>
+  )
+}
 
 export default function Metagame() {
   const navigate = useNavigate()
@@ -46,6 +53,10 @@ export default function Metagame() {
   const [loadingCardMeta, setLoadingCardMeta] = useState(false)
   const { events, maxDate, lastEventDate, error: eventMetadataError } = useEventMetadata()
   const [formatName, setFormatName] = useState<string | null>(null)
+  const [health, setHealth] = useState<HealthReport | null>(null)
+  const [churn, setChurn] = useState<ChurnReport | null>(null)
+  const [churnTopN, setChurnTopN] = useState(8)
+  const [churnLoading, setChurnLoading] = useState(false)
 
   useEffect(() => {
     const param = searchParams.get('event_ids') ?? searchParams.get('event_id')
@@ -91,6 +102,22 @@ export default function Metagame() {
       .catch(() => setCardMeta({}))
       .finally(() => setLoadingCardMeta(false))
   }, [metagame?.top_cards_main])
+
+  useEffect(() => {
+    const eventIdsParam = eventIds.length ? eventIds.map(String).join(',') : undefined
+    getMetagameHealth(null, eventIdsParam)
+      .then(setHealth)
+      .catch(() => setHealth(null))
+  }, [eventIds])
+
+  useEffect(() => {
+    setChurnLoading(true)
+    const eventIdsParam = eventIds.length ? eventIds.map(String).join(',') : undefined
+    getMetagameChurn(null, 4, churnTopN, eventIdsParam)
+      .then(setChurn)
+      .catch(() => setChurn(null))
+      .finally(() => setChurnLoading(false))
+  }, [churnTopN, eventIds])
 
   const setEventFilter = (ids: (number | string)[]) => {
     setEventIds(ids)
@@ -200,6 +227,75 @@ export default function Metagame() {
           />
         </div>
       </div>
+
+      {/* Health Score */}
+      {health && (
+        <div id="health" className="chart-container" style={{ marginBottom: '1.5rem' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+            <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              Format Health
+              <HelpTip text="Overall format health score (0–100). Average of four factors: archetype diversity, card concentration, win-rate parity, and meta stability. Higher is healthier." />
+            </h3>
+            {health.health_score != null && (
+              <span style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                background: health.health_score >= 70 ? 'rgba(80,200,120,0.15)' : health.health_score >= 40 ? 'rgba(240,180,50,0.15)' : 'rgba(220,80,80,0.15)',
+                color: health.health_score >= 70 ? 'var(--success, #50c878)' : health.health_score >= 40 ? 'var(--warning, #f0b432)' : 'var(--danger, #dc5050)',
+                border: '1px solid currentColor',
+                borderRadius: 6,
+                padding: '0.2rem 0.6rem',
+                fontSize: '0.875rem',
+                fontWeight: 600,
+              }}>
+                {health.health_score}/100
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.75rem' }}>
+            {([
+              {
+                key: 'archetype_diversity',
+                label: 'Archetype Diversity',
+                detail: `${health.details.viable_archetype_count} viable archetypes`,
+                help: 'How many archetypes appear in more than 2% of decks. More variety means a healthier format. Score: 1 archetype = 0, 10+ = 100.',
+              },
+              {
+                key: 'top_card_concentration',
+                label: 'Card Concentration',
+                detail: `Top-5 avg: ${health.details.avg_top5_card_inclusion_pct}%`,
+                help: 'Average inclusion rate of the 5 most-played cards. A high rate means the format is dominated by a small number of must-play cards. Score: 0% avg = 100, 100% avg = 0.',
+              },
+              {
+                key: 'win_rate_parity',
+                label: 'Win-Rate Parity',
+                detail: health.details.archetype_win_rate_stddev != null ? `σ = ${health.details.archetype_win_rate_stddev}` : 'No matchup data',
+                help: 'How evenly matched the archetypes are based on recorded match results. Low spread in win rates = balanced format. Requires matchup data to compute.',
+              },
+              {
+                key: 'meta_shift_rate',
+                label: 'Meta Stability',
+                detail: health.details.stability_index != null ? `${health.details.stability_index}/100` : '—',
+                help: 'How much the top archetypes changed compared to the previous equivalent period. High stability means the format is consistent; low means rapid churn.',
+              },
+            ] as const).map(({ key, label, detail, help }) => {
+              const score = health.factors[key]
+              const color = score == null ? 'var(--text-muted)' : score >= 70 ? 'var(--success, #50c878)' : score >= 40 ? 'var(--warning, #f0b432)' : 'var(--danger, #dc5050)'
+              return (
+                <div key={key} style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, padding: '0.75rem 1rem' }}>
+                  <div style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    {label}
+                    <HelpTip text={help} />
+                  </div>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 700, color }}>{score != null ? score : '—'}</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>{detail}</div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="chart-container">
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
@@ -495,6 +591,157 @@ export default function Metagame() {
           </div>
         </div>
       )}
+
+      {/* Churn / Volatility Section */}
+      <div id="churn" className="chart-container" style={{ marginTop: '1.5rem', opacity: churnLoading ? 0.6 : 1, transition: 'opacity 0.2s' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+          <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            Format Volatility
+            <HelpTip text="When events are selected, compares those events to the previous equivalent calendar period. With no filter, compares the last 4 weeks to the 4 weeks before that. Shows archetype rank shifts, entries/exits, and most volatile cards." />
+          </h3>
+          {churn?.stability_index != null && (
+            <span
+                style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                background: churn.stability_index >= 70 ? 'rgba(80,200,120,0.15)' : churn.stability_index >= 40 ? 'rgba(240,180,50,0.15)' : 'rgba(220,80,80,0.15)',
+                color: churn.stability_index >= 70 ? 'var(--success, #50c878)' : churn.stability_index >= 40 ? 'var(--warning, #f0b432)' : 'var(--danger, #dc5050)',
+                border: `1px solid currentColor`,
+                borderRadius: 6,
+                padding: '0.2rem 0.6rem',
+                fontSize: '0.875rem',
+                fontWeight: 600,
+                cursor: 'help',
+              }}
+            >
+              Stability {churn.stability_index}/100
+            </span>
+          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginLeft: 'auto', flexWrap: 'wrap' }}>
+            <label style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+              Track
+              <HelpTip text="How many top archetypes (by play rate) to track for rank changes. 'All' includes every archetype present in either window." />
+              <select
+                value={churnTopN}
+                onChange={(e) => setChurnTopN(Number(e.target.value))}
+                style={{ fontSize: '0.8125rem', padding: '0.2rem 0.4rem', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 4 }}
+              >
+                {[5, 8, 10, 15, 20].map((n) => (
+                  <option key={n} value={n}>Top {n}</option>
+                ))}
+                <option value={0}>All</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        {churn && (
+          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', fontSize: '0.8125rem', color: 'var(--text-muted)', flexWrap: 'wrap' }}>
+            <span>
+              Current: {churn.current_window.deck_count} decks
+              {churn.current_window.date_from && ` (${churn.current_window.date_from} – ${churn.current_window.date_to})`}
+            </span>
+            <span style={{ opacity: 0.4 }}>vs</span>
+            <span>
+              Previous: {churn.previous_window.deck_count} decks
+              {churn.previous_window.date_from && ` (${churn.previous_window.date_from} – ${churn.previous_window.date_to})`}
+            </span>
+          </div>
+        )}
+
+        {churn?.message && (
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>{churn.message}</p>
+        )}
+
+        {churn && churn.archetype_changes.length > 0 && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.5rem' }}>
+            <div>
+              <h4 style={{ margin: '0 0 0.75rem', fontSize: '0.9375rem' }}>Archetype Shifts</h4>
+              <div className="table-wrap-outer">
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th scope="col">Archetype</th>
+                        <th scope="col" style={{ textAlign: 'center' }}>Status</th>
+                        <th scope="col" style={{ textAlign: 'right' }}>Rank Δ</th>
+                        <th scope="col" style={{ textAlign: 'right' }}>Rate Δ</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {churn.archetype_changes.map((row) => {
+                        const statusColor = row.status === 'entered'
+                          ? 'var(--success, #50c878)'
+                          : row.status === 'exited'
+                          ? 'var(--danger, #dc5050)'
+                          : 'var(--text-muted)'
+                        const deltaColor = (v: number | null) =>
+                          v == null ? 'var(--text-muted)' : v > 0 ? 'var(--success, #50c878)' : v < 0 ? 'var(--danger, #dc5050)' : 'var(--text-muted)'
+                        return (
+                          <tr key={row.archetype}>
+                            <td>
+                              <a href={`/decks?archetype=${encodeURIComponent(row.archetype)}`} style={{ color: 'var(--accent)' }}>
+                                {row.archetype}
+                              </a>
+                            </td>
+                            <td style={{ textAlign: 'center', color: statusColor, fontWeight: 600, fontSize: '0.8125rem' }}>
+                              {row.status === 'entered' ? '▲ New' : row.status === 'exited' ? '▼ Gone' : '●'}
+                            </td>
+                            <td style={{ textAlign: 'right', color: deltaColor(row.rank_delta), fontWeight: 500 }}>
+                              {row.rank_delta == null ? '—' : row.rank_delta > 0 ? `+${row.rank_delta}` : String(row.rank_delta)}
+                            </td>
+                            <td style={{ textAlign: 'right', color: deltaColor(row.play_rate_delta_pct), fontWeight: 500 }}>
+                              {row.play_rate_delta_pct > 0 ? `+${row.play_rate_delta_pct}` : String(row.play_rate_delta_pct)}%
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            {churn.most_volatile_cards.length > 0 && (
+              <div>
+                <h4 style={{ margin: '0 0 0.75rem', fontSize: '0.9375rem' }}>Most Volatile Cards</h4>
+                <div className="table-wrap-outer">
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th scope="col">Card</th>
+                          <th scope="col" style={{ textAlign: 'right' }}>Curr %</th>
+                          <th scope="col" style={{ textAlign: 'right' }}>Prev %</th>
+                          <th scope="col" style={{ textAlign: 'right' }}>Δ</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {churn.most_volatile_cards.slice(0, 15).map((c) => {
+                          const color = c.delta_pct > 0 ? 'var(--success, #50c878)' : c.delta_pct < 0 ? 'var(--danger, #dc5050)' : 'var(--text-muted)'
+                          return (
+                            <tr key={c.card}>
+                              <td>
+                                <CardHover cardName={c.card} linkTo>{c.card}</CardHover>
+                              </td>
+                              <td style={{ textAlign: 'right' }}>{c.current_inclusion_pct}%</td>
+                              <td style={{ textAlign: 'right', color: 'var(--text-muted)' }}>{c.previous_inclusion_pct}%</td>
+                              <td style={{ textAlign: 'right', color, fontWeight: 600 }}>
+                                {c.delta_pct > 0 ? `+${c.delta_pct}` : String(c.delta_pct)}%
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

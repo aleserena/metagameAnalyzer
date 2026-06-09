@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { getMatchupsSummary, getMatchupsPlayersSummary } from '../api'
 import EventSelector from '../components/EventSelector'
 import FiltersPanel from '../components/FiltersPanel'
@@ -9,6 +10,7 @@ import { reportError } from '../utils'
 
 const DROPDOWN_MAX_HEIGHT = 240
 const DROPDOWN_GAP = 4
+const CELL_SIZE = 48
 
 type ViewMode = 'list' | 'matrix'
 type DataMode = 'archetypes' | 'players'
@@ -93,6 +95,11 @@ export default function Matchups() {
   } | null>(null)
   const [hoveredPlayerRow, setHoveredPlayerRow] = useState<{
     player: string
+    rect: DOMRect
+  } | null>(null)
+  const [hoveredNoMatchCell, setHoveredNoMatchCell] = useState<{
+    row: string
+    col: string
     rect: DOMRect
   } | null>(null)
 
@@ -886,7 +893,7 @@ export default function Matchups() {
           }
         }
         return (
-          <div className="card" style={{ overflow: 'auto' }}>
+          <div className="card" style={{ overflow: 'auto', WebkitOverflowScrolling: 'touch', touchAction: 'pan-x pan-y' }}>
             <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
               Rows = your archetype, columns = opponent. Cell = your win rate vs that archetype. Heatmap: green = 100%, red = 0%.
             </p>
@@ -914,8 +921,40 @@ export default function Matchups() {
                     {columnIndices.map((j) => {
                       const a = summary.archetypes[j]
                       return (
-                        <th key={a} style={{ padding: '0.35rem', maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis' }} title={a}>
-                          {a.length > 12 ? a.slice(0, 11) + '…' : a}
+                        <th
+                          key={a}
+                          title={a}
+                          style={{
+                            width: CELL_SIZE,
+                            minWidth: CELL_SIZE,
+                            maxWidth: CELL_SIZE,
+                            padding: 0,
+                            overflow: 'hidden',
+                            verticalAlign: 'bottom',
+                          }}
+                        >
+                          <div style={{
+                            width: CELL_SIZE,
+                            height: CELL_SIZE,
+                            display: 'flex',
+                            alignItems: 'flex-end',
+                            justifyContent: 'center',
+                            overflow: 'hidden',
+                            paddingBottom: 4,
+                          }}>
+                            <span style={{
+                              display: 'block',
+                              writingMode: 'vertical-rl',
+                              transform: 'rotate(180deg)',
+                              fontSize: '0.72rem',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                              maxHeight: CELL_SIZE - 4,
+                            }}>
+                              {a}
+                            </span>
+                          </div>
                         </th>
                       )
                     })}
@@ -968,9 +1007,13 @@ export default function Matchups() {
                               cursor: rowStats ? 'help' : 'default',
                             }}
                           >
-                            <span style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>
+                            <Link
+                              to={`/archetypes/${encodeURIComponent(a)}`}
+                              style={{ whiteSpace: 'normal', wordBreak: 'break-word', color: 'var(--accent)', textDecoration: 'none' }}
+                              onClick={(e) => e.stopPropagation()}
+                            >
                               {a}
-                            </span>
+                            </Link>
                             <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
                               Overall: <strong>{overall.toFixed(1)}%</strong>
                             </span>
@@ -994,32 +1037,42 @@ export default function Matchups() {
                         </td>
                         {columnIndices.map((j) => {
                           const cell = summary.matrix[i]![j]
-                          if (i === j) return <td key={j} style={{ padding: '0.35rem', backgroundColor: 'rgba(128,128,128,0.2)' }} title="Same archetype"> </td>
+                          const opponent = summary.archetypes[j]
+                          const cellStyle: CSSProperties = {
+                            width: CELL_SIZE,
+                            minWidth: CELL_SIZE,
+                            maxWidth: CELL_SIZE,
+                            height: CELL_SIZE,
+                            padding: 0,
+                            textAlign: 'center',
+                            verticalAlign: 'middle',
+                            fontSize: '0.75rem',
+                            lineHeight: `${CELL_SIZE}px`,
+                            overflow: 'hidden',
+                          }
+                          if (i === j) return <td key={j} style={{ ...cellStyle, backgroundColor: 'rgba(128,128,128,0.2)' }} title="Same archetype"> </td>
                           if (cell == null)
                             return (
                               <td
                                 key={j}
-                                style={{
-                                  padding: '0.35rem',
-                                  color: 'var(--text-muted)',
-                                  textAlign: 'center',
-                                }}
+                                style={{ ...cellStyle, color: 'var(--text-muted)', cursor: 'default' }}
+                                onMouseEnter={(e) => setHoveredNoMatchCell({ row: a, col: opponent, rect: e.currentTarget.getBoundingClientRect() })}
+                                onMouseMove={(e) => setHoveredNoMatchCell({ row: a, col: opponent, rect: e.currentTarget.getBoundingClientRect() })}
+                                onMouseLeave={() => setHoveredNoMatchCell(null)}
                               >
                                 —
                               </td>
                             )
                           const pct = cell * 100
-                          const opponent = summary.archetypes[j]
                           const key = `${a}|||${opponent}`
                           const matchupRow = matchupsByPair.get(key)
                           return (
                             <td
                               key={j}
                               style={{
-                                padding: '0.35rem',
+                                ...cellStyle,
                                 backgroundColor: heatmapColor(pct),
                                 cursor: matchupRow ? 'help' : 'default',
-                                textAlign: 'center',
                               }}
                               onMouseEnter={(e) => {
                                 if (!matchupRow) return
@@ -1133,6 +1186,37 @@ export default function Matchups() {
                 </div>
               )
             })()}
+            {hoveredNoMatchCell && !hoveredCell && !hoveredArchetypeRow && (() => {
+              const pos = getTooltipPosition(hoveredNoMatchCell.rect)
+              return (
+                <div
+                  role="tooltip"
+                  style={{
+                    position: 'fixed',
+                    left: pos.left,
+                    top: pos.top,
+                    transform: pos.transform,
+                    zIndex: 1000,
+                    pointerEvents: 'none',
+                    background: 'var(--bg-card)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    padding: '0.5rem 0.6rem',
+                    color: 'var(--text)',
+                    boxShadow: '0 10px 26px rgba(0,0,0,0.25)',
+                    minWidth: 180,
+                    maxWidth: 300,
+                    fontSize: '0.85rem',
+                    lineHeight: 1.25,
+                  }}
+                >
+                  <div style={{ fontWeight: 700, marginBottom: '0.25rem' }}>
+                    {hoveredNoMatchCell.row} vs {hoveredNoMatchCell.col}
+                  </div>
+                  <div style={{ color: 'var(--text-muted)' }}>No matches recorded</div>
+                </div>
+              )
+            })()}
           </div>
         )
       })()}
@@ -1207,7 +1291,7 @@ export default function Matchups() {
           }
         }
         return (
-        <div className="card" style={{ overflow: 'auto' }}>
+        <div className="card" style={{ overflow: 'auto', WebkitOverflowScrolling: 'touch', touchAction: 'pan-x pan-y' }}>
           <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
             Rows = player, columns = opponent. Cell = row player&apos;s win rate vs column player. Heatmap: green = 100%, red = 0%.
           </p>
@@ -1238,8 +1322,40 @@ export default function Matchups() {
                     {columnIndices.map((j) => {
                       const p = playersSummary.players[j]
                       return (
-                        <th key={p} style={{ padding: '0.35rem', maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis' }} title={p}>
-                          {p.length > 12 ? p.slice(0, 11) + '…' : p}
+                        <th
+                          key={p}
+                          title={p}
+                          style={{
+                            width: CELL_SIZE,
+                            minWidth: CELL_SIZE,
+                            maxWidth: CELL_SIZE,
+                            padding: 0,
+                            overflow: 'hidden',
+                            verticalAlign: 'bottom',
+                          }}
+                        >
+                          <div style={{
+                            width: CELL_SIZE,
+                            height: CELL_SIZE,
+                            display: 'flex',
+                            alignItems: 'flex-end',
+                            justifyContent: 'center',
+                            overflow: 'hidden',
+                            paddingBottom: 4,
+                          }}>
+                            <span style={{
+                              display: 'block',
+                              writingMode: 'vertical-rl',
+                              transform: 'rotate(180deg)',
+                              fontSize: '0.72rem',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                              maxHeight: CELL_SIZE - 4,
+                            }}>
+                              {p}
+                            </span>
+                          </div>
                         </th>
                       )
                     })}
@@ -1292,9 +1408,19 @@ export default function Matchups() {
                               cursor: rowStats ? 'help' : 'default',
                             }}
                           >
-                            <span style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>
-                              {pa}
-                            </span>
+                            {(() => {
+                              const pid = playersSummary.player_ids?.[pa]
+                              const to = pid != null ? `/players/${pid}` : `/players/${encodeURIComponent(pa)}`
+                              return (
+                                <Link
+                                  to={to}
+                                  style={{ whiteSpace: 'normal', wordBreak: 'break-word', color: 'var(--accent)', textDecoration: 'none' }}
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  {pa}
+                                </Link>
+                              )
+                            })()}
                             <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
                               Overall: <strong>{overall.toFixed(1)}%</strong>
                             </span>
@@ -1318,17 +1444,28 @@ export default function Matchups() {
                         </td>
                         {columnIndices.map((j) => {
                           const pb = playersSummary.players[j]
-                          if (i === j) return <td key={pb} style={{ padding: '0.35rem', backgroundColor: 'rgba(128,128,128,0.2)' }} title="Same player"> </td>
+                          const pCellStyle: CSSProperties = {
+                            width: CELL_SIZE,
+                            minWidth: CELL_SIZE,
+                            maxWidth: CELL_SIZE,
+                            height: CELL_SIZE,
+                            padding: 0,
+                            textAlign: 'center',
+                            verticalAlign: 'middle',
+                            fontSize: '0.75rem',
+                            lineHeight: `${CELL_SIZE}px`,
+                            overflow: 'hidden',
+                          }
+                          if (i === j) return <td key={pb} style={{ ...pCellStyle, backgroundColor: 'rgba(128,128,128,0.2)' }} title="Same player"> </td>
                           const cell = playersSummary.players_matrix[i]?.[j]
                           if (cell == null)
                             return (
                               <td
                                 key={pb}
-                                style={{
-                                  padding: '0.35rem',
-                                  color: 'var(--text-muted)',
-                                  textAlign: 'center',
-                                }}
+                                style={{ ...pCellStyle, color: 'var(--text-muted)', cursor: 'default' }}
+                                onMouseEnter={(e) => setHoveredNoMatchCell({ row: pa, col: pb, rect: e.currentTarget.getBoundingClientRect() })}
+                                onMouseMove={(e) => setHoveredNoMatchCell({ row: pa, col: pb, rect: e.currentTarget.getBoundingClientRect() })}
+                                onMouseLeave={() => setHoveredNoMatchCell(null)}
                               >
                                 —
                               </td>
@@ -1339,10 +1476,9 @@ export default function Matchups() {
                             <td
                               key={pb}
                               style={{
-                                padding: '0.35rem',
+                                ...pCellStyle,
                                 backgroundColor: heatmapColor(pct),
                                 cursor: matchupRow ? 'help' : 'default',
-                                textAlign: 'center',
                               }}
                               onMouseEnter={(e) => {
                                 if (!matchupRow) return
@@ -1452,6 +1588,37 @@ export default function Matchups() {
                       <div style={{ color: 'var(--text-muted)' }}>Matches</div>
                       <div style={{ textAlign: 'right' }}>{row.matches}</div>
                     </div>
+                  </div>
+                )
+              })()}
+              {hoveredNoMatchCell && !hoveredPlayerCell && !hoveredPlayerRow && (() => {
+                const pos = getTooltipPosition(hoveredNoMatchCell.rect)
+                return (
+                  <div
+                    role="tooltip"
+                    style={{
+                      position: 'fixed',
+                      left: pos.left,
+                      top: pos.top,
+                      transform: pos.transform,
+                      zIndex: 1000,
+                      pointerEvents: 'none',
+                      background: 'var(--bg-card)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      padding: '0.5rem 0.6rem',
+                      color: 'var(--text)',
+                      boxShadow: '0 10px 26px rgba(0,0,0,0.25)',
+                      minWidth: 180,
+                      maxWidth: 300,
+                      fontSize: '0.85rem',
+                      lineHeight: 1.25,
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, marginBottom: '0.25rem' }}>
+                      {hoveredNoMatchCell.row} vs {hoveredNoMatchCell.col}
+                    </div>
+                    <div style={{ color: 'var(--text-muted)' }}>No matches recorded</div>
                   </div>
                 )
               })()}

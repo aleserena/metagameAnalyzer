@@ -226,6 +226,13 @@ export default function DeckDetail() {
     return null
   }
 
+  const deckTotalCost = analysis?.card_meta
+    ? deck.mainboard.reduce((sum, { qty, card }) => {
+        const usd = analysis.card_meta?.[card]?.prices?.usd
+        return sum + qty * (usd ? parseFloat(usd) : 0)
+      }, 0)
+    : null
+
   return (
     <div>
       <button className="btn" style={{ marginBottom: '1rem' }} onClick={() => navigate(-1)}>
@@ -346,6 +353,12 @@ export default function DeckDetail() {
               )}
             </div>
           </div>
+          {deckTotalCost != null && deckTotalCost > 0 && (
+            <div>
+              <div className="label">Est. Value (USD)</div>
+              <div style={{ fontFamily: 'monospace' }}>${deckTotalCost.toFixed(2)}</div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -602,6 +615,7 @@ export default function DeckDetail() {
               getCardHighlight={getCardHighlight}
               showVsMetagame={showVsMetagame}
               playRateByCard={playRateByCard}
+              showPrices
             />
             {deck.sideboard?.length ? (
               <>
@@ -617,6 +631,7 @@ export default function DeckDetail() {
                   getCardHighlight={() => null}
                   showVsMetagame={false}
                   playRateByCard={{}}
+                  showPrices
                 />
               </>
             ) : null}
