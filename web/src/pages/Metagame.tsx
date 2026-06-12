@@ -234,7 +234,7 @@ export default function Metagame() {
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
             <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
               Format Health
-              <HelpTip text="Overall format health score (0–100). Average of four factors: archetype diversity, card concentration, win-rate parity, and meta stability. Higher is healthier." />
+              <HelpTip text="Overall format health score (0–100). Average of five factors: archetype diversity, card concentration, win-rate parity, meta stability, and dominant archetype. Higher is healthier." />
             </h3>
             {health.health_score != null && (
               <span style={{
@@ -258,8 +258,8 @@ export default function Metagame() {
               {
                 key: 'archetype_diversity',
                 label: 'Archetype Diversity',
-                detail: `${health.details.viable_archetype_count} viable archetypes`,
-                help: 'How many archetypes appear in more than 2% of decks. More variety means a healthier format. Score: 1 archetype = 0, 10+ = 100.',
+                detail: `${health.details.effective_archetype_count} effective (${health.details.viable_archetype_count} viable)`,
+                help: 'Shannon entropy effective archetype count (e^H). Rewards both the number of archetypes and how evenly they are distributed — a format where one deck has 80% meta share scores low even with many archetypes present. Score: 1 = 0, 15+ = 100.',
               },
               {
                 key: 'top_card_concentration',
@@ -271,13 +271,21 @@ export default function Metagame() {
                 key: 'win_rate_parity',
                 label: 'Win-Rate Parity',
                 detail: health.details.archetype_win_rate_stddev != null ? `σ = ${health.details.archetype_win_rate_stddev}` : 'No matchup data',
-                help: 'How evenly matched the archetypes are based on recorded match results. Low spread in win rates = balanced format. Requires matchup data to compute.',
+                help: 'Weighted std-dev of archetype win rates (archetypes with more recorded matches count more). Low spread = balanced format. Requires matchup data to compute.',
               },
               {
                 key: 'meta_shift_rate',
                 label: 'Meta Stability',
-                detail: health.details.stability_index != null ? `${health.details.stability_index}/100` : '—',
-                help: 'How much the top archetypes changed compared to the previous equivalent period. High stability means the format is consistent; low means rapid churn.',
+                detail: health.details.stability_index != null ? `${health.details.stability_index}/100 raw` : '—',
+                help: 'Stability index penalized by diversity: a stagnant format dominated by one deck does not get credit for being stable. Score = stability × min(1, diversity / 50).',
+              },
+              {
+                key: 'dominant_archetype',
+                label: 'Archetype Balance',
+                detail: health.details.top_archetype
+                  ? `${health.details.top_archetype}: ${health.details.top_archetype_share_pct}%`
+                  : '—',
+                help: 'Detects a boogeyman deck. Score: top archetype < 15% meta share = 100 (healthy), ≥ 40% = 0 (one deck dominates). Linear between those thresholds.',
               },
             ] as const).map(({ key, label, detail, help }) => {
               const score = health.factors[key]

@@ -64,12 +64,16 @@ export interface HealthReport {
     top_card_concentration: number | null
     win_rate_parity: number | null
     meta_shift_rate: number | null
+    dominant_archetype: number | null
   }
   details: {
     viable_archetype_count: number
+    effective_archetype_count: number
     avg_top5_card_inclusion_pct: number
     archetype_win_rate_stddev: number | null
     stability_index: number | null
+    top_archetype: string | null
+    top_archetype_share_pct: number
   }
 }
 

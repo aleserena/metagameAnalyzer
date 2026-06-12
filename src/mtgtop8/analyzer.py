@@ -1,6 +1,7 @@
 """Metagame analysis for scraped decks."""
 from typing import Any, Callable
 
+from .card_lookup import get_card_categories
 from .models import Deck
 from .normalize import canonical_card_name_for_compare
 from .storage import save_json
@@ -347,6 +348,131 @@ def _is_permanent(type_line: str) -> bool:
     return True
 
 
+_FUNCTIONAL_CATEGORY_ORDER = [
+    "land",
+    "manaless",
+    "ramp",
+    "removal",
+    "wipe",
+    "disenchant",
+    "counter",
+    "card-draw",
+    "tutor",
+    "graveyard",
+    "token",
+    "protection",
+    "evasion",
+    "lifegain",
+    "combat-trick",
+    "uncounterable",
+    "ward",
+    "hatebear",
+    "discard",
+]
+
+
+def classify_card_functions(
+    oracle_text: str,
+    type_line: str,
+    cmc: int | None = None,
+    otag_categories: list[str] | None = None,
+) -> list[str]:
+    """Return all applicable functional categories for a card (multi-tag, order-independent).
+
+    When otag_categories is provided (from the Scryfall oracle tag index) it is used
+    for all categories tracked by that index. Text heuristics are always applied for
+    categories not covered by otag (land, manaless, ward) and as a full fallback when
+    the index has not been built yet (otag_categories is None).
+    """
+    tline = type_line.lower()
+    if "land" in tline:
+        return ["land"]
+
+    text = oracle_text.lower()
+    tags: list[str] = []
+
+    # Heuristic-only: these categories have no otag equivalent
+    if (
+        cmc == 0
+        or "rather than pay this spell's mana cost" in text
+        or ("evoke" in text and "exile" in text and "from your hand" in text)
+    ):
+        tags.append("manaless")
+
+    if otag_categories is not None:
+        # Primary path: use Scryfall oracle tag data
+        for cat in otag_categories:
+            if cat not in tags:
+                tags.append(cat)
+        if "ward" in text and "ward" not in tags:
+            tags.append("ward")
+    else:
+        # Fallback path: text heuristics for all categories
+        if "add {" in text or ("search your library" in text and "land" in text):
+            tags.append("ramp")
+
+        if ("destroy target" in text or "exile target" in text) and any(
+            w in text for w in ("creature", "artifact", "enchantment", "permanent", "planeswalker")
+        ):
+            tags.append("removal")
+
+        if "destroy all" in text or "exile all" in text or "deals damage to each" in text:
+            tags.append("wipe")
+
+        if ("destroy target" in text or "exile target" in text) and (
+            "artifact" in text or "enchantment" in text
+        ):
+            tags.append("disenchant")
+
+        if "counter target" in text:
+            tags.append("counter")
+
+        if "draw" in text and "card" in text:
+            tags.append("card-draw")
+
+        if "search your library" in text and "land" not in text:
+            tags.append("tutor")
+
+        if "from your graveyard" in text or "from a graveyard" in text:
+            tags.append("graveyard")
+
+        if "create" in text and "token" in text:
+            tags.append("token")
+
+        if "protection from" in text or "hexproof" in text or "shroud" in text:
+            tags.append("protection")
+
+        if "creature" in tline and any(
+            kw in text for kw in ("flying", "menace", "trample", "can't be blocked")
+        ):
+            tags.append("evasion")
+
+        if "gain" in text and "life" in text:
+            tags.append("lifegain")
+
+        if "instant" in tline and "until end of turn" in text:
+            tags.append("combat-trick")
+
+        if "can't be countered" in text:
+            tags.append("uncounterable")
+
+        if "ward" in text:
+            tags.append("ward")
+
+        if (
+            "opponents can't" in text
+            or "players can't" in text
+            or "noncreature spells cost" in text
+            or "each opponent can't" in text
+        ):
+            tags.append("hatebear")
+
+        if "discard" in text and ("opponent" in text or "player" in text):
+            tags.append("discard")
+
+    return tags
+
+
 def deck_analysis(deck: Deck, card_metadata: dict[str, dict]) -> dict[str, Any]:
     """Per-deck analysis: mana curve, color distribution, lands distribution, type distribution."""
     mana_curve: dict[int, int] = {}
@@ -360,6 +486,7 @@ def deck_analysis(deck: Deck, card_metadata: dict[str, dict]) -> dict[str, Any]:
     grouped_by_cmc: dict[int, list[tuple[int, str]]] = {}
     grouped_by_color: dict[str, list[tuple[int, str]]] = {}
     card_meta_out: dict[str, dict] = {}
+    functional_cards: dict[str, list[tuple[int, str]]] = {}
 
     for qty, card in effective_mainboard(deck):
         meta = card_metadata.get(card, {})
@@ -386,6 +513,15 @@ def deck_analysis(deck: Deck, card_metadata: dict[str, dict]) -> dict[str, Any]:
                 "colors": meta.get("colors", []),
                 "prices": meta.get("prices"),
             }
+
+        otag_cats = get_card_categories(card)
+        for fn_tag in classify_card_functions(
+            meta.get("oracle_text") or "",
+            meta.get("type_line") or "",
+            cmc_val,
+            otag_cats,
+        ):
+            functional_cards.setdefault(fn_tag, []).append((qty, card))
 
         if is_land:
             lands += qty
@@ -455,6 +591,15 @@ def deck_analysis(deck: Deck, card_metadata: dict[str, dict]) -> dict[str, Any]:
         key=lambda c: (color_key_order.index(c) if c in color_key_order else 99, c),
     )
 
+    sorted_functional = {
+        k: {
+            "count": sum(q for q, _ in functional_cards[k]),
+            "cards": sorted(functional_cards[k], key=lambda x: (-x[0], x[1])),
+        }
+        for k in _FUNCTIONAL_CATEGORY_ORDER
+        if k in functional_cards
+    }
+
     return {
         "mana_curve": dict(sorted(mana_curve.items())),
         "mana_curve_permanent": dict(sorted(mana_curve_permanent.items())),
@@ -469,6 +614,7 @@ def deck_analysis(deck: Deck, card_metadata: dict[str, dict]) -> dict[str, Any]:
         "grouped_by_color": {c: grouped_by_color[c] for c in sorted_colors},
         "grouped_by_color_sideboard": {c: grouped_by_color_sideboard[c] for c in sorted_colors_sb},
         "card_meta": card_meta_out,
+        "functional_stats": sorted_functional,
     }
 
 

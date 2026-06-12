@@ -47,8 +47,13 @@ export function sortEntries(
   })
 }
 
+export type Currency = 'usd' | 'eur' | 'tix'
+
+const CURRENCY_SYMBOL: Record<Currency, string> = { usd: '$', eur: '€', tix: '' }
+const CURRENCY_SUFFIX: Record<Currency, string> = { usd: '', eur: '', tix: ' tix' }
+
 function CardRow({
-  qty, card, meta, highlight, showVsMetagame, playRate, price,
+  qty, card, meta, highlight, showVsMetagame, playRate, price, currency = 'usd',
 }: {
   qty: number
   card: string
@@ -57,6 +62,7 @@ function CardRow({
   showVsMetagame: boolean
   playRate?: number
   price?: string | null
+  currency?: Currency
 }) {
   const rowClass = [
     'deck-card-row',
@@ -76,7 +82,9 @@ function CardRow({
           <span className="deck-card-play-rate">{playRate}%</span>
         )}
         {priceVal > 0 && (
-          <span className="deck-card-price">${priceVal.toFixed(2)}</span>
+          <span className="deck-card-price">
+            {CURRENCY_SYMBOL[currency]}{priceVal.toFixed(2)}{CURRENCY_SUFFIX[currency]}
+          </span>
         )}
       </span>
     </div>
@@ -93,6 +101,7 @@ export interface CardListSectionProps {
   showVsMetagame: boolean
   playRateByCard: Record<string, number>
   showPrices?: boolean
+  currency?: Currency
 }
 
 export default function CardListSection({
@@ -105,7 +114,13 @@ export default function CardListSection({
   showVsMetagame,
   playRateByCard,
   showPrices,
+  currency = 'usd',
 }: CardListSectionProps) {
+  const getPrice = (card: string): string | null | undefined => {
+    if (!showPrices) return undefined
+    return cardMeta?.[card]?.prices?.[currency] ?? undefined
+  }
+
   const renderCards = (entries: [number, string][]) =>
     sortEntries(entries, cardMeta, sortMode).map(([qty, card]) => (
       <CardRow
@@ -116,7 +131,8 @@ export default function CardListSection({
         highlight={getCardHighlight(card)}
         showVsMetagame={showVsMetagame}
         playRate={playRateByCard[card]}
-        price={showPrices ? cardMeta?.[card]?.prices?.usd : undefined}
+        price={getPrice(card)}
+        currency={currency}
       />
     ))
 
@@ -172,7 +188,8 @@ export default function CardListSection({
             highlight={getCardHighlight(card)}
             showVsMetagame={showVsMetagame}
             playRate={playRateByCard[card]}
-            price={showPrices ? cardMeta?.[card]?.prices?.usd : undefined}
+            price={getPrice(card)}
+            currency={currency}
           />
         ))}
       </div>
@@ -186,7 +203,8 @@ export default function CardListSection({
             highlight={getCardHighlight(card)}
             showVsMetagame={showVsMetagame}
             playRate={playRateByCard[card]}
-            price={showPrices ? cardMeta?.[card]?.prices?.usd : undefined}
+            price={getPrice(card)}
+            currency={currency}
           />
         ))}
       </div>
