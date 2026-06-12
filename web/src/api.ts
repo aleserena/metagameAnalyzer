@@ -169,6 +169,35 @@ export async function getDuplicateDecks(eventIds?: string): Promise<{
   return fetchApi(`/decks/duplicates${params}`)
 }
 
+export interface BudgetReplacement {
+  card: string
+  price: number
+  deck_count: number
+  savings: number
+}
+
+export interface BudgetAlternativeEntry {
+  expensive_card: string
+  expensive_price: number
+  replacements: BudgetReplacement[]
+}
+
+export interface BudgetAlternativesResponse {
+  deck_id: number
+  threshold: number
+  currency: string
+  source: 'archetype' | 'similar'
+  alternatives: BudgetAlternativeEntry[]
+}
+
+export async function getBudgetAlternatives(
+  deckId: number,
+  threshold: number,
+  currency: string,
+): Promise<BudgetAlternativesResponse> {
+  return fetchApi(`/decks/${deckId}/budget-alternatives?threshold=${threshold}&currency=${currency}`)
+}
+
 export interface CardFaceLookup {
   name: string
   image_uris?: { small?: string; normal?: string; large?: string }
@@ -222,6 +251,7 @@ export interface DeckAnalysis {
   grouped_by_color?: Record<string, [number, string][]>
   grouped_by_color_sideboard?: Record<string, [number, string][]>
   card_meta?: Record<string, CardMeta>
+  functional_stats?: Record<string, { count: number; cards: [number, string][] }>
 }
 
 export async function getDeckAnalysis(deckId: number): Promise<DeckAnalysis> {

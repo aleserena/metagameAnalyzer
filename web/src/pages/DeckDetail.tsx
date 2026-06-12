@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { getDeck, getMetagame, getDeckAnalysis, getDateRange, getSimilarDecks, deleteDeck, getCardLookup, createEventUploadLinks } from '../api'
+import { getDeck, getMetagame, getDeckAnalysis, getDateRange, getSimilarDecks, deleteDeck, getCardLookup, createEventUploadLinks, getBudgetAlternatives } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import type { Deck, MetagameReport, SimilarDeck } from '../types'
-import type { DeckAnalysis, CardLookupResult } from '../api'
+import type { DeckAnalysis, CardLookupResult, BudgetAlternativesResponse } from '../api'
 import CardGrid from '../components/CardGrid'
 import CardHover from '../components/CardHover'
 import ManaSymbols from '../components/ManaSymbols'
-import CardListSection, { getGroupedData, type GroupMode, type SortMode } from '../components/deck/CardListSection'
+import CardListSection, { getGroupedData, type GroupMode, type SortMode, type Currency } from '../components/deck/CardListSection'
 import DeckEditSection from '../components/deck/DeckEditSection'
 import DeckAnalysisCharts from '../components/deck/DeckAnalysisCharts'
 import { WUBRG_ORDER } from '../lib/deckUtils'
@@ -55,6 +55,12 @@ export default function DeckDetail() {
   const [commanderLookup, setCommanderLookup] = useState<Record<string, CardLookupResult> | null>(null)
   const [sampleHand, setSampleHand] = useState<string[]>([])
   const [handLookup, setHandLookup] = useState<Record<string, CardLookupResult>>({})
+  const [currency, setCurrency] = useState<Currency>('usd')
+  const [budgetThreshold, setBudgetThreshold] = useState(5)
+  const [budgetAlts, setBudgetAlts] = useState<BudgetAlternativesResponse | null>(null)
+  const [budgetLoading, setBudgetLoading] = useState(false)
+  // Clear stale budget results whenever the user switches currency
+  useEffect(() => { setBudgetAlts(null) }, [currency])
   const MAX_COMPARE = 4
   const deckNotFoundToastShown = useRef(false)
 
@@ -228,8 +234,8 @@ export default function DeckDetail() {
 
   const deckTotalCost = analysis?.card_meta
     ? deck.mainboard.reduce((sum, { qty, card }) => {
-        const usd = analysis.card_meta?.[card]?.prices?.usd
-        return sum + qty * (usd ? parseFloat(usd) : 0)
+        const priceStr = analysis.card_meta?.[card]?.prices?.[currency]
+        return sum + qty * (priceStr ? parseFloat(priceStr) : 0)
       }, 0)
     : null
 
@@ -353,10 +359,42 @@ export default function DeckDetail() {
               )}
             </div>
           </div>
-          {deckTotalCost != null && deckTotalCost > 0 && (
+          {analysis?.card_meta && (
             <div>
-              <div className="label">Est. Value (USD)</div>
-              <div style={{ fontFamily: 'monospace' }}>${deckTotalCost.toFixed(2)}</div>
+              <div className="label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                Est. Value
+                <span style={{ display: 'flex', gap: 2 }}>
+                  {(['usd', 'eur', 'tix'] as Currency[]).map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setCurrency(c)}
+                      style={{
+                        padding: '0 5px',
+                        fontSize: '0.7rem',
+                        lineHeight: '1.4',
+                        border: '1px solid var(--border)',
+                        borderRadius: 3,
+                        background: currency === c ? 'var(--accent)' : 'transparent',
+                        color: currency === c ? '#fff' : 'var(--text-muted)',
+                        cursor: 'pointer',
+                        textTransform: 'uppercase',
+                      }}
+                    >
+                      {c}
+                    </button>
+                  ))}
+                </span>
+              </div>
+              {deckTotalCost != null && deckTotalCost > 0 ? (
+                <div style={{ fontFamily: 'monospace' }}>
+                  {currency === 'usd' ? '$' : currency === 'eur' ? '€' : ''}
+                  {deckTotalCost.toFixed(2)}
+                  {currency === 'tix' ? ' tix' : ''}
+                </div>
+              ) : (
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>—</div>
+              )}
             </div>
           )}
         </div>
@@ -616,6 +654,7 @@ export default function DeckDetail() {
               showVsMetagame={showVsMetagame}
               playRateByCard={playRateByCard}
               showPrices
+              currency={currency}
             />
             {deck.sideboard?.length ? (
               <>
@@ -632,11 +671,104 @@ export default function DeckDetail() {
                   showVsMetagame={false}
                   playRateByCard={{}}
                   showPrices
+                  currency={currency}
                 />
               </>
             ) : null}
           </div>
         </>
+      )}
+
+      {deck.mainboard && deck.mainboard.length > 0 && (
+        <div className="chart-container" style={{ marginBottom: '1.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+            <h3 style={{ margin: 0 }}>Budget Alternatives</h3>
+            <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Cards above</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                {currency === 'usd' ? '$' : currency === 'eur' ? '€' : ''}
+              </span>
+              <input
+                type="number"
+                value={budgetThreshold}
+                min={1}
+                step={1}
+                onChange={(e) => setBudgetThreshold(Math.max(1, Number(e.target.value)))}
+                style={{ width: 56, padding: '0.2rem 0.35rem', fontSize: '0.85rem', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, color: 'inherit' }}
+              />
+              {currency === 'tix' && <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>tix</span>}
+            </span>
+            <button
+              type="button"
+              className="btn"
+              disabled={budgetLoading}
+              onClick={() => {
+                setBudgetLoading(true)
+                getBudgetAlternatives(deck.deck_id, budgetThreshold, currency)
+                  .then(setBudgetAlts)
+                  .catch(() => setBudgetAlts(null))
+                  .finally(() => setBudgetLoading(false))
+              }}
+            >
+              {budgetLoading ? 'Finding…' : 'Find'}
+            </button>
+          </div>
+
+          {budgetAlts && (
+            <div>
+              {budgetAlts.alternatives.length === 0 ? (
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', margin: 0 }}>
+                  No budget replacements found below {currency === 'usd' ? '$' : currency === 'eur' ? '€' : ''}{budgetThreshold}{currency === 'tix' ? ' tix' : ''}.
+                </p>
+              ) : (
+                <>
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', margin: '0 0 0.75rem' }}>
+                    Based on {budgetAlts.source === 'archetype' ? 'archetype peers' : 'similar decks'}
+                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    {budgetAlts.alternatives.map((entry) => (
+                      <div key={entry.expensive_card} style={{ borderLeft: '3px solid var(--border)', paddingLeft: '0.75rem' }}>
+                        <div style={{ marginBottom: '0.35rem', fontSize: '0.9rem' }}>
+                          <span style={{ color: 'var(--text-muted)' }}>Replace </span>
+                          <span style={{ fontWeight: 600 }}>
+                            <CardHover cardName={entry.expensive_card} linkTo>{entry.expensive_card}</CardHover>
+                          </span>
+                          <span style={{ color: 'var(--warning)', fontFamily: 'monospace', marginLeft: '0.4rem', fontSize: '0.85rem' }}>
+                            {currency === 'usd' ? '$' : currency === 'eur' ? '€' : ''}{entry.expensive_price.toFixed(2)}{currency === 'tix' ? ' tix' : ''}
+                          </span>
+                          <span style={{ color: 'var(--text-muted)', marginLeft: '0.3rem', fontSize: '0.8rem' }}> with →</span>
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                          {entry.replacements.map((r) => (
+                            <div
+                              key={r.card}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.3rem',
+                                padding: '0.2rem 0.5rem',
+                                border: '1px solid var(--border)',
+                                borderRadius: 4,
+                                fontSize: '0.82rem',
+                                background: 'var(--bg)',
+                              }}
+                            >
+                              <CardHover cardName={r.card} linkTo>{r.card}</CardHover>
+                              <span style={{ color: 'var(--success)', fontFamily: 'monospace' }}>
+                                {currency === 'usd' ? '$' : currency === 'eur' ? '€' : ''}{r.price.toFixed(2)}{currency === 'tix' ? ' tix' : ''}
+                              </span>
+                              <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{r.deck_count}d</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
       )}
 
       {deck.mainboard && deck.mainboard.length > 0 && (

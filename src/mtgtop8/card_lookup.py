@@ -13,12 +13,128 @@ SCRYFALL_NAMED = "https://api.scryfall.com/cards/named"
 SCRYFALL_SEARCH = "https://api.scryfall.com/cards/search"
 SCRYFALL_AUTOCOMPLETE = "https://api.scryfall.com/cards/autocomplete"
 CACHE_FILE = Path(__file__).resolve().parent.parent.parent / ".scryfall_cache.json"
+OTAG_CACHE_FILE = Path(__file__).resolve().parent.parent.parent / ".scryfall_otag_cache.json"
 REQUEST_DELAY = 0.1  # ~10 req/s rate limit
 AUTOCOMPLETE_MIN_LEN = 2
 SCRYFALL_HEADERS = {"User-Agent": "MTGMetagameAnalyzer/1.0 (metagame-analyzer)"}
 
+# Maps our internal category keys → Scryfall oracle tag names to query.
+# Categories not listed here (land, manaless, ward) are heuristic-only.
+CATEGORY_TO_OTAGS: dict[str, list[str]] = {
+    "ramp": ["ramp"],
+    "removal": ["removal"],
+    "wipe": ["wrath"],
+    "disenchant": ["enchantment-removal", "artifact-removal"],
+    "counter": ["counterspell"],
+    "card-draw": ["card-draw"],
+    "tutor": ["tutor"],
+    "graveyard": ["reanimation"],
+    "token": ["token-generator"],
+    "protection": ["protection"],
+    "evasion": ["evasion"],
+    "lifegain": ["lifegain"],
+    "combat-trick": ["combat-trick"],
+    "uncounterable": ["uncounterable"],
+    "hatebear": ["stax"],
+    "discard": ["discard"],
+}
+
 
 _card_cache: dict[str, dict] = {}
+
+# card_name → sorted list of our internal category keys, built from Scryfall otag searches.
+_otag_index: dict[str, list[str]] = {}
+_otag_index_loaded = False
+
+
+def _load_otag_index() -> None:
+    global _otag_index, _otag_index_loaded
+    if _otag_index_loaded:
+        return
+    data = load_json(OTAG_CACHE_FILE, default={}, suppress_errors=True)
+    _otag_index = data or {}
+    _otag_index_loaded = True
+
+
+def _save_otag_index() -> None:
+    save_json(OTAG_CACHE_FILE, _otag_index, ensure_ascii=False, suppress_errors=True)
+
+
+def _fetch_cards_for_otag(otag: str) -> set[str]:
+    """Fetch all card names from Scryfall with the given oracle tag (paginated)."""
+    names: set[str] = set()
+    url: str | None = SCRYFALL_SEARCH
+    params: dict[str, str] = {"q": f"otag:{otag}", "unique": "cards", "order": "name"}
+    while url:
+        time.sleep(REQUEST_DELAY)
+        try:
+            r = requests.get(url, params=params, headers=SCRYFALL_HEADERS, timeout=30)
+            if r.status_code == 404:
+                break
+            r.raise_for_status()
+            data = r.json()
+        except (requests.RequestException, json.JSONDecodeError):
+            break
+        for card in data.get("data", []):
+            name = card.get("name", "")
+            if name:
+                names.add(name)
+        url = data.get("next_page")
+        params = {}
+    return names
+
+
+def refresh_otag_index(categories: list[str] | None = None) -> dict[str, int]:
+    """Build or refresh the oracle tag index for the given category keys (all if None).
+
+    Queries the Scryfall search API for each associated oracle tag and persists
+    a card_name → [category_keys] mapping to OTAG_CACHE_FILE.
+
+    Returns {category_key: card_count} for each refreshed category.
+    """
+    global _otag_index, _otag_index_loaded
+    _load_otag_index()
+    _otag_index_loaded = True  # prevent stale-load mid-refresh
+
+    target_cats = categories or list(CATEGORY_TO_OTAGS.keys())
+
+    # Collect unique otag names needed and which categories they feed
+    otag_to_cats: dict[str, set[str]] = {}
+    for cat in target_cats:
+        for otag in CATEGORY_TO_OTAGS.get(cat, []):
+            otag_to_cats.setdefault(otag, set()).add(cat)
+
+    # Fetch cards per otag and update index
+    otag_to_names: dict[str, set[str]] = {}
+    for otag, cats in otag_to_cats.items():
+        names = _fetch_cards_for_otag(otag)
+        otag_to_names[otag] = names
+        for name in names:
+            existing = set(_otag_index.get(name, []))
+            existing.update(cats)
+            _otag_index[name] = sorted(existing)
+
+    _save_otag_index()
+
+    result: dict[str, int] = {}
+    for cat in target_cats:
+        combined: set[str] = set()
+        for otag in CATEGORY_TO_OTAGS.get(cat, []):
+            combined.update(otag_to_names.get(otag, set()))
+        result[cat] = len(combined)
+    return result
+
+
+def get_card_categories(card_name: str) -> list[str] | None:
+    """Return functional category keys for a card from the oracle tag index.
+
+    Returns None when the index is empty (not yet built) — callers should fall
+    back to text heuristics. Returns [] when the card is known but has no tags.
+    """
+    _load_otag_index()
+    if not _otag_index:
+        return None
+    return _otag_index.get(card_name, [])
 
 
 def _load_cache() -> None:
@@ -148,12 +264,16 @@ def _build_entry(card: dict) -> dict:
     if not colors and first_face:
         colors = first_face.get("colors", [])
     colors = colors or []
+    oracle_text = card.get("oracle_text") or ""
+    if not oracle_text and faces:
+        oracle_text = " // ".join(f.get("oracle_text", "") for f in faces if f.get("oracle_text"))
     entry = {
         "name": card.get("name"),
         "image_uris": image_uris,
         "mana_cost": mana_cost,
         "cmc": cmc,
         "type_line": type_line,
+        "oracle_text": oracle_text,
         "colors": colors,
         "color_identity": card.get("color_identity", []),
         "prices": card.get("prices"),
@@ -179,9 +299,7 @@ def lookup_cards(card_names: list[str]) -> dict[str, dict]:
 
     for name in names:
         cached = _card_cache.get(name)
-        prices = cached.get("prices") if cached else None
-        has_price = bool(prices and prices.get("usd") is not None)
-        if cached and "error" not in cached and "card_faces" in cached and "prices" in cached and has_price:
+        if cached and "error" not in cached and "card_faces" in cached and "oracle_text" in cached:
             result[name] = cached
         else:
             to_fetch.append(name)

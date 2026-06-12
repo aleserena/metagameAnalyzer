@@ -1,3 +1,4 @@
+import { useRef, useState } from 'react'
 import { ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts'
 import type { DeckAnalysis } from '../../api'
 import { MTG_COLOR_FILL } from '../../constants'
@@ -5,14 +6,133 @@ import { PieChartTooltipContent } from '../PieChartTooltip'
 
 const TYPE_COLORS = ['#1d9bf0', '#00ba7c', '#f7931a', '#e91e63', '#9c27b0', '#8b7355', '#00bcd4']
 
+const FUNCTIONAL_LABELS: Record<string, string> = {
+  land: 'Lands',
+  manaless: 'Manaless',
+  ramp: 'Ramp',
+  removal: 'Removal',
+  wipe: 'Board Wipes',
+  disenchant: 'Disenchant',
+  counter: 'Counter Spells',
+  'card-draw': 'Card Draw',
+  tutor: 'Tutors',
+  graveyard: 'Graveyard',
+  token: 'Token Gen.',
+  protection: 'Protection',
+  evasion: 'Evasion',
+  lifegain: 'Lifegain',
+  'combat-trick': 'Combat Tricks',
+  uncounterable: 'Uncounterable',
+  ward: 'Ward',
+  hatebear: 'Hatebears',
+  discard: 'Discard',
+}
+
 export interface DeckAnalysisChartsProps {
   analysis: DeckAnalysis
 }
 
 export default function DeckAnalysisCharts({ analysis }: DeckAnalysisChartsProps) {
+  const functionalEntries = Object.entries(analysis.functional_stats ?? {}).filter(([, v]) => v.count > 0)
+  const [tooltipAnchor, setTooltipAnchor] = useState<{ rect: DOMRect; key: string } | null>(null)
+  const hideTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const activeCategory = tooltipAnchor ? (analysis.functional_stats ?? {})[tooltipAnchor.key] : null
+
+  const showTooltip = (el: HTMLElement, key: string) => {
+    if (hideTimeout.current) clearTimeout(hideTimeout.current)
+    setTooltipAnchor({ rect: el.getBoundingClientRect(), key })
+  }
+  const scheduleHide = () => {
+    hideTimeout.current = setTimeout(() => setTooltipAnchor(null), 80)
+  }
+  const cancelHide = () => {
+    if (hideTimeout.current) clearTimeout(hideTimeout.current)
+  }
+
+  const tooltipPos = tooltipAnchor
+    ? (() => {
+        const { rect } = tooltipAnchor
+        const vw = window.innerWidth
+        const vh = window.innerHeight
+        const estW = 220
+        const estH = Math.min(32 + (activeCategory?.cards.length ?? 0) * 22, 260)
+        const centerX = rect.left + rect.width / 2
+        const left = Math.max(8 + estW / 2, Math.min(vw - 8 - estW / 2, centerX))
+        const showBelow = rect.bottom + 8 + estH <= vh - 8
+        return showBelow
+          ? { left, top: rect.bottom, transform: 'translate(-50%, 8px)' }
+          : { left, top: rect.top, transform: 'translate(-50%, calc(-100% - 8px))' }
+      })()
+    : null
+
   return (
     <div style={{ marginBottom: '1rem' }}>
       <h3 style={{ margin: '0 0 0.5rem' }}>Deck Analysis</h3>
+      {functionalEntries.length > 0 && (
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: '0.5rem',
+            marginBottom: '1rem',
+          }}
+        >
+          {functionalEntries.map(([key, stat]) => (
+            <div
+              key={key}
+              onMouseEnter={(e) => showTooltip(e.currentTarget as HTMLElement, key)}
+              onMouseLeave={scheduleHide}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                padding: '0.25rem 0.6rem',
+                borderRadius: 20,
+                border: '1px solid var(--border)',
+                background: 'var(--bg-card)',
+                fontSize: '0.82rem',
+                whiteSpace: 'nowrap',
+                cursor: 'default',
+              }}
+            >
+              <span style={{ fontWeight: 700, fontFamily: 'monospace', fontSize: '0.9rem' }}>{stat.count}</span>
+              <span style={{ color: 'var(--text-muted)' }}>{FUNCTIONAL_LABELS[key] ?? key}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {tooltipAnchor && activeCategory && tooltipPos && (
+        <div
+          onMouseEnter={cancelHide}
+          onMouseLeave={() => setTooltipAnchor(null)}
+          style={{
+            position: 'fixed',
+            left: tooltipPos.left,
+            top: tooltipPos.top,
+            transform: tooltipPos.transform,
+            zIndex: 9999,
+            background: 'var(--bg-card)',
+            border: '1px solid var(--border)',
+            borderRadius: 8,
+            padding: '0.5rem 0.75rem',
+            minWidth: 160,
+            maxWidth: 260,
+            maxHeight: 260,
+            overflowY: 'auto',
+            boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
+          }}
+        >
+          <div style={{ fontWeight: 600, fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            {FUNCTIONAL_LABELS[tooltipAnchor.key] ?? tooltipAnchor.key}
+          </div>
+          {activeCategory.cards.map(([qty, name]) => (
+            <div key={name} style={{ display: 'flex', gap: '0.4rem', fontSize: '0.85rem', padding: '0.1rem 0' }}>
+              <span style={{ fontFamily: 'monospace', color: 'var(--text-muted)', minWidth: 16, textAlign: 'right' }}>{qty}</span>
+              <span>{name}</span>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="deck-analysis-grid">
         <div className="chart-container">
           <h4 style={{ margin: '0 0 0.75rem', fontSize: '0.95rem' }}>Mana Curve</h4>

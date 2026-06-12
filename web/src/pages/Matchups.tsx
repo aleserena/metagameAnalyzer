@@ -1,4 +1,4 @@
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
+import React, { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { getMatchupsSummary, getMatchupsPlayersSummary } from '../api'
 import EventSelector from '../components/EventSelector'
@@ -318,6 +318,51 @@ export default function Matchups() {
   const isResizingLabelRef = useRef(false)
   const resizeStartXRef = useRef(0)
   const resizeStartWidthRef = useRef(160)
+
+  const [matrixScale, setMatrixScale] = useState(1)
+  const pointersRef = useRef<Map<number, PointerEvent>>(new Map())
+  const lastPinchDistRef = useRef<number | null>(null)
+  const lastTapTimeRef = useRef<number>(0)
+  const lastTapTargetRef = useRef<EventTarget | null>(null)
+  const matrixContainerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => { setMatrixScale(1) }, [dataMode])
+
+  function handlePointerDown(e: React.PointerEvent) {
+    pointersRef.current.set(e.pointerId, e.nativeEvent)
+    if (pointersRef.current.size >= 2) {
+      matrixContainerRef.current?.style.setProperty('touch-action', 'none')
+    }
+  }
+  function handlePointerMove(e: React.PointerEvent) {
+    if (!pointersRef.current.has(e.pointerId)) return
+    pointersRef.current.set(e.pointerId, e.nativeEvent)
+    const pts = [...pointersRef.current.values()]
+    if (pts.length === 2) {
+      const dist = Math.hypot(
+        pts[0]!.clientX - pts[1]!.clientX,
+        pts[0]!.clientY - pts[1]!.clientY,
+      )
+      if (lastPinchDistRef.current !== null) {
+        const ratio = dist / lastPinchDistRef.current
+        setMatrixScale(s => Math.min(2, Math.max(0.5, s * ratio)))
+      }
+      lastPinchDistRef.current = dist
+    }
+  }
+  function handlePointerUp(e: React.PointerEvent) {
+    pointersRef.current.delete(e.pointerId)
+    if (pointersRef.current.size < 2) {
+      lastPinchDistRef.current = null
+      matrixContainerRef.current?.style.setProperty('touch-action', 'pan-x pan-y')
+    }
+    const now = Date.now()
+    if (now - lastTapTimeRef.current < 300 && e.target === lastTapTargetRef.current) {
+      setMatrixScale(1)
+    }
+    lastTapTimeRef.current = now
+    lastTapTargetRef.current = e.target
+  }
 
   useEffect(() => {
     function onMouseMove(e: MouseEvent) {
@@ -809,6 +854,11 @@ export default function Matchups() {
             />
             Sort rows by win rate
           </label>
+          {viewMode === 'matrix' && matrixScale !== 1 && (
+            <button type="button" className="btn" onClick={() => setMatrixScale(1)}>
+              Reset zoom
+            </button>
+          )}
         </div>
       </div>
 
@@ -893,11 +943,19 @@ export default function Matchups() {
           }
         }
         return (
-          <div className="card" style={{ overflow: 'auto', WebkitOverflowScrolling: 'touch', touchAction: 'pan-x pan-y' }}>
+          <div
+            ref={matrixContainerRef}
+            className="card"
+            style={{ overflow: 'auto', WebkitOverflowScrolling: 'touch', touchAction: 'pan-x pan-y' }}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
+          >
             <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
               Rows = your archetype, columns = opponent. Cell = your win rate vs that archetype. Heatmap: green = 100%, red = 0%.
             </p>
-            <div style={{ minWidth: 400 }}>
+            <div style={{ minWidth: 400, transform: matrixScale !== 1 ? `scale(${matrixScale})` : undefined, transformOrigin: 'top left', transition: 'transform 0.05s linear' }}>
               <table
                 style={{
                   borderCollapse: 'collapse',
@@ -1291,14 +1349,22 @@ export default function Matchups() {
           }
         }
         return (
-        <div className="card" style={{ overflow: 'auto', WebkitOverflowScrolling: 'touch', touchAction: 'pan-x pan-y' }}>
+        <div
+          ref={matrixContainerRef}
+          className="card"
+          style={{ overflow: 'auto', WebkitOverflowScrolling: 'touch', touchAction: 'pan-x pan-y' }}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
+        >
           <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
             Rows = player, columns = opponent. Cell = row player&apos;s win rate vs column player. Heatmap: green = 100%, red = 0%.
           </p>
           {playersSummary.players.length === 0 ? (
             <p style={{ color: 'var(--text-muted)' }}>No player matchup data for the selected filters.</p>
           ) : (
-            <div style={{ minWidth: 400 }}>
+            <div style={{ minWidth: 400, transform: matrixScale !== 1 ? `scale(${matrixScale})` : undefined, transformOrigin: 'top left', transition: 'transform 0.05s linear' }}>
               <table
                 style={{
                   borderCollapse: 'collapse',

@@ -136,7 +136,7 @@ from src.mtgtop8.analyzer import (
     similar_decks,
     top_cards_main,
 )
-from src.mtgtop8.card_lookup import autocomplete_cards, clear_cache as clear_scryfall_cache, lookup_cards
+from src.mtgtop8.card_lookup import autocomplete_cards, clear_cache as clear_scryfall_cache, lookup_cards, refresh_otag_index
 from src.mtgtop8.config import FORMATS
 from src.mtgtop8.models import Deck
 from src.mtgtop8.normalize import (
@@ -1071,6 +1071,187 @@ def get_deck_analysis(deck_id: int):
                     merged[name] = v
                     break
     return deck_analysis(deck, merged)
+
+
+def _classify_finality(oracle_text: str, type_line: str) -> str:
+    """Classify a card's functional role for budget-alternative matching.
+
+    Checked in priority order so more-specific functional tags win over generic type labels.
+    """
+    text = oracle_text.lower()
+    tline = type_line.lower()
+
+    if "counter target" in text:
+        return "counter"
+    if "draw" in text and "card" in text:
+        return "card-draw"
+    if "add {" in text or ("search your library" in text and "land" in text):
+        return "ramp"
+    if "destroy all" in text or "exile all" in text or "deals damage to each" in text:
+        return "wipe"
+    if ("destroy target" in text or "exile target" in text) and any(
+        w in text for w in ("creature", "artifact", "enchantment", "permanent", "planeswalker")
+    ):
+        return "removal"
+    if "search your library" in text:
+        return "tutor"
+    if "from your graveyard" in text or "from a graveyard" in text:
+        return "graveyard"
+    if "create" in text and "token" in text:
+        return "token"
+    if "protection from" in text or "hexproof" in text or "shroud" in text:
+        return "protection"
+
+    if "land" in tline:
+        return "land"
+    if "creature" in tline:
+        return "creature"
+    if "planeswalker" in tline:
+        return "planeswalker"
+    if "instant" in tline or "sorcery" in tline:
+        return "spell"
+    if "artifact" in tline:
+        return "artifact"
+    if "enchantment" in tline:
+        return "enchantment"
+    return "other"
+
+
+@app.get("/api/v1/decks/{deck_id}/budget-alternatives")
+def get_budget_alternatives(
+    deck_id: int,
+    threshold: float = Query(5.0, ge=0.01, description="Max price for a replacement card in the selected currency"),
+    limit: int = Query(10, ge=1, le=30),
+    currency: str = Query("usd", pattern="^(usd|eur|tix)$"),
+):
+    """For each expensive mainboard card (price > threshold), suggest cheaper replacements
+    played in same-archetype decks (fallback: similar decks by card overlap)."""
+    deck_dict = _get_deck_by_id(deck_id)
+    if not deck_dict:
+        raise HTTPException(status_code=404, detail="Deck not found")
+    deck = Deck.from_dict(deck_dict)
+
+    mainboard_names = list({c for _, c in deck.mainboard})
+    metadata = lookup_cards(mainboard_names)
+
+    expensive: list[tuple[str, float]] = []
+    for _, card in deck.mainboard:
+        meta = metadata.get(card) or {}
+        price_str = (meta.get("prices") or {}).get(currency)
+        if price_str:
+            try:
+                price = float(price_str)
+                if price > threshold:
+                    expensive.append((card, price))
+            except ValueError:
+                pass
+
+    if not expensive:
+        return {"deck_id": deck_id, "threshold": threshold, "currency": currency, "source": "archetype", "alternatives": []}
+
+    deck_archetype = deck_dict.get("archetype")
+    deck_format = deck_dict.get("format_id")
+    arch_key = _db.archetype_canonical_key(deck_archetype) if deck_archetype else None
+
+    # Prefer same-archetype decks; fall back to similar decks when pool is too small
+    if arch_key and deck_archetype:
+        candidate_dicts = [
+            d for d in _decks
+            if d.get("deck_id") != deck_id
+            and d.get("format_id") == deck_format
+            and _db.archetype_canonical_key(d.get("archetype")) == arch_key
+        ]
+        source = "archetype"
+    else:
+        candidate_dicts = []
+        source = "similar"
+
+    if len(candidate_dicts) < 3:
+        all_deck_objs = [Deck.from_dict(d) for d in _decks if d.get("deck_id") != deck_id]
+        similar_summaries = similar_decks(deck, all_deck_objs, limit=20)
+        similar_ids = {s["deck_id"] for s in similar_summaries}
+        candidate_decks = [
+            Deck.from_dict(d) for d in _decks if d.get("deck_id") in similar_ids
+        ]
+        source = "similar"
+    else:
+        candidate_decks = [Deck.from_dict(d) for d in candidate_dicts]
+
+    deck_mainboard_names = {c for _, c in deck.mainboard}
+
+    # Collect all candidate card names for a single bulk lookup
+    candidate_card_names: set[str] = set()
+    for cd in candidate_decks:
+        for _, c in cd.mainboard:
+            if c not in deck_mainboard_names:
+                candidate_card_names.add(c)
+
+    candidate_metadata = lookup_cards(list(candidate_card_names))
+
+    # For EDH/cEDH, build the commander color identity and use it to exclude illegal replacements
+    edh_formats = {"EDH", "cEDH"}
+    allowed_colors: set[str] | None = None
+    if deck_format in edh_formats and deck.commanders:
+        commander_meta = lookup_cards(list(deck.commanders))
+        allowed_colors = set()
+        for cmd in deck.commanders:
+            ci = (commander_meta.get(cmd) or {}).get("color_identity") or []
+            allowed_colors.update(ci)
+
+    # Build frequency map: card → number of candidate decks containing it
+    freq: dict[str, int] = {}
+    for cd in candidate_decks:
+        seen = set()
+        for _, c in cd.mainboard:
+            if c not in deck_mainboard_names and c not in seen:
+                freq[c] = freq.get(c, 0) + 1
+                seen.add(c)
+
+    alternatives = []
+    for expensive_card, expensive_price in expensive:
+        exp_meta = metadata.get(expensive_card) or {}
+        exp_finality = _classify_finality(
+            exp_meta.get("oracle_text") or "",
+            exp_meta.get("type_line") or "",
+        )
+        replacements = []
+        for card, count in freq.items():
+            meta = candidate_metadata.get(card) or {}
+            price_str = (meta.get("prices") or {}).get(currency)
+            if not price_str:
+                continue
+            try:
+                price = float(price_str)
+            except ValueError:
+                continue
+            if price >= threshold:
+                continue
+            cand_finality = _classify_finality(
+                meta.get("oracle_text") or "",
+                meta.get("type_line") or "",
+            )
+            if cand_finality != exp_finality:
+                continue
+            if allowed_colors is not None:
+                card_ci = set(meta.get("color_identity") or [])
+                if not card_ci.issubset(allowed_colors):
+                    continue
+            replacements.append({
+                "card": card,
+                "price": price,
+                "deck_count": count,
+                "savings": round(expensive_price - price, 2),
+            })
+        if not replacements:
+            continue
+        replacements.sort(key=lambda r: (-r["deck_count"], r["price"]))
+        alternatives.append({
+            "expensive_card": expensive_card,
+            "expensive_price": expensive_price,
+            "replacements": replacements[:limit],
+        })
+
+    return {"deck_id": deck_id, "threshold": threshold, "currency": currency, "source": source, "alternatives": alternatives}
 
 
 @app.get("/api/v1/date-range")
@@ -2714,11 +2895,12 @@ def get_metagame_health(
 ):
     """Metagame health score (0–100) for a format.
 
-    Four equally-weighted factors:
-    1. Archetype diversity   — how many viable archetypes (>2% play rate) exist
+    Five equally-weighted factors:
+    1. Archetype diversity    — Shannon entropy effective archetype count (e^H)
     2. Top-card concentration — avg inclusion rate of the top-5 most-played cards
-    3. Win-rate parity       — std-dev of archetype win rates from matchup data
-    4. Meta shift rate       — stability index from the churn metric (last 4 weeks)
+    3. Win-rate parity        — weighted std-dev of win rates (weighted by sqrt(matches))
+    4. Meta shift rate        — stability index × diversity penalty (stable-but-stagnant penalized)
+    5. Dominant archetype     — top archetype share (boogeyman detector)
     """
     source = _filter_decks_for_query(_decks, event_id, event_ids, date_from, date_to)
     if format_id:
@@ -2732,6 +2914,7 @@ def get_metagame_health(
             "top_card_concentration": None,
             "win_rate_parity": None,
             "meta_shift_rate": None,
+            "dominant_archetype": None,
         },
         "details": {},
     }
@@ -2741,16 +2924,26 @@ def get_metagame_health(
 
     total = len(source)
 
-    # ── Factor 1: Archetype diversity ────────────────────────────────────────
-    # Count archetypes with play rate > 2%. Normalize: 1 arch → 0, 10+ arches → 100.
+    # ── Factor 1: Archetype diversity (Shannon entropy) ──────────────────────
+    # Effective number of archetypes = e^H (Shannon entropy). Rewards both breadth
+    # and even distribution; a format where one deck has 80% naturally scores low
+    # even if 10 archetypes technically exist.
+    # Score: 1 effective archetype = 0, 15+ = 100.
     arch_counts: dict[str, int] = {}
     for d in source:
         arch = (d.get("archetype") or "").strip()
         if arch and arch.lower() != "(unknown)":
             arch_counts[arch] = arch_counts.get(arch, 0) + 1
-    viable_archetypes = [a for a, c in arch_counts.items() if c / total >= 0.02]
-    n_viable = len(viable_archetypes)
-    diversity_score = round(min(100.0, (n_viable - 1) / 9 * 100)) if n_viable >= 1 else 0
+    arch_total = sum(arch_counts.values())
+    if arch_total > 0:
+        probs = [c / arch_total for c in arch_counts.values()]
+        entropy = -sum(p * math.log(p) for p in probs if p > 0)
+        effective_archetypes = math.exp(entropy)
+        diversity_score = round(min(100.0, (effective_archetypes - 1) / 14 * 100))
+    else:
+        effective_archetypes = 0.0
+        diversity_score = 0
+    n_viable = sum(1 for c in arch_counts.values() if arch_total > 0 and c / arch_total >= 0.02)
 
     # ── Factor 2: Top-card concentration ────────────────────────────────────
     # Avg inclusion rate of the top-5 most-played cards. High concentration → unhealthy.
@@ -2768,10 +2961,12 @@ def get_metagame_health(
     concentration_score = round(max(0.0, 100.0 - avg_top5 * 100))
 
     # ── Factor 3: Win-rate parity ────────────────────────────────────────────
-    # Std-dev of overall win rates across archetypes from MatchupRow data.
-    # Low std-dev → balanced → healthy. Score: stddev 0 → 100, stddev ≥ 0.20 → 0.
+    # Weighted std-dev of win rates; each archetype weighted by sqrt(match_count)
+    # so archetypes with more recorded matches carry proportionally more signal.
+    # Score: stddev 0 → 100, stddev ≥ 0.20 → 0.
     parity_score: int | None = None
     arch_win_rates: list[float] = []
+    weighted_stddev: float | None = None
     if _database_available():
         try:
             with _db.session_scope() as session:
@@ -2805,20 +3000,26 @@ def get_metagame_health(
                     arch_agg[arch]["wins"] += 1.0
                 elif result in ("draw", "intentional_draw"):
                     arch_agg[arch]["wins"] += 0.5
-            # Only archetypes with ≥ 5 matches
-            arch_win_rates = [
-                v["wins"] / v["matches"]
+            # Only archetypes with ≥ 5 matches; weight each by sqrt(match_count)
+            arch_wr_data: list[tuple[float, int]] = [
+                (v["wins"] / v["matches"], v["matches"])
                 for v in arch_agg.values()
                 if v["matches"] >= 5
             ]
-            if len(arch_win_rates) >= 2:
-                mean_wr = sum(arch_win_rates) / len(arch_win_rates)
-                variance = sum((w - mean_wr) ** 2 for w in arch_win_rates) / len(arch_win_rates)
-                stddev = math.sqrt(variance)
-                # stddev of 0 → 100, stddev ≥ 0.20 → 0
-                parity_score = round(max(0.0, min(100.0, (1 - stddev / 0.20) * 100)))
-            elif arch_win_rates:
-                parity_score = 100  # only one archetype — trivially "balanced"
+            arch_win_rates = [wr for wr, _ in arch_wr_data]
+            if len(arch_wr_data) >= 2:
+                wr_weights = [math.sqrt(m) for _, m in arch_wr_data]
+                total_wr_weight = sum(wr_weights)
+                weighted_mean = sum(w * wr for w, wr in zip(wr_weights, arch_win_rates)) / total_wr_weight
+                weighted_variance = sum(
+                    w * (wr - weighted_mean) ** 2
+                    for w, wr in zip(wr_weights, arch_win_rates)
+                ) / total_wr_weight
+                weighted_stddev = math.sqrt(weighted_variance)
+                parity_score = round(max(0.0, min(100.0, (1 - weighted_stddev / 0.20) * 100)))
+            elif arch_wr_data:
+                parity_score = 100
+                weighted_stddev = 0.0
         except Exception:
             logger.exception("Failed to compute win-rate parity for health score")
 
@@ -2840,9 +3041,27 @@ def get_metagame_health(
     except Exception:
         logger.exception("Failed to compute meta shift rate for health score")
 
+    # Apply combined penalty: high stability + low diversity = stagnant, not healthy.
+    # Multiply stability by min(1, diversity / 50) so a dominant-deck stable format
+    # cannot mask its lack of diversity with a high stability score.
+    shift_score_adjusted: int | None = None
+    if shift_score is not None:
+        penalty = min(1.0, diversity_score / 50.0) if diversity_score is not None else 1.0
+        shift_score_adjusted = round(shift_score * penalty)
+
+    # ── Factor 5: Dominant archetype (boogeyman) ─────────────────────────────
+    # Top archetype share < 15% → 100 (healthy), ≥ 40% → 0 (one deck dominates).
+    if arch_counts and arch_total > 0:
+        top_arch_name, top_arch_count = max(arch_counts.items(), key=lambda x: x[1])
+        top_arch_share = top_arch_count / arch_total
+    else:
+        top_arch_name = None
+        top_arch_share = 0.0
+    boogeyman_score = round(max(0.0, min(100.0, (1 - max(0.0, top_arch_share - 0.15) / 0.25) * 100)))
+
     # ── Aggregate ────────────────────────────────────────────────────────────
     available_factors = [
-        s for s in [diversity_score, concentration_score, parity_score, shift_score]
+        s for s in [diversity_score, concentration_score, parity_score, shift_score_adjusted, boogeyman_score]
         if s is not None
     ]
     health_score = round(sum(available_factors) / len(available_factors)) if available_factors else None
@@ -2853,15 +3072,17 @@ def get_metagame_health(
             "archetype_diversity": diversity_score,
             "top_card_concentration": concentration_score,
             "win_rate_parity": parity_score,
-            "meta_shift_rate": shift_score,
+            "meta_shift_rate": shift_score_adjusted,
+            "dominant_archetype": boogeyman_score,
         },
         "details": {
             "viable_archetype_count": n_viable,
+            "effective_archetype_count": round(effective_archetypes, 1),
             "avg_top5_card_inclusion_pct": round(avg_top5 * 100, 1),
-            "archetype_win_rate_stddev": round(math.sqrt(
-                sum((w - sum(arch_win_rates) / len(arch_win_rates)) ** 2 for w in arch_win_rates) / len(arch_win_rates)
-            ), 4) if len(arch_win_rates) >= 2 else None,
+            "archetype_win_rate_stddev": round(weighted_stddev, 4) if weighted_stddev is not None and arch_win_rates else None,
             "stability_index": shift_score,
+            "top_archetype": top_arch_name,
+            "top_archetype_share_pct": round(top_arch_share * 100, 1),
         },
     }
 
@@ -3892,6 +4113,21 @@ def post_clear_scryfall_cache(_: str = Depends(require_admin)):
     """Clear Scryfall card lookup cache (in-memory and .scryfall_cache.json). Admin-only."""
     clear_scryfall_cache()
     return {"message": "Scryfall cache cleared"}
+
+
+@app.post("/api/v1/settings/refresh-otag-index")
+def post_refresh_otag_index(
+    categories: list[str] | None = None,
+    _: str = Depends(require_admin),
+):
+    """Rebuild the oracle tag index used for deck functional-stats categories.
+
+    Queries Scryfall search (otag:X) for each category and persists the card→[categories]
+    mapping to .scryfall_otag_cache.json. Pass a subset of category keys to refresh
+    only those; omit to refresh all. Admin-only. Takes 1–5 minutes on first run.
+    """
+    counts = refresh_otag_index(categories)
+    return {"refreshed": counts}
 
 
 @app.post("/api/v1/settings/clear-decks", dependencies=[Depends(require_database)])
