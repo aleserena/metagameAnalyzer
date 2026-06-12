@@ -39,7 +39,7 @@ coverage/
 .vscode/
 .DS_Store
 Thumbs.db
-.claude
+/.claude
 
 # Logs
 *.log
