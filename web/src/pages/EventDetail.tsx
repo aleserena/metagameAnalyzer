@@ -38,7 +38,8 @@ import PageError from '../components/PageError'
 import PageSkeleton from '../components/PageSkeleton'
 import CardSearchInput from '../components/CardSearchInput'
 import { parseMoxfieldDeckList, formatMoxfieldDeckList } from '../lib/deckListParser'
-import { normalizeDeckListByLookup } from '../lib/deckUtils'
+import { defaultDeckEdit, normalizeDeckListByLookup, type BulkDeckEdit } from '../lib/deckUtils'
+import { cellStr } from '../lib/eventTable'
 import {
   apiMatchupsToPhases,
   isTop8Rank,
@@ -50,25 +51,7 @@ import {
 } from '../lib/matchups'
 import { reportError, ddMmYyToIso, isoToDdMmYy } from '../utils'
 
-/** Coerce value for display; avoid [object Object]. */
-function cellStr(v: unknown): string {
-  if (v == null) return '—'
-  if (typeof v === 'object') return '—'
-  return String(v)
-}
-
 type EventDetailData = { event: EventWithOrigin & { player_count?: number }; decks: Deck[] }
-
-type BulkDeckEdit = { name: string; player: string; rank: string; archetype: string }
-
-function defaultDeckEdit(d: Deck): BulkDeckEdit {
-  return {
-    name: d.name ?? '',
-    player: d.player ?? '',
-    rank: d.rank ?? '',
-    archetype: d.archetype ?? (d.commanders?.length ? d.commanders[0] ?? '' : ''),
-  }
-}
 
 export default function EventDetail() {
   const { eventId } = useParams<{ eventId: string }>()

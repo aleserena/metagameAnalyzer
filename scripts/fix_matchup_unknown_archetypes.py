@@ -55,7 +55,7 @@ def main() -> None:
     # Avoid heavy updates: only touch opponent_archetype that are missing/unknown,
     # and only fill when opponent deck has a non-empty archetype.
     with _db.session_scope() as session:
-        from sqlalchemy import and_, func, or_
+        from sqlalchemy import func, or_
 
         q = (
             session.query(_db.MatchupRow, _db.DeckRow.archetype)

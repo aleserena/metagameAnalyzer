@@ -8,7 +8,9 @@ export default defineConfig({
       '/api': 'http://localhost:8000',
     },
     watch: {
-      usePolling: true,
+      // Polling keeps a CPU core busy; only needed on network drives / WSL2
+      // cross-filesystem setups. Opt in with VITE_USE_POLLING=1 if HMR misses changes.
+      usePolling: !!process.env.VITE_USE_POLLING,
     },
   },
   test: {

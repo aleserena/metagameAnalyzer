@@ -11,13 +11,13 @@ _dep_refs = None
 def _get_app_and_deps():
     global _app_ref, _dep_refs
     if _app_ref is None:
-        from api.main import (
-            app,
+        from api.dependencies import (
             require_admin,
-            require_database,
             require_admin_or_event_edit,
             require_admin_or_event_edit_deck,
+            require_database,
         )
+        from api.main import app
         _app_ref = app
         _dep_refs = {
             "require_admin": require_admin,

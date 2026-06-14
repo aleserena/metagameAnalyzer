@@ -1,8 +1,22 @@
 import type { CardLookupResult } from '../api'
+import type { Deck } from '../types'
 import type { ParsedDeckList } from './deckListParser'
 import { formatMoxfieldDeckList } from './deckListParser'
 
 export const WUBRG_ORDER = ['W', 'U', 'B', 'R', 'G'] as const
+
+/** Editable fields for a deck in the Event detail bulk-edit form. */
+export type BulkDeckEdit = { name: string; player: string; rank: string; archetype: string }
+
+/** Seed a bulk-edit row from a deck; archetype falls back to the first commander (EDH). */
+export function defaultDeckEdit(d: Deck): BulkDeckEdit {
+  return {
+    name: d.name ?? '',
+    player: d.player ?? '',
+    rank: d.rank ?? '',
+    archetype: d.archetype ?? (d.commanders?.length ? d.commanders[0] ?? '' : ''),
+  }
+}
 
 /**
  * Replace card names in a parsed deck with canonical names from lookup when the card

@@ -10,9 +10,9 @@ pip install -r requirements.txt
 
 ## Testing
 
-Run tests before committing to catch regressions. A **pre-commit hook** is configured so that commits are blocked unless the web app build and frontend tests pass.
+Run tests before committing to catch regressions. **Husky git hooks** are configured: **pre-commit** runs fast lint (`npm run lint`), and **pre-push** runs the web build plus both test suites (`npm run build`, `npm run test`, `npm run test:py`) and the route-doc check.
 
-**One-time setup (enable the hook):** from the project root run `npm install`. This installs Husky and registers the hook; afterward every `git commit` will run `npm run build` and `npm run test` (web) and abort if either fails.
+**One-time setup (enable the hooks):** from the project root run `npm install`. This installs Husky and registers the hooks. Use `git commit --no-verify` / `git push --no-verify` to bypass them while iterating.
 
 **Backend (pytest):**
 
@@ -37,14 +37,14 @@ npm test
 
 ## Web Application
 
-The web app provides a dashboard, metagame analysis, deck browser, player leaderboard, and scrape controls.
+The web app provides a dashboard, metagame analysis (including health score and churn/volatility), archetype and matchup matrices, deck browser with compare view, commander pages, player leaderboard with head-to-head stats, and scrape controls.
 
 ### Run the web app
 
 1. **Start the API backend** (from project root):
 
 ```bash
-python -m uvicorn api.main:app --reload --port 8000
+python3 -m uvicorn api.main:app --reload --port 8000
 ```
 
 2. **Start the frontend** (in another terminal):
@@ -57,7 +57,7 @@ npm run dev
 
 3. Open http://localhost:5173 in your browser.
 
-The API loads `decks.json` on startup if present. You can also load data via the Scrape page (upload JSON or run a new scrape).
+The API loads decks from the PostgreSQL database on startup. You can load data via the Scrape page (upload JSON or run a new scrape) or via `POST /api/v1/load`.
 
 ### Admin authentication
 
@@ -90,12 +90,12 @@ If `ADMIN_PASSWORD` is not set, admin login is disabled and those tabs are hidde
    From the project root:
    ```bash
    pip install -r requirements.txt
-   python -m alembic upgrade head
+   python3 -m alembic upgrade head
    ```
    The app and Alembic load `.env` automatically, so `DATABASE_URL` is read from that file.
 
 4. **Start the API**  
-   As usual: `python -m uvicorn api.main:app --reload --port 8000`. The API will connect to the database and load decks/aliases from it.
+   As usual: `python3 -m uvicorn api.main:app --reload --port 8000`. The API will connect to the database and load decks/aliases from it.
 
 - Decks and events are stored in PostgreSQL. Scrapes upsert by deck ID (no duplicates on re-scrape). Manual events and deck uploads use separate ID ranges from MTGTop8.
 - **Data tab** (admin): Create events, upload decks to an event, edit/delete events, delete decks.
@@ -127,24 +127,24 @@ To switch between dev, staging, and prod DBs without editing `.env` each time:
 
 2. **Run the API against a given env:**
    ```bash
-   python scripts/run_api.py dev      # uses .env.dev
-   python scripts/run_api.py staging  # uses .env.staging
-   python scripts/run_api.py prod     # uses .env.prod
+   python3 scripts/run_api.py dev      # uses .env.dev
+   python3 scripts/run_api.py staging  # uses .env.staging
+   python3 scripts/run_api.py prod     # uses .env.prod
    ```
-   Extra args are passed to uvicorn (e.g. `python scripts/run_api.py dev --reload`).
+   Extra args are passed to uvicorn (e.g. `python3 scripts/run_api.py dev --reload`).
 
 3. **Run Alembic against a given env:**
    ```bash
-   python scripts/run_alembic.py dev upgrade head
-   python scripts/run_alembic.py staging current
-   python scripts/run_alembic.py prod revision --autogenerate -m "add column"
+   python3 scripts/run_alembic.py dev upgrade head
+   python3 scripts/run_alembic.py staging current
+   python3 scripts/run_alembic.py prod revision --autogenerate -m "add column"
    ```
 
 You can also set `DB_ENV=dev` (or `staging` / `prod`) and run `alembic` or `uvicorn` as usual; the app and Alembic will load `.env.dev` (or `.env.staging` / `.env.prod`) when `DB_ENV` is set.
 
 ### Player aliases (merge duplicate names)
 
-If the same player appears under different names (e.g. "Tomas Pesci" and "Pablo Tomas Pesci"), an admin can merge them in **Settings → Player aliases**: add mappings (alias → canonical). On the Player detail page, similar names are suggested with a "Merge into X" button (merge requires admin login). Aliases are stored in `player_aliases.json` (in `DATA_DIR`). Merged players share stats and deck lists.
+If the same player appears under different names (e.g. "Tomas Pesci" and "Pablo Tomas Pesci"), an admin can merge them in **Settings → Player aliases**: add mappings (alias → canonical). On the Player detail page, similar names are suggested with a "Merge into X" button (merge requires admin login). Aliases are stored in the database (with `player_aliases.json` in `DATA_DIR` as a fallback when the DB is unavailable). Merged players share stats and deck lists.
 
 ## CLI Usage
 
@@ -152,19 +152,19 @@ If the same player appears under different names (e.g. "Tomas Pesci" and "Pablo 
 
 ```bash
 # Duel Commander, Last 2 Weeks, filter by store "Angers"
-python main.py scrape --format EDH --period "Last 2 Weeks" --store "Angers" -o decks.json
+python3 main.py scrape --format EDH --period "Last 2 Weeks" --store "Angers" -o decks.json
 
 # Scrape specific event(s) by ID
-python main.py scrape --format EDH --events 80455,80480 -o decks.json
+python3 main.py scrape --format EDH --events 80455,80480 -o decks.json
 
 # All Duel Commander events from Last 2 Months (no store filter)
-python main.py scrape --format EDH --period "Last 2 Months" -o decks.json
+python3 main.py scrape --format EDH --period "Last 2 Months" -o decks.json
 ```
 
 ### Analyze metagame
 
 ```bash
-python main.py analyze decks.json -o metagame.json
+python3 main.py analyze decks.json -o metagame.json
 ```
 
 ## Supported formats
@@ -172,13 +172,17 @@ python main.py analyze decks.json -o metagame.json
 - EDH (Duel Commander)
 - ST (Standard), PI (Pioneer), MO (Modern), LE (Legacy), VI (Vintage)
 - PAU (Pauper), cEDH, PREM (Premodern)
+- EXP (Explorer), HI (Historic), ALCH (Alchemy), PEA (Peasant)
+- BL (Block), EX (Extended), HIGH (Highlander), CHL (Canadian Highlander)
 
 ## Time periods
 
 - Last 7 Days, Last 2 Weeks, Last 2 Months
 - MTGO Last 2 Months, Paper Last 2 Months
 - Last Major Events (3 Months), Last 6 Months
-- All 2026/2025/2024 Decks, Major Events
+- All 2026/2025/2024/2023 Decks, Major Events, All Commander decks
+
+Note: period → mtgtop8 meta-ID mappings are defined per format in `src/mtgtop8/config.py` (complete for EDH/cEDH; only a few periods are mapped for Standard).
 
 ## Store filtering
 

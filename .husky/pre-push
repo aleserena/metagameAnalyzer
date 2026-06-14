@@ -1,0 +1,5 @@
+# Block push if build or tests fail (moved here from pre-commit so commits stay fast).
+npm run gen:routes:check || exit 1
+npm run build || exit 1
+npm run test || exit 1
+npm run test:py || exit 1

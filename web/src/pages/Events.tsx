@@ -16,35 +16,8 @@ import type { MergePreviewResponse, PlayerMergePair } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import { useFetch } from '../hooks/useFetch'
 import { canonicalCardNameForCompare } from '../lib/deckUtils'
+import { cellStr, normalizeForSort, type EventSortKey } from '../lib/eventTable'
 import { reportError, dateSortKey, ddMmYyToIso, isoToDdMmYy } from '../utils'
-
-/** Coerce value to a string for display; avoid rendering [object Object]. */
-function cellStr(v: unknown): string {
-  if (v == null) return '—'
-  if (typeof v === 'object') return '—'
-  return String(v)
-}
-
-type SortKey = 'event_name' | 'date' | 'format_id' | 'player_count' | 'store' | 'location'
-
-function normalizeForSort(e: EventWithOrigin, key: SortKey): string | number {
-  switch (key) {
-    case 'event_name':
-      return (typeof e.event_name === 'string' ? e.event_name : '') || 'Unnamed'
-    case 'date':
-      return dateSortKey(cellStr(e.date))
-    case 'format_id':
-      return cellStr(e.format_id)
-    case 'player_count':
-      return typeof e.player_count === 'number' ? e.player_count : 0
-    case 'store':
-      return cellStr(e.store)
-    case 'location':
-      return cellStr(e.location)
-    default:
-      return ''
-  }
-}
 
 export default function Events() {
   const { user } = useAuth()
@@ -61,7 +34,7 @@ export default function Events() {
   const [filterDateIso, setFilterDateIso] = useState('') // YYYY-MM-DD for date picker
   const [filterFormat, setFilterFormat] = useState('')
   const [filterIssueTypes, setFilterIssueTypes] = useState<string[]>([])
-  const [sortBy, setSortBy] = useState<SortKey>('date')
+  const [sortBy, setSortBy] = useState<EventSortKey>('date')
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
   const [mergeEventIdA, setMergeEventIdA] = useState('')
   const [mergeEventIdB, setMergeEventIdB] = useState('')
@@ -425,7 +398,7 @@ export default function Events() {
     )
   }
 
-  const handleSort = (key: SortKey) => {
+  const handleSort = (key: EventSortKey) => {
     if (sortBy === key) {
       setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'))
     } else {

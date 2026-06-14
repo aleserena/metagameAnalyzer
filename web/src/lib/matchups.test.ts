@@ -1,10 +1,30 @@
 import { describe, expect, it } from 'vitest'
 import {
   apiMatchupsToPhases,
+  heatmapColor,
   isTop8Rank,
   phasesToApiMatchups,
   swissRoundsForPlayerCount,
 } from './matchups'
+
+describe('heatmapColor', () => {
+  it('is red-ish at 0% (low win rate)', () => {
+    expect(heatmapColor(0)).toBe('rgba(220,80,80,0.35)')
+  })
+
+  it('is yellow-ish at 50%', () => {
+    expect(heatmapColor(50)).toBe('rgba(220,220,80,0.35)')
+  })
+
+  it('is green-ish at 100% (high win rate)', () => {
+    expect(heatmapColor(100)).toBe('rgba(80,220,80,0.35)')
+  })
+
+  it('clamps out-of-range values', () => {
+    expect(heatmapColor(-20)).toBe(heatmapColor(0))
+    expect(heatmapColor(150)).toBe(heatmapColor(100))
+  })
+})
 
 describe('swissRoundsForPlayerCount', () => {
   it('matches backend formula', () => {

@@ -18,14 +18,18 @@ from pathlib import Path
 from sqlalchemy import (
     Column,
     DateTime,
+    Float,
     Integer,
     String,
     Text,
+    bindparam,
     create_engine,
     func,
     text,
+    update,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, aliased, declarative_base, sessionmaker
 
 logger = logging.getLogger(__name__)
@@ -126,6 +130,34 @@ class EventUploadLinkRow(Base):
     used_at = Column(DateTime, nullable=True)
     expires_at = Column(DateTime, nullable=True)
     label = Column(String(256), nullable=True)
+
+
+class CardRow(Base):
+    """Card metadata sourced from MTGJSON (keyed by canonical card name).
+
+    Populated by the MTGJSON sync (``api/services/mtgjson.py``). Images are not
+    stored — they are built at read time from ``scryfall_id`` (see
+    ``src/mtgtop8/card_lookup.py``). Price columns are filled by the separate
+    price sync and left untouched by the metadata sync.
+    """
+
+    __tablename__ = "cards"
+    name = Column(String(512), primary_key=True)  # canonical MTGJSON name, e.g. "Fire // Ice"
+    scryfall_id = Column(String(64), nullable=True)  # representative printing's identifiers.scryfallId
+    mtgjson_uuid = Column(String(64), nullable=True)  # representative printing UUID (joins AllPricesToday)
+    mana_cost = Column(String(128), nullable=False, default="")
+    cmc = Column(Float, nullable=False, default=0)  # MTGJSON manaValue
+    type_line = Column(String(512), nullable=False, default="")
+    oracle_text = Column(Text, nullable=False, default="")
+    colors = Column(JSONB, nullable=False, default=list)  # list[str]
+    color_identity = Column(JSONB, nullable=False, default=list)  # list[str]
+    layout = Column(String(32), nullable=False, default="normal")  # drives front/back image logic
+    card_faces = Column(JSONB, nullable=False, default=list)  # [{"name": str, "side": str|None}, ...]
+    price_usd = Column(String(32), nullable=True)
+    price_usd_foil = Column(String(32), nullable=True)
+    price_eur = Column(String(32), nullable=True)
+    price_eur_foil = Column(String(32), nullable=True)
+    updated_at = Column(DateTime, nullable=False, server_default=func.now())
 
 
 def _get_engine():
@@ -1901,3 +1933,113 @@ def list_matchups_with_deck_and_players(session: Session) -> list[dict]:
         }
         for m, d, p_deck, p_opp in rows
     ]
+
+
+# --- Repository helpers: cards (MTGJSON metadata) ---
+
+# Columns refreshed by the metadata sync (price columns are deliberately excluded
+# so the separate price sync is not clobbered).
+_CARD_METADATA_COLUMNS = (
+    "scryfall_id",
+    "mtgjson_uuid",
+    "mana_cost",
+    "cmc",
+    "type_line",
+    "oracle_text",
+    "colors",
+    "color_identity",
+    "layout",
+    "card_faces",
+)
+
+
+def get_cards_by_name(session: Session, names: list[str]) -> dict[str, CardRow]:
+    """Return {name: CardRow} for the given card names (only those present)."""
+    names = [n for n in dict.fromkeys(names) if n]
+    if not names:
+        return {}
+    rows = session.query(CardRow).filter(CardRow.name.in_(names)).all()
+    return {r.name: r for r in rows}
+
+
+def upsert_cards(session: Session, rows: list[dict], batch_size: int = 1000) -> int:
+    """Bulk insert/update card metadata rows (keyed by name) via PostgreSQL ON CONFLICT.
+
+    Each dict must include ``name`` plus any of the metadata columns. Price columns
+    are never written here. Returns the number of rows processed.
+    """
+    if not rows:
+        return 0
+    total = 0
+    for i in range(0, len(rows), batch_size):
+        batch = rows[i : i + batch_size]
+        stmt = pg_insert(CardRow.__table__).values(batch)
+        set_ = {c: stmt.excluded[c] for c in _CARD_METADATA_COLUMNS}
+        set_["updated_at"] = func.now()
+        stmt = stmt.on_conflict_do_update(index_elements=[CardRow.name], set_=set_)
+        session.execute(stmt)
+        total += len(batch)
+    return total
+
+
+def update_card_prices(session: Session, uuid_to_prices: dict[str, dict], batch_size: int = 1000) -> int:
+    """Update price columns for cards whose ``mtgjson_uuid`` matches a key.
+
+    ``uuid_to_prices`` maps representative printing UUID → {usd, usd_foil, eur, eur_foil}
+    (any missing value treated as None). Returns the number of UUIDs applied.
+    """
+    if not uuid_to_prices:
+        return 0
+    params = [
+        {
+            "b_uuid": uuid,
+            "b_usd": p.get("usd"),
+            "b_usd_foil": p.get("usd_foil"),
+            "b_eur": p.get("eur"),
+            "b_eur_foil": p.get("eur_foil"),
+        }
+        for uuid, p in uuid_to_prices.items()
+    ]
+    stmt = (
+        update(CardRow.__table__)
+        .where(CardRow.__table__.c.mtgjson_uuid == bindparam("b_uuid"))
+        .values(
+            price_usd=bindparam("b_usd"),
+            price_usd_foil=bindparam("b_usd_foil"),
+            price_eur=bindparam("b_eur"),
+            price_eur_foil=bindparam("b_eur_foil"),
+        )
+    )
+    total = 0
+    for i in range(0, len(params), batch_size):
+        batch = params[i : i + batch_size]
+        session.execute(stmt, batch)
+        total += len(batch)
+    return total
+
+
+def get_card_uuids(session: Session) -> set[str]:
+    """Return all non-null ``mtgjson_uuid`` values (the printings we need prices for)."""
+    rows = session.query(CardRow.mtgjson_uuid).filter(CardRow.mtgjson_uuid.isnot(None)).all()
+    return {u for (u,) in rows if u}
+
+
+def search_card_names(session: Session, prefix: str, limit: int = 20) -> list[str]:
+    """Return up to ``limit`` card names starting with ``prefix`` (case-insensitive)."""
+    p = (prefix or "").strip()
+    if not p:
+        return []
+    esc = p.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    rows = (
+        session.query(CardRow.name)
+        .filter(CardRow.name.ilike(esc + "%", escape="\\"))
+        .order_by(CardRow.name)
+        .limit(limit)
+        .all()
+    )
+    return [r[0] for r in rows]
+
+
+def count_cards(session: Session) -> int:
+    """Return the number of card rows."""
+    return session.query(func.count(CardRow.name)).scalar() or 0
