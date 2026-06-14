@@ -1081,6 +1081,33 @@ export async function clearDecks(): Promise<{ message: string }> {
   return fetchApi('/settings/clear-decks', { method: 'POST' })
 }
 
+export type MtgjsonSyncStart = { started: boolean; running: string | null; message: string }
+
+export type MtgjsonSyncJob = {
+  status: 'idle' | 'running' | 'success' | 'error'
+  started_at: string | null
+  finished_at: string | null
+  result: { cards_synced?: number; prices_updated?: number } | null
+  error: string | null
+}
+
+export type MtgjsonSyncStatus = {
+  running: string | null
+  jobs: { metadata: MtgjsonSyncJob; prices: MtgjsonSyncJob }
+}
+
+export async function syncMtgjson(): Promise<MtgjsonSyncStart> {
+  return fetchApi('/settings/sync-mtgjson', { method: 'POST' })
+}
+
+export async function syncMtgjsonPrices(): Promise<MtgjsonSyncStart> {
+  return fetchApi('/settings/sync-mtgjson-prices', { method: 'POST' })
+}
+
+export async function getMtgjsonSyncStatus(): Promise<MtgjsonSyncStatus> {
+  return fetchApi('/settings/sync-mtgjson/status')
+}
+
 export type UploadLinkRow = {
   token: string
   event_id: string

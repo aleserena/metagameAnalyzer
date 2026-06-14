@@ -6,7 +6,7 @@ Route -> handler-function map for the FastAPI app. **Grep for the handler name**
 
 Auth column: `admin` = admin token required, `event-edit` = admin **or** a valid event-edit token, `DB` = database required. Blank = public.
 
-Total endpoints: **90**.
+Total endpoints: **93**.
 
 ## Health / Info / Auth / Feedback
 
@@ -133,6 +133,9 @@ Total endpoints: **90**.
 | GET | `/api/v1/settings/rank-weights` | `get_rank_weights` (in `api/routers/settings.py`) | admin |
 | PUT | `/api/v1/settings/rank-weights` | `put_rank_weights` (in `api/routers/settings.py`) | admin |
 | POST | `/api/v1/settings/refresh-otag-index` | `post_refresh_otag_index` (in `api/routers/settings.py`) | admin |
+| POST | `/api/v1/settings/sync-mtgjson` | `post_sync_mtgjson` (in `api/routers/settings.py`) | admin, DB |
+| POST | `/api/v1/settings/sync-mtgjson-prices` | `post_sync_mtgjson_prices` (in `api/routers/settings.py`) | admin, DB |
+| GET | `/api/v1/settings/sync-mtgjson/status` | `get_sync_mtgjson_status` (in `api/routers/settings.py`) | admin |
 | GET | `/api/v1/settings/upload-links` | `get_settings_upload_links` (in `api/routers/settings.py`) | admin, DB |
 | DELETE | `/api/v1/settings/upload-links` | `delete_settings_upload_links` (in `api/routers/settings.py`) | admin, DB |
 

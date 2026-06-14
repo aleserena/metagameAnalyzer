@@ -1,6 +1,18 @@
-"""Scryfall API client for card metadata and images."""
+"""Card metadata and images.
+
+Card metadata, oracle text and prices come from MTGJSON, stored in the ``cards``
+Postgres table (populated by ``api/services/mtgjson.py``). Images are built from
+each card's ``scryfall_id`` and served from Scryfall's CDN — no per-card Scryfall
+API call on the hot path. The legacy Scryfall API client remains as a thin fallback
+(``_scryfall_lookup_cards``) for names missing from the table (e.g. fresh spoilers).
+
+The oracle-tag functional-category system (``refresh_otag_index`` /
+``get_card_categories``) still uses the Scryfall search API — MTGJSON has no
+equivalent and it is a periodic admin refresh, not on the per-request path.
+"""
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -12,11 +24,35 @@ SCRYFALL_COLLECTION = "https://api.scryfall.com/cards/collection"
 SCRYFALL_NAMED = "https://api.scryfall.com/cards/named"
 SCRYFALL_SEARCH = "https://api.scryfall.com/cards/search"
 SCRYFALL_AUTOCOMPLETE = "https://api.scryfall.com/cards/autocomplete"
+SCRYFALL_IMAGE_BASE = "https://cards.scryfall.io"
 CACHE_FILE = Path(__file__).resolve().parent.parent.parent / ".scryfall_cache.json"
 OTAG_CACHE_FILE = Path(__file__).resolve().parent.parent.parent / ".scryfall_otag_cache.json"
 REQUEST_DELAY = 0.1  # ~10 req/s rate limit
 AUTOCOMPLETE_MIN_LEN = 2
 SCRYFALL_HEADERS = {"User-Agent": "MTGMetagameAnalyzer/1.0 (metagame-analyzer)"}
+
+# Fall back to the Scryfall API for names not found in the MTGJSON-backed `cards`
+# table. Disable via MTGJSON_SCRYFALL_FALLBACK=0 to guarantee zero Scryfall calls.
+SCRYFALL_FALLBACK_ENABLED = os.getenv("MTGJSON_SCRYFALL_FALLBACK", "1").lower() not in ("0", "false", "no")
+
+IMAGE_SIZES = ("small", "normal", "large")
+# Layouts with a distinct back image (built from the same scryfall_id via /back/).
+TWO_FACED_LAYOUTS = frozenset({"transform", "modal_dfc", "reversible_card", "double_faced_token"})
+
+
+def scryfall_image_urls(scryfall_id: str, face: str = "front") -> dict[str, str] | None:
+    """Build Scryfall CDN image URLs for a printing UUID.
+
+    Path scheme: ``/<size>/<face>/<a>/<b>/<scryfall_id>.jpg`` where a/b are the first
+    two characters of the UUID. Returns None when ``scryfall_id`` is missing/too short.
+    """
+    if not scryfall_id or len(scryfall_id) < 2:
+        return None
+    a, b = scryfall_id[0], scryfall_id[1]
+    return {
+        size: f"{SCRYFALL_IMAGE_BASE}/{size}/{face}/{a}/{b}/{scryfall_id}.jpg"
+        for size in IMAGE_SIZES
+    }
 
 # Maps our internal category keys → Scryfall oracle tag names to query.
 # Categories not listed here (land, manaless, ward) are heuristic-only.
@@ -290,8 +326,79 @@ def _build_entry(card: dict) -> dict:
     return entry
 
 
+def _row_to_entry(row) -> dict:
+    """Map a ``cards`` DB row to the standard lookup entry (same shape as Scryfall path).
+
+    Images are built from ``scryfall_id``; two-faced layouts get front/back faces.
+    """
+    faces = row.card_faces or []
+    two_faced = row.layout in TWO_FACED_LAYOUTS and len(faces) >= 2
+    if two_faced:
+        front = scryfall_image_urls(row.scryfall_id, "front")
+        back = scryfall_image_urls(row.scryfall_id, "back")
+        card_faces = [
+            {"name": faces[0].get("name", "") or row.name, "image_uris": front},
+            {"name": faces[1].get("name", "") or row.name, "image_uris": back},
+        ]
+        top_image = None
+    else:
+        image = scryfall_image_urls(row.scryfall_id, "front")
+        card_faces = [{"name": row.name, "image_uris": image}]
+        top_image = image
+    return {
+        "name": row.name,
+        "image_uris": top_image,
+        "mana_cost": row.mana_cost or "",
+        "cmc": row.cmc if row.cmc is not None else 0,
+        "type_line": row.type_line or "",
+        "oracle_text": row.oracle_text or "",
+        "colors": row.colors or [],
+        "color_identity": row.color_identity or [],
+        "prices": {
+            "usd": row.price_usd,
+            "usd_foil": row.price_usd_foil,
+            "eur": row.price_eur,
+            "eur_foil": row.price_eur_foil,
+            "tix": None,
+        },
+        "card_faces": card_faces,
+    }
+
+
 def lookup_cards(card_names: list[str]) -> dict[str, dict]:
-    """Look up cards by name. Returns {card_name: {image_uris, mana_cost, cmc, type_line, ...}}."""
+    """Look up cards by name. Returns {card_name: {image_uris, mana_cost, cmc, type_line, ...}}.
+
+    Reads from the MTGJSON-backed ``cards`` table; names not found there fall back to
+    the Scryfall API (unless disabled). Returns the same entry shape from both paths.
+    """
+    names = list(dict.fromkeys(card_names))
+    result: dict[str, dict] = {}
+    missing: list[str] = []
+
+    try:
+        from api import db as _db
+
+        if _db.is_database_available():
+            with _db.session_scope() as session:
+                rows = _db.get_cards_by_name(session, names)
+                for name in names:
+                    row = rows.get(name)
+                    if row is not None:
+                        result[name] = _row_to_entry(row)
+                    else:
+                        missing.append(name)
+        else:
+            missing = list(names)
+    except Exception:
+        missing = list(names)
+
+    if missing and SCRYFALL_FALLBACK_ENABLED:
+        result.update(_scryfall_lookup_cards(missing))
+    return result
+
+
+def _scryfall_lookup_cards(card_names: list[str]) -> dict[str, dict]:
+    """Legacy Scryfall API lookup, used as a fallback for cards missing from the DB."""
     _load_cache()
     names = list(dict.fromkeys(card_names))
     result: dict[str, dict] = {}
@@ -385,9 +492,25 @@ def lookup_cards(card_names: list[str]) -> dict[str, dict]:
 
 
 def autocomplete_cards(prefix: str) -> list[str]:
-    """Return card names matching the given prefix (for typeahead). Uses Scryfall autocomplete API."""
+    """Return card names matching the given prefix (for typeahead).
+
+    Queries the local MTGJSON-backed ``cards`` table when a database is available;
+    otherwise falls back to the Scryfall autocomplete API.
+    """
     q = (prefix or "").strip()
     if len(q) < AUTOCOMPLETE_MIN_LEN:
+        return []
+
+    try:
+        from api import db as _db
+
+        if _db.is_database_available():
+            with _db.session_scope() as session:
+                return _db.search_card_names(session, q, limit=20)
+    except Exception:
+        pass
+
+    if not SCRYFALL_FALLBACK_ENABLED:
         return []
     time.sleep(REQUEST_DELAY)
     try:

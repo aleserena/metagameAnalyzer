@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import {
@@ -11,10 +11,13 @@ import {
   putRankWeights,
   clearScryfallCache,
   clearDecks,
+  syncMtgjson,
+  syncMtgjsonPrices,
+  getMtgjsonSyncStatus,
   getUploadLinks,
   clearUploadLinks,
 } from '../api'
-import type { UploadLinkRow } from '../api'
+import type { UploadLinkRow, MtgjsonSyncStatus } from '../api'
 import { reportError } from '../utils'
 
 const RANK_KEYS = ['1', '2', '3-4', '5-8', '9-16', '17-32', '33-64', '65-128'] as const
@@ -42,6 +45,9 @@ export default function Settings() {
   const [savingRankWeights, setSavingRankWeights] = useState(false)
   const [clearingCache, setClearingCache] = useState(false)
   const [clearingDecks, setClearingDecks] = useState(false)
+  const [syncStatus, setSyncStatus] = useState<MtgjsonSyncStatus | null>(null)
+  const syncPollRef = useRef<number | null>(null)
+  const syncNotifiedRef = useRef<{ metadata: string | null; prices: string | null }>({ metadata: null, prices: null })
   const [uploadLinks, setUploadLinks] = useState<UploadLinkRow[]>([])
   const [loadingUploadLinks, setLoadingUploadLinks] = useState(true)
   const [clearingLinks, setClearingLinks] = useState<'used' | 'all' | null>(null)
@@ -150,6 +156,97 @@ export default function Settings() {
       .then(() => toast.success('Scryfall cache cleared'))
       .catch((e) => toast.error(reportError(e)))
       .finally(() => setClearingCache(false))
+  }
+
+  const stopSyncPoll = () => {
+    if (syncPollRef.current !== null) {
+      window.clearInterval(syncPollRef.current)
+      syncPollRef.current = null
+    }
+  }
+
+  const pollSyncStatus = () => {
+    getMtgjsonSyncStatus()
+      .then((s) => {
+        setSyncStatus(s)
+        ;(['metadata', 'prices'] as const).forEach((name) => {
+          const job = s.jobs[name]
+          if (
+            (job.status === 'success' || job.status === 'error') &&
+            job.finished_at &&
+            syncNotifiedRef.current[name] !== job.finished_at
+          ) {
+            syncNotifiedRef.current[name] = job.finished_at
+            if (job.status === 'success') {
+              const n = name === 'metadata' ? job.result?.cards_synced : job.result?.prices_updated
+              toast.success(
+                name === 'metadata'
+                  ? `Synced ${n ?? 0} cards from MTGJSON`
+                  : `Updated prices for ${n ?? 0} cards`,
+              )
+            } else {
+              toast.error(
+                `${name === 'metadata' ? 'MTGJSON sync' : 'Price sync'} failed: ${job.error || 'unknown error'}`,
+              )
+            }
+          }
+        })
+        if (s.running === null) stopSyncPoll()
+      })
+      .catch(() => {
+        /* ignore transient poll errors; next tick retries */
+      })
+  }
+
+  const startSyncPoll = () => {
+    if (syncPollRef.current === null) {
+      syncPollRef.current = window.setInterval(pollSyncStatus, 3000)
+    }
+  }
+
+  useEffect(() => {
+    getMtgjsonSyncStatus()
+      .then((s) => {
+        setSyncStatus(s)
+        // Seed "already notified" with current finished_at so we don't toast on mount.
+        syncNotifiedRef.current = {
+          metadata: s.jobs.metadata.finished_at,
+          prices: s.jobs.prices.finished_at,
+        }
+        if (s.running !== null) startSyncPoll()
+      })
+      .catch(() => {})
+    return () => stopSyncPoll()
+  }, [])
+
+  const handleSyncMtgjson = () => {
+    if (!window.confirm('Download MTGJSON card data and refresh the card metadata table? This downloads several hundred MB and runs in the background — it may take a few minutes.')) return
+    syncMtgjson()
+      .then((r) => {
+        if (r.started) {
+          toast.success('MTGJSON card sync started')
+          startSyncPoll()
+          pollSyncStatus()
+        } else {
+          toast.error(r.message || 'A sync is already running')
+        }
+      })
+      .catch((e) => toast.error(reportError(e)))
+  }
+
+  const handleSyncPrices = () => {
+    if (!window.confirm('Download MTGJSON prices (AllPricesToday) and update card prices? Sync MTGJSON cards first if you have not. Runs in the background.')) return
+    syncMtgjsonPrices()
+      .then((r) => {
+        if (r.started) {
+          toast.success('MTGJSON price sync started')
+          startSyncPoll()
+          pollSyncStatus()
+        } else {
+          toast.error(r.message || 'A sync is already running')
+        }
+      })
+      .catch((e) => toast.error(reportError(e)))
   }
 
   const handleClearDecks = () => {
@@ -294,9 +391,29 @@ export default function Settings() {
       <div className="chart-container" style={{ maxWidth: 600, marginBottom: '2rem' }}>
         <h2 style={{ margin: '0 0 1rem', fontSize: '1.25rem' }}>Data &amp; cache</h2>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1rem' }}>
-          Clear the Scryfall cache to force re-fetching card images and metadata. Clear decks to remove all loaded/scraped data and reset decks.json.
+          Card metadata and prices come from MTGJSON (images are served from Scryfall). Sync MTGJSON to
+          refresh the card metadata table, then update prices separately. Clear the Scryfall cache to drop
+          any cached fallback lookups; clear decks to remove all loaded/scraped data and reset decks.json.
         </p>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            className="btn"
+            style={{ padding: '0.35rem 0.75rem' }}
+            onClick={handleSyncMtgjson}
+            disabled={syncStatus?.running != null}
+          >
+            {syncStatus?.jobs.metadata.status === 'running' ? 'Syncing cards...' : 'Sync MTGJSON cards'}
+          </button>
+          <button
+            type="button"
+            className="btn"
+            style={{ padding: '0.35rem 0.75rem' }}
+            onClick={handleSyncPrices}
+            disabled={syncStatus?.running != null}
+          >
+            {syncStatus?.jobs.prices.status === 'running' ? 'Updating prices...' : 'Update prices'}
+          </button>
           <button
             type="button"
             className="btn"
@@ -316,6 +433,12 @@ export default function Settings() {
             {clearingDecks ? 'Clearing...' : 'Clear decks.json'}
           </button>
         </div>
+        {syncStatus?.running != null && (
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '0.75rem' }}>
+            {syncStatus.running === 'metadata' ? 'Card metadata sync' : 'Price sync'} running in the
+            background — this can take several minutes. You can leave this page; progress continues on the server.
+          </p>
+        )}
       </div>
 
       <div className="chart-container" style={{ maxWidth: 800, marginBottom: '2rem' }}>

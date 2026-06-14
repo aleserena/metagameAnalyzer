@@ -56,7 +56,7 @@ metagameAnalyzer/
 │   ├── analyzer.py  # Metagame analysis engine
 │   ├── normalize.py # Deck/archetype normalization
 │   ├── models.py    # Core data models (Event, Deck)
-│   └── card_lookup.py # Card data lookup (Scryfall)
+│   └── card_lookup.py # Card data lookup (MTGJSON-backed, Scryfall images + fallback)
 ├── web/src/         # React/TypeScript frontend
 │   ├── App.tsx      # Routing
 │   ├── api.ts       # API client (~35KB)
@@ -104,7 +104,7 @@ with _db.session_scope() as session:
 
 **Scroll containers:** `style.css` provides `.table-wrap` (with `-webkit-overflow-scrolling: touch`) and `.table-wrap-outer` (adds gradient right-edge indicator). The matrix tables in `Matchups.tsx` nest `.table-wrap` inside `.table-wrap-outer`, with `overflow: 'auto'` + `touchAction: 'pan-x pan-y'` on the inner matrix div. Use these classes for new scrollable tables.
 
-**Scryfall integration** (`src/mtgtop8/card_lookup.py`): `lookup_cards(names)` returns `{name: {image_uris, mana_cost, cmc, type_line, colors, color_identity, card_faces, prices}}`. `prices` is `{usd, usd_foil, eur, eur_foil, tix}`; when the default printing has no `usd`, `_build_entry()` falls back to a `/cards/named` lookup to pick a priced printing. Results are cached in `.scryfall_cache.json`.
+**Card data (MTGJSON + Scryfall images)** (`src/mtgtop8/card_lookup.py`): `lookup_cards(names)` returns `{name: {image_uris, mana_cost, cmc, type_line, oracle_text, colors, color_identity, card_faces, prices}}` (`prices` is `{usd, usd_foil, eur, eur_foil, tix}`). Metadata/oracle text/prices are read from the **`cards` Postgres table** (model `CardRow` in `api/db.py`), which is populated from **MTGJSON** by `api/services/mtgjson.py`. Images are not stored — `scryfall_image_urls(scryfall_id, face)` builds `cards.scryfall.io` URLs from each card's `scryfall_id` (two-faced layouts get `/front/` + `/back/`). Names missing from the table fall back to the legacy Scryfall API (`_scryfall_lookup_cards`, cached in `.scryfall_cache.json`); disable with `MTGJSON_SCRYFALL_FALLBACK=0`. `autocomplete_cards` queries the table locally. The MTGJSON sync is **manual** (no auto-download): run `python3 scripts/sync_mtgjson.py [--prices|--all]` (synchronous CLI) or use the **Sync MTGJSON cards** / **Update prices** buttons on the Settings page. The admin endpoints `POST /api/v1/settings/sync-mtgjson` and `.../sync-mtgjson-prices` start a **background thread** (downloads are hundreds of MB / minutes) and return immediately; the UI polls `GET /api/v1/settings/sync-mtgjson/status`. Job state lives in-memory in `api/services/mtgjson.py` (`start_sync_job` / `get_sync_status`); only one sync runs at a time and a server restart resets status to idle (DB upserts are idempotent). The Scryfall **oracle-tag** category system (`refresh_otag_index` / `get_card_categories`) is unchanged and still calls the Scryfall search API.
 
 ## Non-obvious Caveats
 

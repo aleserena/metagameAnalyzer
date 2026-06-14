@@ -681,6 +681,27 @@ def test_post_settings_clear_cache(client_with_overrides):
     assert "message" in r.json()
 
 
+def test_get_settings_sync_mtgjson_status(client_with_overrides):
+    """GET /api/v1/settings/sync-mtgjson/status returns the job-status shape (admin)."""
+    r = client_with_overrides.get("/api/v1/settings/sync-mtgjson/status")
+    assert r.status_code == 200
+    data = r.json()
+    assert "running" in data
+    assert set(data["jobs"].keys()) == {"metadata", "prices"}
+
+
+def test_post_settings_sync_mtgjson_starts_background_job(client_with_overrides):
+    """POST /api/v1/settings/sync-mtgjson delegates to the background job runner (admin)."""
+    with patch(
+        "api.routers.settings.mtgjson_service.start_sync_job",
+        return_value={"started": True, "running": "metadata", "message": "metadata sync started."},
+    ) as mock_start:
+        r = client_with_overrides.post("/api/v1/settings/sync-mtgjson")
+    assert r.status_code == 200
+    assert r.json()["started"] is True
+    mock_start.assert_called_once_with("metadata")
+
+
 # --- Players / aliases (no DB required for GET) ---
 
 

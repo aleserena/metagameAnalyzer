@@ -13,6 +13,7 @@ from api.schemas.settings import (
     MatchupsMinMatchesBody,
     RankWeightsBody,
 )
+from api.services import mtgjson as mtgjson_service
 from api.services import settings as settings_service
 from api.state import (
     _clear_decks_in_db,
@@ -100,6 +101,34 @@ def post_refresh_otag_index(
     """
     counts = refresh_otag_index(categories)
     return {"refreshed": counts}
+
+
+@router.post("/api/v1/settings/sync-mtgjson", dependencies=[Depends(require_database)])
+def post_sync_mtgjson(_: str = Depends(require_admin)):
+    """Start a background MTGJSON metadata sync; refreshes the ``cards`` table. Admin-only.
+
+    Streams AtomicCards + AllIdentifiers (+ SetList) and upserts card metadata,
+    scryfall_id and a representative printing UUID (price columns untouched —
+    use sync-mtgjson-prices). Runs in a background thread (large download, minutes);
+    poll ``GET /settings/sync-mtgjson/status``. Returns {started, running, message}.
+    """
+    return mtgjson_service.start_sync_job("metadata")
+
+
+@router.post("/api/v1/settings/sync-mtgjson-prices", dependencies=[Depends(require_database)])
+def post_sync_mtgjson_prices(_: str = Depends(require_admin)):
+    """Start a background MTGJSON price sync (AllPricesToday). Admin-only.
+
+    Requires cards to be synced first (prices join on the stored printing UUID).
+    Runs in a background thread; poll ``GET /settings/sync-mtgjson/status``.
+    """
+    return mtgjson_service.start_sync_job("prices")
+
+
+@router.get("/api/v1/settings/sync-mtgjson/status")
+def get_sync_mtgjson_status(_: str = Depends(require_admin)):
+    """Return the MTGJSON sync job status (which job is running + per-job state). Admin-only."""
+    return mtgjson_service.get_sync_status()
 
 
 @router.post("/api/v1/settings/clear-decks", dependencies=[Depends(require_database)])
