@@ -211,3 +211,19 @@ export function phasesToApiMatchups(
   }
   return out
 }
+
+/** Win rate 0–100 → heatmap color (red → yellow → green) with opacity for readability. */
+export function heatmapColor(pct: number): string {
+  const t = Math.max(0, Math.min(100, pct)) / 100
+  let r: number
+  let g: number
+  if (t <= 0.5) {
+    r = 220
+    g = Math.round(80 + (220 - 80) * (t * 2))
+  } else {
+    r = Math.round(220 - (220 - 80) * ((t - 0.5) * 2))
+    g = 220
+  }
+  const b = 80
+  return `rgba(${r},${g},${b},0.35)`
+}

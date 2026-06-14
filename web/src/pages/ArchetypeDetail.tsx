@@ -37,11 +37,8 @@ import Skeleton from '../components/Skeleton'
 import TopCardsSection from '../components/TopCardsSection'
 import { MTG_COLOR_FILL } from '../constants'
 import { PieChartTooltipContent } from '../components/PieChartTooltip'
+import { colorDistributionToManaCost, sortArchetypeMatchups, type MatchupSortKey } from '../lib/archetype'
 import { reportError } from '../utils'
-
-const WUBRG_ORDER = ['W', 'U', 'B', 'R', 'G'] as const
-
-type MatchupSortKey = 'opponent_archetype' | 'record' | 'win_rate' | 'matches'
 
 export default function ArchetypeDetail() {
   const { archetypeName } = useParams<{ archetypeName: string }>()
@@ -243,12 +240,7 @@ export default function ArchetypeDetail() {
 
   const topMain = detail.top_cards_main ?? []
 
-  const archetypeManaCost = (() => {
-    const dist = detail?.average_analysis?.color_distribution
-    if (!dist) return ''
-    const colors = WUBRG_ORDER.filter((c) => (dist[c] ?? 0) > 0)
-    return colors.length ? `{${colors.join('}{')}}` : ''
-  })()
+  const archetypeManaCost = colorDistributionToManaCost(detail?.average_analysis?.color_distribution)
 
   const matchupRowsFiltered = matchupRows.filter(
     (row) =>
@@ -263,25 +255,7 @@ export default function ArchetypeDetail() {
     }
   }
 
-  const matchupRowsSorted = [...matchupRowsFiltered].sort((a, b) => {
-    let cmp = 0
-    if (matchupSortBy === 'opponent_archetype') {
-      cmp = (a.opponent_archetype || '').localeCompare(b.opponent_archetype || '')
-    } else if (matchupSortBy === 'record' || matchupSortBy === 'matches') {
-      const av = (a.wins ?? 0) + (a.losses ?? 0) + (a.draws ?? 0)
-      const bv = (b.wins ?? 0) + (b.losses ?? 0) + (b.draws ?? 0)
-      cmp = av - bv
-    } else if (matchupSortBy === 'win_rate') {
-      cmp = (a.win_rate ?? 0) - (b.win_rate ?? 0)
-    }
-    if (cmp === 0) {
-      // stable tiebreakers: win_rate desc, then opponent name asc
-      const wr = (a.win_rate ?? 0) - (b.win_rate ?? 0)
-      if (wr !== 0) return matchupSortDesc ? -wr : wr
-      return (a.opponent_archetype || '').localeCompare(b.opponent_archetype || '')
-    }
-    return matchupSortDesc ? -cmp : cmp
-  })
+  const matchupRowsSorted = sortArchetypeMatchups(matchupRowsFiltered, matchupSortBy, matchupSortDesc)
 
   const matchupSortArrow = (key: MatchupSortKey) =>
     matchupSortBy === key ? (matchupSortDesc ? ' \u25BC' : ' \u25B2') : ''

@@ -1,12 +1,18 @@
 """Tests for API helper functions."""
 
-import api.main as api_main
+from api.helpers import (
+    _deck_sort_key,
+    _filter_decks_for_query,
+    _normalize_split_cards,
+    _parse_date_sortkey,
+)
+from api.route_helpers import _date_in_range
 
 
 def test_normalize_split_cards_fire_ice(deck_with_split_card):
     """_normalize_split_cards converts Fire / Ice to Fire // Ice."""
     decks = [deck_with_split_card]
-    api_main._normalize_split_cards(decks)
+    _normalize_split_cards(decks)
     main_cards = [c["card"] for c in decks[0]["mainboard"]]
     side_cards = [c["card"] for c in decks[0]["sideboard"]]
     assert "Fire // Ice" in main_cards
@@ -18,15 +24,15 @@ def test_normalize_split_cards_fire_ice(deck_with_split_card):
 def test_normalize_split_cards_unchanged_when_correct():
     """_normalize_split_cards leaves Fire // Ice unchanged."""
     decks = [{"mainboard": [{"qty": 1, "card": "Fire // Ice"}], "sideboard": []}]
-    api_main._normalize_split_cards(decks)
+    _normalize_split_cards(decks)
     assert decks[0]["mainboard"][0]["card"] == "Fire // Ice"
 
 
 def test_parse_date_sortkey():
     """_parse_date_sortkey converts DD/MM/YY to YYMMDD."""
-    assert api_main._parse_date_sortkey("15/02/26") == "260215"
-    assert api_main._parse_date_sortkey("01/12/24") == "241201"
-    assert api_main._parse_date_sortkey("invalid") == "invalid"
+    assert _parse_date_sortkey("15/02/26") == "260215"
+    assert _parse_date_sortkey("01/12/24") == "241201"
+    assert _parse_date_sortkey("invalid") == "invalid"
 
 
 def test_deck_sort_key():
@@ -34,19 +40,19 @@ def test_deck_sort_key():
     d1 = {"date": "15/02/26", "rank": "2"}
     d2 = {"date": "15/02/26", "rank": "1"}
     d3 = {"date": "10/01/26", "rank": "1"}
-    key1 = api_main._deck_sort_key(d1)
-    key2 = api_main._deck_sort_key(d2)
-    key3 = api_main._deck_sort_key(d3)
+    key1 = _deck_sort_key(d1)
+    key2 = _deck_sort_key(d2)
+    key3 = _deck_sort_key(d3)
     assert key2 < key1  # same date, rank 1 before 2
     assert key1[0] < key3[0]  # 26/02/15 > 26/01/10 (negative for desc)
 
 
 def test_date_in_range():
     """_date_in_range correctly filters DD/MM/YY dates."""
-    assert api_main._date_in_range("15/02/26", "01/02/26", "28/02/26") is True
-    assert api_main._date_in_range("01/01/26", "15/02/26", "28/02/26") is False
-    assert api_main._date_in_range("01/03/26", "01/02/26", "28/02/26") is False
-    assert api_main._date_in_range("15/02/26", None, None) is True
+    assert _date_in_range("15/02/26", "01/02/26", "28/02/26") is True
+    assert _date_in_range("01/01/26", "15/02/26", "28/02/26") is False
+    assert _date_in_range("01/03/26", "01/02/26", "28/02/26") is False
+    assert _date_in_range("15/02/26", None, None) is True
 
 
 def test_filter_decks_for_query_event_ids_overrides_dates():
@@ -55,7 +61,7 @@ def test_filter_decks_for_query_event_ids_overrides_dates():
         {"deck_id": 2, "event_id": 2, "date": "15/02/26"},
     ]
     # When event_ids is provided, date_from/date_to are ignored
-    filtered = api_main._filter_decks_for_query(decks, None, "2", "01/01/26", "31/12/26")
+    filtered = _filter_decks_for_query(decks, None, "2", "01/01/26", "31/12/26")
     assert [d["deck_id"] for d in filtered] == [2]
 
 
@@ -64,5 +70,5 @@ def test_filter_decks_for_query_dates_when_no_event_ids():
         {"deck_id": 1, "event_id": 1, "date": "01/01/26"},
         {"deck_id": 2, "event_id": 2, "date": "15/02/26"},
     ]
-    filtered = api_main._filter_decks_for_query(decks, None, None, "01/02/26", "28/02/26")
+    filtered = _filter_decks_for_query(decks, None, None, "01/02/26", "28/02/26")
     assert [d["deck_id"] for d in filtered] == [2]

@@ -6,6 +6,8 @@ import FiltersPanel from '../components/FiltersPanel'
 import { useEventMetadata } from '../hooks/useEventMetadata'
 import Skeleton from '../components/Skeleton'
 import toast from 'react-hot-toast'
+import { heatmapColor } from '../lib/matchups'
+import { getTooltipPosition } from '../lib/tooltip'
 import { reportError } from '../utils'
 
 const DROPDOWN_MAX_HEIGHT = 240
@@ -14,39 +16,6 @@ const CELL_SIZE = 48
 
 type ViewMode = 'list' | 'matrix'
 type DataMode = 'archetypes' | 'players'
-
-const TOOLTIP_ESTIMATE = { width: 270, height: 100 }
-const TOOLTIP_PAD = 12
-
-/** Position tooltip so it stays inside the viewport (e.g. show above for bottom cells). */
-function getTooltipPosition(rect: DOMRect): { left: number; top: number; transform: string } {
-  const vw = window.innerWidth
-  const vh = window.innerHeight
-  const halfW = TOOLTIP_ESTIMATE.width / 2
-  const centerX = rect.left + rect.width / 2
-  const left = Math.max(TOOLTIP_PAD + halfW, Math.min(vw - TOOLTIP_PAD - halfW, centerX))
-  const showBelow = rect.bottom + 8 + TOOLTIP_ESTIMATE.height <= vh - TOOLTIP_PAD
-  if (showBelow) {
-    return { left, top: rect.bottom, transform: 'translate(-50%, 8px)' }
-  }
-  return { left, top: rect.top, transform: 'translate(-50%, calc(-100% - 8px))' }
-}
-
-/** Win rate 0–100 → heatmap color (red → yellow → green) with opacity for readability. */
-function heatmapColor(pct: number): string {
-  const t = Math.max(0, Math.min(100, pct)) / 100
-  let r: number
-  let g: number
-  if (t <= 0.5) {
-    r = 220
-    g = Math.round(80 + (220 - 80) * (t * 2))
-  } else {
-    r = Math.round(220 - (220 - 80) * ((t - 0.5) * 2))
-    g = 220
-  }
-  const b = 80
-  return `rgba(${r},${g},${b},0.35)`
-}
 
 export default function Matchups() {
   const { events, maxDate, lastEventDate, error: eventMetadataError } = useEventMetadata()

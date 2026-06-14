@@ -15,7 +15,7 @@ import {
 } from 'recharts'
 import { getMetagame, getFormatInfo, getCardLookup, getMetagameChurn, getMetagameHealth } from '../api'
 import type { CardLookupResult } from '../api'
-import type { ChurnReport, HealthReport } from '../types'
+import type { ChurnReport, ChurnArchetypeChange, HealthReport } from '../types'
 import CardHover from '../components/CardHover'
 import EmptyState from '../components/EmptyState'
 import EventSelector from '../components/EventSelector'
@@ -57,6 +57,12 @@ export default function Metagame() {
   const [churn, setChurn] = useState<ChurnReport | null>(null)
   const [churnTopN, setChurnTopN] = useState(8)
   const [churnLoading, setChurnLoading] = useState(false)
+  type ArchSortKey = 'archetype' | 'status' | 'rank' | 'rate'
+  const [archSortBy, setArchSortBy] = useState<ArchSortKey | null>(null)
+  const [archSortDesc, setArchSortDesc] = useState(true)
+  type CardSortKey = 'card' | 'current' | 'previous' | 'delta'
+  const [cardSortBy, setCardSortBy] = useState<CardSortKey | null>(null)
+  const [cardSortDesc, setCardSortDesc] = useState(true)
 
   useEffect(() => {
     const param = searchParams.get('event_ids') ?? searchParams.get('event_id')
@@ -196,6 +202,49 @@ export default function Metagame() {
   const colorDistribution = metagame?.color_distribution ?? []
   const colorCountDistribution = metagame?.color_count_distribution ?? []
   const topMain = metagame?.top_cards_main ?? []
+
+  const handleArchSort = (key: ArchSortKey) => {
+    if (archSortBy === key) setArchSortDesc((d) => !d)
+    else {
+      setArchSortBy(key)
+      setArchSortDesc(key !== 'archetype' && key !== 'status')
+    }
+  }
+  const handleCardSort = (key: CardSortKey) => {
+    if (cardSortBy === key) setCardSortDesc((d) => !d)
+    else {
+      setCardSortBy(key)
+      setCardSortDesc(key !== 'card')
+    }
+  }
+
+  const statusOrder: Record<ChurnArchetypeChange['status'], number> = { entered: 0, stable: 1, exited: 2 }
+  const sortedArchChanges = archSortBy == null
+    ? (churn?.archetype_changes ?? [])
+    : [...(churn?.archetype_changes ?? [])].sort((a, b) => {
+        let cmp = 0
+        switch (archSortBy) {
+          case 'archetype': cmp = a.archetype.localeCompare(b.archetype); break
+          case 'status': cmp = statusOrder[a.status] - statusOrder[b.status]; break
+          case 'rank': cmp = (a.rank_delta ?? 0) - (b.rank_delta ?? 0); break
+          case 'rate': cmp = a.play_rate_delta_pct - b.play_rate_delta_pct; break
+        }
+        return archSortDesc ? -cmp : cmp
+      })
+
+  const volatileCards = (churn?.most_volatile_cards ?? []).slice(0, 15)
+  const sortedVolatileCards = cardSortBy == null
+    ? volatileCards
+    : [...volatileCards].sort((a, b) => {
+        let cmp = 0
+        switch (cardSortBy) {
+          case 'card': cmp = a.card.localeCompare(b.card); break
+          case 'current': cmp = a.current_inclusion_pct - b.current_inclusion_pct; break
+          case 'previous': cmp = a.previous_inclusion_pct - b.previous_inclusion_pct; break
+          case 'delta': cmp = a.delta_pct - b.delta_pct; break
+        }
+        return cardSortDesc ? -cmp : cmp
+      })
 
   return (
     <div style={{ opacity: loading ? 0.6 : 1, transition: 'opacity 0.2s' }}>
@@ -671,14 +720,42 @@ export default function Metagame() {
                   <table>
                     <thead>
                       <tr>
-                        <th scope="col">Archetype</th>
-                        <th scope="col" style={{ textAlign: 'center' }}>Status</th>
-                        <th scope="col" style={{ textAlign: 'right' }}>Rank Δ</th>
-                        <th scope="col" style={{ textAlign: 'right' }}>Rate Δ</th>
+                        <th
+                          scope="col"
+                          style={{ cursor: 'pointer', userSelect: 'none' }}
+                          onClick={() => handleArchSort('archetype')}
+                          aria-sort={archSortBy === 'archetype' ? (archSortDesc ? 'descending' : 'ascending') : undefined}
+                        >
+                          Archetype {archSortBy === 'archetype' && (archSortDesc ? '↓' : '↑')}
+                        </th>
+                        <th
+                          scope="col"
+                          style={{ textAlign: 'center', cursor: 'pointer', userSelect: 'none' }}
+                          onClick={() => handleArchSort('status')}
+                          aria-sort={archSortBy === 'status' ? (archSortDesc ? 'descending' : 'ascending') : undefined}
+                        >
+                          Status {archSortBy === 'status' && (archSortDesc ? '↓' : '↑')}
+                        </th>
+                        <th
+                          scope="col"
+                          style={{ textAlign: 'right', cursor: 'pointer', userSelect: 'none' }}
+                          onClick={() => handleArchSort('rank')}
+                          aria-sort={archSortBy === 'rank' ? (archSortDesc ? 'descending' : 'ascending') : undefined}
+                        >
+                          Rank Δ {archSortBy === 'rank' && (archSortDesc ? '↓' : '↑')}
+                        </th>
+                        <th
+                          scope="col"
+                          style={{ textAlign: 'right', cursor: 'pointer', userSelect: 'none' }}
+                          onClick={() => handleArchSort('rate')}
+                          aria-sort={archSortBy === 'rate' ? (archSortDesc ? 'descending' : 'ascending') : undefined}
+                        >
+                          Rate Δ {archSortBy === 'rate' && (archSortDesc ? '↓' : '↑')}
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
-                      {churn.archetype_changes.map((row) => {
+                      {sortedArchChanges.map((row) => {
                         const statusColor = row.status === 'entered'
                           ? 'var(--success, #50c878)'
                           : row.status === 'exited'
@@ -719,14 +796,42 @@ export default function Metagame() {
                     <table>
                       <thead>
                         <tr>
-                          <th scope="col">Card</th>
-                          <th scope="col" style={{ textAlign: 'right' }}>Curr %</th>
-                          <th scope="col" style={{ textAlign: 'right' }}>Prev %</th>
-                          <th scope="col" style={{ textAlign: 'right' }}>Δ</th>
+                          <th
+                            scope="col"
+                            style={{ cursor: 'pointer', userSelect: 'none' }}
+                            onClick={() => handleCardSort('card')}
+                            aria-sort={cardSortBy === 'card' ? (cardSortDesc ? 'descending' : 'ascending') : undefined}
+                          >
+                            Card {cardSortBy === 'card' && (cardSortDesc ? '↓' : '↑')}
+                          </th>
+                          <th
+                            scope="col"
+                            style={{ textAlign: 'right', cursor: 'pointer', userSelect: 'none' }}
+                            onClick={() => handleCardSort('current')}
+                            aria-sort={cardSortBy === 'current' ? (cardSortDesc ? 'descending' : 'ascending') : undefined}
+                          >
+                            Curr % {cardSortBy === 'current' && (cardSortDesc ? '↓' : '↑')}
+                          </th>
+                          <th
+                            scope="col"
+                            style={{ textAlign: 'right', cursor: 'pointer', userSelect: 'none' }}
+                            onClick={() => handleCardSort('previous')}
+                            aria-sort={cardSortBy === 'previous' ? (cardSortDesc ? 'descending' : 'ascending') : undefined}
+                          >
+                            Prev % {cardSortBy === 'previous' && (cardSortDesc ? '↓' : '↑')}
+                          </th>
+                          <th
+                            scope="col"
+                            style={{ textAlign: 'right', cursor: 'pointer', userSelect: 'none' }}
+                            onClick={() => handleCardSort('delta')}
+                            aria-sort={cardSortBy === 'delta' ? (cardSortDesc ? 'descending' : 'ascending') : undefined}
+                          >
+                            Δ {cardSortBy === 'delta' && (cardSortDesc ? '↓' : '↑')}
+                          </th>
                         </tr>
                       </thead>
                       <tbody>
-                        {churn.most_volatile_cards.slice(0, 15).map((c) => {
+                        {sortedVolatileCards.map((c) => {
                           const color = c.delta_pct > 0 ? 'var(--success, #50c878)' : c.delta_pct < 0 ? 'var(--danger, #dc5050)' : 'var(--text-muted)'
                           return (
                             <tr key={c.card}>
