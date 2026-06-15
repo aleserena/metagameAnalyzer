@@ -5,7 +5,7 @@ import { updateDeck, getCardLookup, importDeckFromMoxfield } from '../../api'
 import { parseMoxfieldDeckList, formatMoxfieldDeckList, stripSetAndFoiling } from '../../lib/deckListParser'
 import { useAuth } from '../../contexts/AuthContext'
 import type { Deck } from '../../types'
-import CardSearchInput from '../CardSearchInput'
+import CommanderPairFields from '../event/CommanderPairFields'
 import Modal from '../Modal'
 import { getEDHArchetype, normalizeDeckListByLookup } from '../../lib/deckUtils'
 import { reportError } from '../../utils'
@@ -255,34 +255,20 @@ export default function DeckEditSection({ deck, onUpdate, onCardsSaved }: DeckEd
               <input id="deck-edit-rank" type="text" value={rank} onChange={(e) => setRank(e.target.value)} placeholder="1, 2, 3-4, 5-8, 9-16, 17-32, 33-64, 65-128, …" />
             </div>
             {isEDH && (
-              <>
-                <div className="form-group" style={{ marginBottom: 0, minWidth: 200 }}>
-                  <label htmlFor="deck-edit-commander1">Commander 1</label>
-                  <CardSearchInput
-                    id="deck-edit-commander1"
-                    value={commander1}
-                    onChange={(name) => {
-                      setCommander1(name)
-                      applyCommandersToDeckList(name, commander2)
-                    }}
-                    placeholder="Search commander..."
-                    aria-label="Commander 1"
-                  />
-                </div>
-                <div className="form-group" style={{ marginBottom: 0, minWidth: 200 }}>
-                  <label htmlFor="deck-edit-commander2">Commander 2</label>
-                  <CardSearchInput
-                    id="deck-edit-commander2"
-                    value={commander2}
-                    onChange={(name) => {
-                      setCommander2(name)
-                      applyCommandersToDeckList(commander1, name)
-                    }}
-                    placeholder="Partner / Background (optional)"
-                    aria-label="Commander 2"
-                  />
-                </div>
-              </>
+              <CommanderPairFields
+                id1="deck-edit-commander1"
+                id2="deck-edit-commander2"
+                commander1={commander1}
+                commander2={commander2}
+                onCommander1Change={(name) => {
+                  setCommander1(name)
+                  applyCommandersToDeckList(name, commander2)
+                }}
+                onCommander2Change={(name) => {
+                  setCommander2(name)
+                  applyCommandersToDeckList(commander1, name)
+                }}
+              />
             )}
             {!isEDH && (
               <div className="form-group" style={{ marginBottom: 0, minWidth: 140 }}>

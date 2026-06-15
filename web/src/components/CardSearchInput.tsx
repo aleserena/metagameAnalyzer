@@ -12,6 +12,8 @@ export interface CardSearchInputProps {
   id?: string
   'aria-label'?: string
   disabled?: boolean
+  /** Optional commander/partner role filter passed to the card search API. */
+  role?: string
 }
 
 export default function CardSearchInput({
@@ -21,6 +23,7 @@ export default function CardSearchInput({
   id,
   'aria-label': ariaLabel,
   disabled = false,
+  role,
 }: CardSearchInputProps) {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
@@ -82,7 +85,7 @@ export default function CardSearchInput({
     }
     setLoading(true)
     try {
-      const res = await getCardSearch(q)
+      const res = await getCardSearch(q, role)
       setOptions(res.data || [])
       setHighlightedIndex(0)
     } catch {
@@ -90,7 +93,7 @@ export default function CardSearchInput({
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [role])
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current)

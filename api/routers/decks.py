@@ -185,11 +185,15 @@ def list_decks(
     # Normalize player names for display (merge aliases)
     page = [{**d, "player": _normalize_player(d.get("player") or "")} for d in page]
     if is_admin == "admin" and event_id is not None and state.database_available():
-        players = list({d.get("player") or "" for d in page})
+        # Use the canonical player_id already on each deck so we can batch the email
+        # lookup into a single IN-query. Resolving by display name here is both slow
+        # (per-name full-table scans) and unsafe (it can create PlayerRows on a GET).
+        player_ids = list({d.get("player_id") for d in page if d.get("player_id") is not None})
         with _db.session_scope() as session:
-            email_map = _db.get_emails_for_players(session, players)
+            email_map = _db.get_emails_for_player_ids(session, player_ids)
         for d in page:
-            d["has_email"] = (d.get("player") or "") in email_map
+            pid = d.get("player_id")
+            d["has_email"] = pid is not None and pid in email_map
     return {"decks": page, "total": total, "skip": skip, "limit": limit}
 
 

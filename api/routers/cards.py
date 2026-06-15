@@ -24,7 +24,16 @@ def cards_lookup(body: CardLookupBody):
 
 
 @router.get("/api/v1/cards/search")
-def cards_search(q: str = Query("", description="Card name prefix for autocomplete")):
-    """Return card names matching the query prefix (Scryfall autocomplete)."""
-    data = autocomplete_cards(q)
+def cards_search(
+    q: str = Query("", description="Card name prefix for autocomplete"),
+    role: str | None = Query(
+        None,
+        description=(
+            "Optional commander/partner role filter: commander, partner, "
+            "friends_forever, background, doctors_companion, time_lord_doctor"
+        ),
+    ),
+):
+    """Return card names matching the query prefix, optionally filtered by role."""
+    data = autocomplete_cards(q, role=role)
     return {"data": data}

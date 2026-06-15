@@ -4,6 +4,7 @@ import {
   canonicalCardNameForCompare,
   defaultDeckEdit,
   getEDHArchetype,
+  getPartnerMode,
   normalizeDeckListByLookup,
 } from './deckUtils'
 import type { ParsedDeckList } from './deckListParser'
@@ -64,6 +65,50 @@ describe('getEDHArchetype', () => {
       Y: { color_identity: [] } as CardLookupResult,
     }
     expect(getEDHArchetype(['X', 'Y'], lookup)).toBe('Partner')
+  })
+})
+
+describe('getPartnerMode', () => {
+  const entry = (oracle_text: string, type_line = 'Legendary Creature'): CardLookupResult =>
+    ({ oracle_text, type_line }) as CardLookupResult
+
+  it('returns null role for missing or non-partner cards', () => {
+    expect(getPartnerMode(undefined).role).toBeNull()
+    expect(getPartnerMode(entry('Flying, vigilance')).role).toBeNull()
+    expect(getPartnerMode({ error: 'not found' } as unknown as CardLookupResult).role).toBeNull()
+  })
+
+  it('detects generic Partner', () => {
+    expect(getPartnerMode(entry('Partner (You can have two commanders if both have partner.)')).role).toBe(
+      'partner'
+    )
+  })
+
+  it('detects "Partner with [name]" and extracts the named card', () => {
+    const m = getPartnerMode(entry('Partner with Pir, Imaginative Rascal (When this creature enters...)'))
+    expect(m.role).toBe('partner_with')
+    expect(m.partnerWithName).toBe('Pir, Imaginative Rascal')
+  })
+
+  it('detects Choose a Background', () => {
+    expect(getPartnerMode(entry('Choose a Background (You can have a Background as a second commander.)')).role).toBe(
+      'background'
+    )
+  })
+
+  it('detects Friends forever', () => {
+    expect(getPartnerMode(entry('Friends forever (You can have two commanders if both have friends forever.)')).role).toBe(
+      'friends_forever'
+    )
+  })
+
+  it("maps Doctor's companion to a Time Lord Doctor secondary, and vice versa", () => {
+    expect(getPartnerMode(entry("Doctor's companion (You can have two commanders...)")).role).toBe(
+      'time_lord_doctor'
+    )
+    expect(getPartnerMode(entry('Flying', 'Legendary Creature — Time Lord Doctor')).role).toBe(
+      'doctors_companion'
+    )
   })
 })
 

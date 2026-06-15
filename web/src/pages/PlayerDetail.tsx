@@ -14,6 +14,8 @@ import PlayerAnalysisCharts from '../components/player/PlayerAnalysisCharts'
 import { getDateRangeFromPreset, reportError } from '../utils'
 import type { DatePreset } from '../utils'
 
+type RivalSortKey = 'opponent_player' | 'wins' | 'losses' | 'draws' | 'win_pct' | 'matches'
+
 export default function PlayerDetail() {
   const { playerId: playerIdParam } = useParams<{ playerId: string }>()
   const navigate = useNavigate()
@@ -44,6 +46,8 @@ export default function PlayerDetail() {
   const [h2hDetail, setH2hDetail] = useState<H2HDetail | null>(null)
   const [h2hDetailOpponentId, setH2hDetailOpponentId] = useState<number | null>(null)
   const [h2hLoading, setH2hLoading] = useState(false)
+  const [rivalSort, setRivalSort] = useState<RivalSortKey>('matches')
+  const [rivalSortDesc, setRivalSortDesc] = useState(true)
   const [similarPlayers, setSimilarPlayers] = useState<string[]>([])
   const [aliases, setAliases] = useState<Record<string, string>>({})
   const [mergeLoading, setMergeLoading] = useState(false)
@@ -69,6 +73,14 @@ export default function PlayerDetail() {
     const { dateFrom: from, dateTo: to } = getDateRangeFromPreset(maxDate, lastEventDate, preset)
     setDateFrom(from)
     setDateTo(to)
+  }
+
+  const handleRivalSort = (key: RivalSortKey) => {
+    if (rivalSort === key) setRivalSortDesc((d) => !d)
+    else {
+      setRivalSort(key)
+      setRivalSortDesc(true)
+    }
   }
 
   useEffect(() => {
@@ -220,17 +232,34 @@ export default function PlayerDetail() {
                 <table>
                   <thead>
                     <tr>
-                      <th scope="col">Opponent</th>
-                      <th scope="col" style={{ textAlign: 'center' }}>W</th>
-                      <th scope="col" style={{ textAlign: 'center' }}>L</th>
-                      <th scope="col" style={{ textAlign: 'center' }}>D</th>
-                      <th scope="col" style={{ textAlign: 'right' }}>Win%</th>
-                      <th scope="col" style={{ textAlign: 'right' }}>Matches</th>
+                      <th scope="col" style={{ cursor: 'pointer' }} onClick={() => handleRivalSort('opponent_player')}>
+                        Opponent {rivalSort === 'opponent_player' && (rivalSortDesc ? '↓' : '↑')}
+                      </th>
+                      <th scope="col" style={{ textAlign: 'center', cursor: 'pointer' }} onClick={() => handleRivalSort('wins')}>
+                        W {rivalSort === 'wins' && (rivalSortDesc ? '↓' : '↑')}
+                      </th>
+                      <th scope="col" style={{ textAlign: 'center', cursor: 'pointer' }} onClick={() => handleRivalSort('losses')}>
+                        L {rivalSort === 'losses' && (rivalSortDesc ? '↓' : '↑')}
+                      </th>
+                      <th scope="col" style={{ textAlign: 'center', cursor: 'pointer' }} onClick={() => handleRivalSort('draws')}>
+                        D {rivalSort === 'draws' && (rivalSortDesc ? '↓' : '↑')}
+                      </th>
+                      <th scope="col" style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => handleRivalSort('win_pct')}>
+                        Win% {rivalSort === 'win_pct' && (rivalSortDesc ? '↓' : '↑')}
+                      </th>
+                      <th scope="col" style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => handleRivalSort('matches')}>
+                        Matches {rivalSort === 'matches' && (rivalSortDesc ? '↓' : '↑')}
+                      </th>
                       <th scope="col" style={{ textAlign: 'right' }}>Formats</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {h2h!.opponents.map((opp) => {
+                    {[...h2h!.opponents].sort((a, b) => {
+                      const va = a[rivalSort]
+                      const vb = b[rivalSort]
+                      const cmp = typeof va === 'string' ? va.localeCompare(vb as string) : (va as number) - (vb as number)
+                      return rivalSortDesc ? -cmp : cmp
+                    }).map((opp) => {
                       const isExpanded = h2hDetailOpponentId === opp.opponent_player_id
                       const winColor = opp.win_pct >= 60 ? 'var(--success, #50c878)' : opp.win_pct <= 40 ? 'var(--danger, #dc5050)' : 'var(--text)'
                       return (
@@ -267,7 +296,6 @@ export default function PlayerDetail() {
                                         <th scope="col">Date</th>
                                         <th scope="col">Event</th>
                                         <th scope="col">Format</th>
-                                        <th scope="col">Rd</th>
                                         <th scope="col">Result</th>
                                         <th scope="col">Your deck</th>
                                         <th scope="col">Their deck</th>
@@ -285,7 +313,6 @@ export default function PlayerDetail() {
                                               </a>
                                             </td>
                                             <td>{m.format_id}</td>
-                                            <td style={{ color: 'var(--text-muted)' }}>{m.round ?? '—'}</td>
                                             <td style={{ color: rc, fontWeight: 600, textTransform: 'capitalize' }}>
                                               {m.result === 'intentional_draw' ? 'ID' : m.result}
                                             </td>

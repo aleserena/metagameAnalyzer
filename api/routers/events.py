@@ -470,23 +470,24 @@ def export_event(event_id: str):
                 event_dict = _db.event_row_to_dict(row)
                 decks = _db.get_decks_by_event(session, event_id)
 
-                # Collect matchups for all decks in this event
-                for d in decks:
-                    deck_id = d.get("deck_id")
-                    if deck_id is None:
-                        continue
-                    rows = _db.list_matchups_by_deck(session, deck_id)
-                    if rows:
-                        matchups.extend(rows)
+                # Collect matchups for all decks in this event (single batched query).
+                deck_ids = [d.get("deck_id") for d in decks if d.get("deck_id") is not None]
+                matchups.extend(_db.list_matchups_by_decks(session, deck_ids))
 
-                # Collect player emails only for players in this event
-                players = {
-                    (d.get("player") or "").strip()
+                # Collect player emails only for players in this event. Batch by
+                # player_id (resolving by display name does a per-name full-table scan).
+                pid_to_name = {
+                    d.get("player_id"): (d.get("player") or "").strip()
                     for d in decks
-                    if (d.get("player") or "").strip()
+                    if d.get("player_id") is not None and (d.get("player") or "").strip()
                 }
-                if players:
-                    player_emails = _db.get_emails_for_players(session, list(players))
+                if pid_to_name:
+                    email_by_id = _db.get_emails_for_player_ids(session, list(pid_to_name))
+                    player_emails = {
+                        pid_to_name[pid]: email
+                        for pid, email in email_by_id.items()
+                        if pid in pid_to_name
+                    }
 
                 # Collect distinct player_ids from decks and matchups for optional players array
                 player_ids: set[int] = set()
@@ -499,8 +500,9 @@ def export_event(event_id: str):
                     if pid is not None:
                         player_ids.add(pid)
                 players_list.clear()
+                player_rows = _db.get_players_by_ids(session, list(player_ids))
                 for pid in sorted(player_ids):
-                    row = _db.get_player_by_id(session, pid)
+                    row = player_rows.get(pid)
                     if row:
                         players_list.append({"id": row.id, "display_name": row.display_name or ""})
         except HTTPException:
@@ -1018,24 +1020,26 @@ def send_missing_deck_links(event_id: str, request: Request):
         if not ev:
             raise HTTPException(status_code=404, detail="Event not found")
         decks = session.query(_db.DeckRow).filter(_db.DeckRow.event_id == _db._event_id_str(event_id)).all()
-        missing_by_player = {}
+        # Group decks missing a list by player_id so emails can be batched in one
+        # query (resolving by display name does a per-name full-table scan).
+        missing_by_pid: dict[int, list] = {}
         for d in decks:
             main = getattr(d, "mainboard", None) or []
             if not (isinstance(main, list) and len(main) > 0):
-                p = (d.player or "").strip()
-                if p not in missing_by_player:
-                    missing_by_player[p] = []
-                missing_by_player[p].append(d)
-        players = list(missing_by_player.keys())
-        if not players:
+                pid = getattr(d, "player_id", None)
+                if pid is None:
+                    continue
+                missing_by_pid.setdefault(pid, []).append(d)
+        if not missing_by_pid:
             return {"sent": 0, "failed": []}
-        email_map = _db.get_emails_for_players(session, players)
+        email_map = _db.get_emails_for_player_ids(session, list(missing_by_pid))
         sent = 0
         failed = []
-        for canonical, addr in email_map.items():
-            deck_list = missing_by_player.get(canonical, [])
+        for pid, addr in email_map.items():
+            deck_list = missing_by_pid.get(pid, [])
             if not deck_list or not addr:
                 continue
+            player_name = (deck_list[0].player or "").strip() or str(pid)
             links_for_player = []
             for deck_row in deck_list:
                 _db.invalidate_upload_links_for_slot(session, event_id, _db.LINK_TYPE_DECK_UPDATE, deck_id=deck_row.deck_id)
@@ -1051,8 +1055,8 @@ def send_missing_deck_links(event_id: str, request: Request):
                 _email.send_email(addr, subject, body)
                 sent += 1
             except Exception:
-                logger.exception("Send missing-deck email failed for %s", canonical)
-                failed.append(canonical)
+                logger.exception("Send missing-deck email failed for %s", player_name)
+                failed.append(player_name)
         return {"sent": sent, "failed": failed}
 
 
@@ -1076,12 +1080,13 @@ def send_feedback_links(event_id: str, request: Request):
         decks = session.query(_db.DeckRow).filter(_db.DeckRow.event_id == _db._event_id_str(event_id)).all()
         if not decks:
             return {"sent": 0}
-        players = list({(d.player or "").strip() for d in decks})
-        email_map = _db.get_emails_for_players(session, players)
+        # Batch email lookup by player_id (name resolution does a per-name full-table scan).
+        player_ids = list({getattr(d, "player_id", None) for d in decks} - {None})
+        email_map = _db.get_emails_for_player_ids(session, player_ids)
         sent = 0
         for deck_row in decks:
-            canonical = (deck_row.player or "").strip()
-            addr = email_map.get(canonical)
+            pid = getattr(deck_row, "player_id", None)
+            addr = email_map.get(pid) if pid is not None else None
             if not addr:
                 continue
             _db.invalidate_upload_links_for_slot(session, event_id, _db.LINK_TYPE_FEEDBACK, deck_id=deck_row.deck_id)
@@ -1096,7 +1101,7 @@ def send_feedback_links(event_id: str, request: Request):
                 _email.send_email(addr, subject, body)
                 sent += 1
             except Exception:
-                logger.exception("Send feedback email failed for %s", canonical)
+                logger.exception("Send feedback email failed for %s", (deck_row.player or "").strip() or pid)
         return {"sent": sent}
 
 

@@ -38,7 +38,7 @@ import PageError from '../components/PageError'
 import PageSkeleton from '../components/PageSkeleton'
 import CardSearchInput from '../components/CardSearchInput'
 import { parseMoxfieldDeckList, formatMoxfieldDeckList } from '../lib/deckListParser'
-import { defaultDeckEdit, normalizeDeckListByLookup, type BulkDeckEdit } from '../lib/deckUtils'
+import { defaultDeckEdit, getEDHArchetype, normalizeDeckListByLookup, type BulkDeckEdit } from '../lib/deckUtils'
 import { cellStr } from '../lib/eventTable'
 import {
   apiMatchupsToPhases,
@@ -74,6 +74,7 @@ export default function EventDetail() {
   )
   const event = data?.event ?? null
   const decks = data?.decks ?? []
+  const isEDH = (event?.format_id ?? '').toLowerCase() === 'edh' || (event?.format_id ?? '').toLowerCase() === 'commander'
   const [editing, setEditing] = useState(false)
   const [editName, setEditName] = useState('')
   const [editStore, setEditStore] = useState('')
@@ -90,6 +91,7 @@ export default function EventDetail() {
   const [editDeckPlayer, setEditDeckPlayer] = useState('')
   const [editDeckRank, setEditDeckRank] = useState('')
   const [editDeckArchetype, setEditDeckArchetype] = useState('')
+  const [editDeckCommander2, setEditDeckCommander2] = useState('')
   const [savingDeck, setSavingDeck] = useState(false)
   const [deletingDeckId, setDeletingDeckId] = useState<number | null>(null)
   const [bulkDeckEdits, setBulkDeckEdits] = useState<Record<number, BulkDeckEdit>>({})
@@ -194,9 +196,10 @@ export default function EventDetail() {
       editDeckName !== (d.name ?? '') ||
       editDeckPlayer !== (d.player ?? '') ||
       editDeckRank !== (d.rank ?? '') ||
-      editDeckArchetype !== (d.archetype ?? (d.commanders?.length ? d.commanders[0] ?? '' : ''))
+      editDeckArchetype !== (isEDH ? (d.commanders?.[0] ?? '') : (d.archetype ?? '')) ||
+      editDeckCommander2 !== (d.commanders?.[1] ?? '')
     )
-  }, [deckBeingEdited, editingDeckId, editDeckName, editDeckPlayer, editDeckRank, editDeckArchetype])
+  }, [deckBeingEdited, editingDeckId, editDeckName, editDeckPlayer, editDeckRank, editDeckArchetype, editDeckCommander2, isEDH])
 
   const hasUnsavedEdits = eventEditDirty || deckModalDirty
   const blocker = useBlocker(hasUnsavedEdits || isUpdateModalOpen || isUploadDeckModalOpen || isConfirmModalOpen)
@@ -384,7 +387,12 @@ export default function EventDetail() {
     setEditDeckName(deck.name ?? '')
     setEditDeckPlayer(deck.player ?? '')
     setEditDeckRank(deck.rank ?? '')
-    setEditDeckArchetype(deck.archetype ?? (deck.commanders?.length ? deck.commanders[0] ?? '' : ''))
+    // For EDH the first field is the primary commander (not the derived archetype,
+    // which for partner decks reads "Partner {colors}"); the second field is the partner.
+    setEditDeckArchetype(
+      isEDH ? (deck.commanders?.[0] ?? '') : (deck.archetype ?? '')
+    )
+    setEditDeckCommander2(isEDH ? (deck.commanders?.[1] ?? '') : '')
   }
 
   const closeUpdateDeck = () => {
@@ -393,37 +401,38 @@ export default function EventDetail() {
     setEditDeckPlayer('')
     setEditDeckRank('')
     setEditDeckArchetype('')
+    setEditDeckCommander2('')
   }
 
   const saveDeckUpdate = async () => {
     if (editingDeckId == null) return
-    const isEDH = (event?.format_id ?? '').toLowerCase() === 'edh' || (event?.format_id ?? '').toLowerCase() === 'commander'
-    const commanderName = editDeckArchetype.trim()
-    if (isEDH && commanderName) {
-      setSavingDeck(true)
-      try {
-        const lookup = await getCardLookup([commanderName])
-        const invalid = !lookup[commanderName] || (lookup[commanderName] as { error?: string }).error
-        if (invalid) {
-          toast.error('Commander not found. Please select a valid card.')
-          return
-        }
-      } catch (e) {
-        toast.error(reportError(e))
-        return
-      } finally {
-        setSavingDeck(false)
-      }
-    }
-    setSavingDeck(true)
+    const commander1 = editDeckArchetype.trim()
+    const commanders = [commander1, editDeckCommander2.trim()].filter(Boolean)
     const payload: Parameters<typeof updateDeck>[1] = {
       name: editDeckName.trim() || undefined,
       player: editDeckPlayer.trim() || undefined,
       rank: editDeckRank.trim() || undefined,
       archetype: editDeckArchetype.trim() || undefined,
     }
-    if (isEDH && commanderName) {
-      payload.commanders = [commanderName]
+    if (isEDH && commanders.length) {
+      setSavingDeck(true)
+      try {
+        const lookup = await getCardLookup(commanders)
+        const invalid = commanders.filter((c) => !lookup[c] || (lookup[c] as { error?: string }).error)
+        if (invalid.length) {
+          toast.error(`Commander not found: ${invalid.join(', ')}. Please select valid cards.`)
+          setSavingDeck(false)
+          return
+        }
+        payload.commanders = commanders
+        payload.archetype = getEDHArchetype(commanders, lookup) || commander1 || undefined
+      } catch (e) {
+        toast.error(reportError(e))
+        setSavingDeck(false)
+        return
+      }
+    } else {
+      setSavingDeck(true)
     }
     updateDeck(editingDeckId, payload)
       .then(() => {
@@ -434,8 +443,6 @@ export default function EventDetail() {
       .catch((e) => toast.error(reportError(e)))
       .finally(() => setSavingDeck(false))
   }
-
-  const isEDH = (event?.format_id ?? '').toLowerCase() === 'edh' || (event?.format_id ?? '').toLowerCase() === 'commander'
 
   const openUploadDeckModal = (deck: Deck) => {
     setUploadDeckForDeckId(deck.deck_id)
@@ -1213,12 +1220,14 @@ export default function EventDetail() {
             player={editDeckPlayer}
             rank={editDeckRank}
             archetype={editDeckArchetype}
+            commander2={editDeckCommander2}
             isEDH={isEDH}
             playerOptions={playerOptionsForEditDeck}
             onNameChange={setEditDeckName}
             onPlayerChange={setEditDeckPlayer}
             onRankChange={setEditDeckRank}
             onArchetypeChange={setEditDeckArchetype}
+            onCommander2Change={setEditDeckCommander2}
             onSave={saveDeckUpdate}
             onCancel={closeUpdateDeck}
             saving={savingDeck}
