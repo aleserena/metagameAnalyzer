@@ -1,10 +1,13 @@
-import CardSearchInput from '../CardSearchInput'
+import CommanderPairFields from './CommanderPairFields'
 
 export interface UpdateDeckFormProps {
   name: string
   player: string
   rank: string
+  /** EDH: the primary commander. Non-EDH: the free-text archetype. */
   archetype: string
+  /** EDH only: the secondary (partner/background) commander. */
+  commander2?: string
   isEDH: boolean
   /** Suggested player names (existing players not already in this event). New names can be typed. */
   playerOptions?: string[]
@@ -12,6 +15,7 @@ export interface UpdateDeckFormProps {
   onPlayerChange: (v: string) => void
   onRankChange: (v: string) => void
   onArchetypeChange: (v: string) => void
+  onCommander2Change?: (v: string) => void
   onSave: () => void
   onCancel: () => void
   saving: boolean
@@ -24,12 +28,14 @@ export default function UpdateDeckForm({
   player,
   rank,
   archetype,
+  commander2 = '',
   isEDH,
   playerOptions = [],
   onNameChange,
   onPlayerChange,
   onRankChange,
   onArchetypeChange,
+  onCommander2Change,
   onSave,
   onCancel,
   saving,
@@ -77,16 +83,20 @@ export default function UpdateDeckForm({
             placeholder="e.g. 1, 2, 3-4, 5-8, 9-16, 17-32, 33-64, 65-128"
           />
         </label>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-          <span className="label">{isEDH ? 'Archetype (commander)' : 'Archetype'}</span>
-          {isEDH ? (
-            <CardSearchInput
-              value={archetype}
-              onChange={onArchetypeChange}
-              placeholder="Search commander..."
-              aria-label="Archetype (commander)"
-            />
-          ) : (
+        {isEDH ? (
+          <CommanderPairFields
+            id1="update-deck-commander1"
+            id2="update-deck-commander2"
+            commander1={archetype}
+            commander2={commander2}
+            onCommander1Change={onArchetypeChange}
+            onCommander2Change={onCommander2Change ?? (() => {})}
+            label1="Commander"
+            label2="Partner / Background"
+          />
+        ) : (
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+            <span className="label">Archetype</span>
             <input
               type="text"
               value={archetype}
@@ -94,8 +104,8 @@ export default function UpdateDeckForm({
               style={{ width: '100%', boxSizing: 'border-box' }}
               placeholder="Archetype"
             />
-          )}
-        </label>
+          </label>
+        )}
       </div>
       <div style={{ display: 'flex', gap: '0.5rem' }}>
         <button type="button" className="btn" onClick={onSave} disabled={saving}>

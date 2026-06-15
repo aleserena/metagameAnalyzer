@@ -942,6 +942,42 @@ def list_matchups_by_deck(session: Session, deck_id: int) -> list[dict]:
     return out
 
 
+def list_matchups_by_decks(session: Session, deck_ids: list[int]) -> list[dict]:
+    """Like :func:`list_matchups_by_deck` but for many decks in a single query.
+
+    Returns the flattened list of matchup dicts for all given ``deck_ids``
+    (ordered by deck, round). Avoids a per-deck round-trip when exporting an event.
+    """
+    if not deck_ids:
+        return []
+    Opp = aliased(PlayerRow)
+    rows = (
+        session.query(MatchupRow, Opp.display_name)
+        .outerjoin(Opp, MatchupRow.opponent_player_id == Opp.id)
+        .filter(MatchupRow.deck_id.in_(deck_ids))
+        .order_by(MatchupRow.deck_id, MatchupRow.round, MatchupRow.id)
+        .all()
+    )
+    out: list[dict] = []
+    for r, opp_disp in rows:
+        opp_name = (opp_disp or "").strip() or (r.opponent_player or "")
+        oa = r.opponent_archetype
+        if oa is not None and str(oa).strip():
+            oa = _normalize_archetype_or_commander_display(str(oa))
+        out.append({
+            "id": r.id,
+            "deck_id": r.deck_id,
+            "opponent_player_id": getattr(r, "opponent_player_id", None),
+            "opponent_player": opp_name,
+            "opponent_deck_id": r.opponent_deck_id,
+            "opponent_archetype": oa,
+            "result": r.result,
+            "result_note": r.result_note or "",
+            "round": r.round,
+        })
+    return out
+
+
 def count_effective_matchups_for_deck(session: Session, deck_id: int) -> int:
     """Count matchups where this deck is involved: as deck_id (reported by this deck) or as opponent_deck_id (reported by opponent)."""
     as_deck = session.query(MatchupRow).filter(MatchupRow.deck_id == deck_id).count()
@@ -1394,6 +1430,14 @@ def get_or_create_player(session: Session, display_name: str) -> tuple[int, str]
 
 def get_player_by_id(session: Session, player_id: int) -> PlayerRow | None:
     return session.query(PlayerRow).filter(PlayerRow.id == player_id).first()
+
+
+def get_players_by_ids(session: Session, player_ids: list[int]) -> dict[int, PlayerRow]:
+    """Return { player_id: PlayerRow } for the given ids in a single query."""
+    if not player_ids:
+        return {}
+    rows = session.query(PlayerRow).filter(PlayerRow.id.in_(player_ids)).all()
+    return {r.id: r for r in rows}
 
 
 def player_row_exists_in_database(session: Session, player_id: int) -> bool:
@@ -2024,19 +2068,47 @@ def get_card_uuids(session: Session) -> set[str]:
     return {u for (u,) in rows if u}
 
 
-def search_card_names(session: Session, prefix: str, limit: int = 20) -> list[str]:
-    """Return up to ``limit`` card names starting with ``prefix`` (case-insensitive)."""
+def _card_role_predicate(role: str | None):
+    """Return a SQLAlchemy predicate restricting cards to a commander ``role``.
+
+    Roles correspond to EDH commander/partner mechanics. Returns ``None`` when
+    ``role`` is empty or unrecognized (no extra filtering).
+    """
+    if not role:
+        return None
+    r = role.strip().lower()
+    is_legendary_creature = CardRow.type_line.ilike("%legendary%") & CardRow.type_line.ilike("%creature%")
+    if r == "commander":
+        return is_legendary_creature | CardRow.oracle_text.ilike("%can be your commander%")
+    if r == "partner":
+        # Generic Partner only — exclude "Partner with [name]" specific pairings.
+        return CardRow.oracle_text.ilike("%partner%") & ~CardRow.oracle_text.ilike("%partner with%")
+    if r == "friends_forever":
+        return CardRow.oracle_text.ilike("%friends forever%")
+    if r == "background":
+        return CardRow.type_line.ilike("%background%")
+    if r == "doctors_companion":
+        return CardRow.oracle_text.ilike("%doctor's companion%")
+    if r == "time_lord_doctor":
+        return CardRow.type_line.ilike("%time lord doctor%")
+    return None
+
+
+def search_card_names(session: Session, prefix: str, limit: int = 20, role: str | None = None) -> list[str]:
+    """Return up to ``limit`` card names starting with ``prefix`` (case-insensitive).
+
+    When ``role`` is given, results are further restricted to cards matching that
+    commander/partner mechanic (see :func:`_card_role_predicate`).
+    """
     p = (prefix or "").strip()
     if not p:
         return []
     esc = p.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    rows = (
-        session.query(CardRow.name)
-        .filter(CardRow.name.ilike(esc + "%", escape="\\"))
-        .order_by(CardRow.name)
-        .limit(limit)
-        .all()
-    )
+    query = session.query(CardRow.name).filter(CardRow.name.ilike(esc + "%", escape="\\"))
+    predicate = _card_role_predicate(role)
+    if predicate is not None:
+        query = query.filter(predicate)
+    rows = query.order_by(CardRow.name).limit(limit).all()
     return [r[0] for r in rows]
 
 

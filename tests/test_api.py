@@ -169,6 +169,40 @@ def test_get_decks_response_includes_player_id(client, sample_decks):
     assert any(d.get("player_id") == 2 for d in data["decks"])
 
 
+def test_get_decks_admin_has_email_uses_player_id_batch(sample_decks):
+    """Admin + event_id attaches has_email via a single batched player_id lookup.
+
+    Guards against the previous per-player name resolution (full-table scans + writes
+    on a GET) that made the admin decks endpoint slow.
+    """
+    from api.dependencies import optional_admin
+    from api.routers import decks as decks_router
+
+    app.dependency_overrides[optional_admin] = lambda: "admin"
+    try:
+        with (
+            patch.object(state, "database_available", return_value=True),
+            patch.object(decks_router._db, "session_scope"),
+            patch.object(
+                decks_router._db, "get_emails_for_player_ids", return_value={1: "p1@example.com"}
+            ) as mock_by_id,
+            patch.object(decks_router._db, "get_emails_for_players") as mock_by_name,
+        ):
+            event_id = sample_decks[0]["event_id"]
+            r = TestClient(app).get(f"/api/v1/decks?event_id={event_id}")
+        assert r.status_code == 200
+        by_pid = {d["player_id"]: d for d in r.json()["decks"]}
+        assert by_pid[1]["has_email"] is True
+        assert by_pid[2]["has_email"] is False
+        # Batched id lookup used; slow name-based path not called.
+        assert mock_by_id.called
+        called_ids = set(mock_by_id.call_args.args[1])
+        assert {1, 2} <= called_ids
+        assert not mock_by_name.called
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_get_deck_detail_includes_player_id(client, sample_decks):
     """GET /api/v1/decks/{id} returns deck with player_id when present."""
     deck_id = sample_decks[0]["deck_id"]
@@ -503,7 +537,16 @@ def test_get_cards_search_short_query(client):
     assert r.status_code == 200
     data = r.json()
     assert data.get("data") == []
-    mock_autocomplete.assert_called_once_with("A")
+    mock_autocomplete.assert_called_once_with("A", role=None)
+
+
+def test_get_cards_search_forwards_role(client):
+    """GET /api/v1/cards/search passes the role filter through to autocomplete_cards."""
+    with patch("api.routers.cards.autocomplete_cards", return_value=["Tymna the Weaver"]) as mock_autocomplete:
+        r = client.get("/api/v1/cards/search?q=Tym&role=partner")
+    assert r.status_code == 200
+    assert r.json()["data"] == ["Tymna the Weaver"]
+    mock_autocomplete.assert_called_once_with("Tym", role="partner")
 
 
 # --- Read-only public: date-range, format-info, decks compare/similar/analysis/duplicates ---
@@ -797,6 +840,41 @@ def test_get_event_by_id_404(client):
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/events/99999999")
     assert r.status_code == 404
+
+
+def test_send_feedback_links_matches_emails_by_player_id(client_with_overrides):
+    """Feedback emails are matched to decks by player_id via a single batched lookup."""
+    deck1 = SimpleNamespace(deck_id=101, player_id=1, player="Alice", mainboard=[])
+    deck2 = SimpleNamespace(deck_id=102, player_id=2, player="Bob", mainboard=[])
+
+    mock_session = MagicMock()
+    mock_session.query.return_value.filter.return_value.all.return_value = [deck1, deck2]
+
+    @contextmanager
+    def mock_session_scope():
+        yield mock_session
+
+    with (
+        patch("api.routers.events._db") as mock_db,
+        patch("api.email.is_email_configured", return_value=True),
+        patch("api.email.send_email") as mock_send,
+    ):
+        mock_db.session_scope = mock_session_scope
+        mock_db.get_event.return_value = SimpleNamespace(name="E", store="", location="")
+        mock_db.get_emails_for_player_ids.return_value = {1: "alice@example.com"}
+        mock_db.create_upload_link.return_value = None
+        mock_db.invalidate_upload_links_for_slot.return_value = None
+        r = client_with_overrides.post("/api/v1/events/m1/send-feedback-links")
+
+    assert r.status_code == 200
+    assert r.json()["sent"] == 1
+    # Batched by player_id, not per-name resolution.
+    assert mock_db.get_emails_for_player_ids.called
+    assert set(mock_db.get_emails_for_player_ids.call_args.args[1]) == {1, 2}
+    assert not mock_db.get_emails_for_players.called
+    # Only the player with an email (player_id=1 / Alice) is sent.
+    assert mock_send.call_count == 1
+    assert mock_send.call_args.args[0] == "alice@example.com"
 
 
 # --- Matchups (with client_with_overrides and mocked DB) ---

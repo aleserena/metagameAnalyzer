@@ -209,6 +209,7 @@ export interface CardLookupResult {
   mana_cost?: string
   cmc?: number
   type_line?: string
+  oracle_text?: string
   colors?: string[]
   color_identity?: string[]
   /** Both faces for double-faced cards (name + image per face). */
@@ -224,9 +225,10 @@ export async function getCardLookup(names: string[]): Promise<Record<string, Car
   })
 }
 
-export async function getCardSearch(query: string): Promise<{ data: string[] }> {
+export async function getCardSearch(query: string, role?: string): Promise<{ data: string[] }> {
   const q = encodeURIComponent(query.trim())
-  return fetchApi(`/cards/search?q=${q}`)
+  const roleParam = role ? `&role=${encodeURIComponent(role)}` : ''
+  return fetchApi(`/cards/search?q=${q}${roleParam}`)
 }
 
 export interface CardMeta {

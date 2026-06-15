@@ -491,11 +491,13 @@ def _scryfall_lookup_cards(card_names: list[str]) -> dict[str, dict]:
     return result
 
 
-def autocomplete_cards(prefix: str) -> list[str]:
+def autocomplete_cards(prefix: str, role: str | None = None) -> list[str]:
     """Return card names matching the given prefix (for typeahead).
 
     Queries the local MTGJSON-backed ``cards`` table when a database is available;
-    otherwise falls back to the Scryfall autocomplete API.
+    otherwise falls back to the Scryfall autocomplete API. When ``role`` is given,
+    the DB query restricts results to cards matching that commander/partner
+    mechanic (the Scryfall autocomplete fallback does not support role filtering).
     """
     q = (prefix or "").strip()
     if len(q) < AUTOCOMPLETE_MIN_LEN:
@@ -506,7 +508,7 @@ def autocomplete_cards(prefix: str) -> list[str]:
 
         if _db.is_database_available():
             with _db.session_scope() as session:
-                return _db.search_card_names(session, q, limit=20)
+                return _db.search_card_names(session, q, limit=20, role=role)
     except Exception:
         pass
 
