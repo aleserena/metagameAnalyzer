@@ -9,7 +9,7 @@ import { useFetch } from '../hooks/useFetch'
 import { getDateRangeFromPreset, normalizeSearchForFilter, reportError } from '../utils'
 import type { DatePreset } from '../utils'
 
-type SortKey = 'player' | 'wins' | 'top2' | 'top4' | 'top8' | 'points' | 'deck_count'
+type SortKey = 'player' | 'wins' | 'top2' | 'top4' | 'top8' | 'points' | 'deck_count' | 'match_win_pct'
 
 export default function Players() {
   const { maxDate, lastEventDate, error: eventMetadataError } = useEventMetadata()
@@ -50,7 +50,11 @@ export default function Players() {
   const sorted = [...players].sort((a, b) => {
     const va = a[sortBy]
     const vb = b[sortBy]
-    const cmp = typeof va === 'string' ? va.localeCompare(vb as string) : (va as number) - (vb as number)
+    // Players with no recorded matches (null win%) sort to the bottom.
+    const cmp =
+      typeof va === 'string'
+        ? va.localeCompare(vb as string)
+        : ((va as number | null) ?? -1) - ((vb as number | null) ?? -1)
     return sortDesc ? -cmp : cmp
   })
 
@@ -83,6 +87,7 @@ export default function Players() {
                 <th><Skeleton width={50} height={14} /></th>
                 <th><Skeleton width={60} height={14} /></th>
                 <th><Skeleton width={80} height={14} /></th>
+                <th><Skeleton width={50} height={14} /></th>
               </tr>
             </thead>
             <tbody>
@@ -96,6 +101,7 @@ export default function Players() {
                   <td><Skeleton width={30} height={16} /></td>
                   <td><Skeleton width={40} height={16} /></td>
                   <td><Skeleton width={50} height={16} /></td>
+                  <td><Skeleton width={40} height={16} /></td>
                 </tr>
               ))}
             </tbody>
@@ -217,12 +223,15 @@ export default function Players() {
               <th style={{ cursor: 'pointer' }} onClick={() => handleSort('deck_count')}>
                 Decks {sortBy === 'deck_count' && (sortDesc ? '↓' : '↑')}
               </th>
+              <th style={{ cursor: 'pointer' }} onClick={() => handleSort('match_win_pct')} title="Win% over recorded matches">
+                Win% {sortBy === 'match_win_pct' && (sortDesc ? '↓' : '↑')}
+              </th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan={8} style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '1.5rem' }}>
+                <td colSpan={9} style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '1.5rem' }}>
                   No players match the filter.
                 </td>
               </tr>
@@ -241,6 +250,7 @@ export default function Players() {
                   <td>{p.top8}</td>
                   <td>{p.points.toFixed(1)}</td>
                   <td>{p.deck_count}</td>
+                  <td>{p.match_win_pct != null ? `${p.match_win_pct}%` : '—'}</td>
                 </tr>
               ))
             )}

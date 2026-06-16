@@ -1,14 +1,19 @@
 """
-One-off maintenance script to fix a player name typo:
+Maintenance script to merge one player name into another (canonical name).
 
-- "Gustavo Rupulo" -> "Gustavo Rupolo"
-
-It merges the player row for the alias name into the canonical player row, so all
-related data (decks and matchups, and therefore event coverage via decks) is combined.
+Useful for fixing typos or consolidating duplicate player names. Merges the player row
+for the alias name into the canonical player row, so all related data (decks and matchups)
+is combined.
 
 Usage:
-  python3 -m scripts.fix_gustavo_rupolo --dry-run
-  python3 -m scripts.fix_gustavo_rupolo --apply
+  python3 -m scripts.fix_player_names --alias "Typo Name" --canonical "Correct Name" --dry-run
+  python3 -m scripts.fix_player_names --alias "Typo Name" --canonical "Correct Name" --apply
+
+Optional flags:
+  --alias ALIAS           Player name to merge from (required)
+  --canonical CANONICAL   Target player name (required)
+  --dry-run              Show what would change without applying
+  --apply                Apply the merge to the database
 """
 
 from __future__ import annotations

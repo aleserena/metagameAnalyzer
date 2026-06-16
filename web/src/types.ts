@@ -251,6 +251,10 @@ export interface PlayerStats {
   top8: number
   points: number
   deck_count: number
+  /** Number of recorded per-match results across this player's decks. */
+  recorded_matches: number
+  /** Win% over recorded matches; null when no matches are recorded. */
+  match_win_pct: number | null
 }
 
 /** Average deck analysis for an archetype (subset of deck analysis fields). */

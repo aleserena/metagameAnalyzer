@@ -896,6 +896,13 @@ export interface PlayerDetail {
   top8: number
   points: number
   deck_count: number
+  /** Total recorded per-match results (W/L/D) across this player's decks. */
+  recorded_matches: number
+  match_wins: number
+  match_losses: number
+  match_draws: number
+  /** Win% over recorded matches (wins / recorded_matches). */
+  match_win_pct: number
   decks: { deck_id: number; name: string; event_name: string; date: string; rank: string }[]
   /** True when DB has an email stored for this player (admin only). */
   has_email?: boolean

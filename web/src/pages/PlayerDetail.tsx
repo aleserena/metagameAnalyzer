@@ -215,6 +215,14 @@ export default function PlayerDetail() {
             <div className="label">Decks</div>
             <div>{data.deck_count}</div>
           </div>
+          <div>
+            <div className="label">Matches</div>
+            <div>{data.recorded_matches}</div>
+          </div>
+          <div>
+            <div className="label">Win%</div>
+            <div>{data.recorded_matches > 0 ? `${data.match_win_pct}%` : '—'}</div>
+          </div>
         </div>
       </div>
 
