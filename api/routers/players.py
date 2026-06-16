@@ -5,6 +5,7 @@ from datetime import datetime
 from urllib.parse import unquote
 
 from fastapi import Depends, HTTPException, Query, Request
+from sqlalchemy import case, func
 from src.mtgtop8.analyzer import (
     archetype_aggregate_analysis,
     archetype_distribution,
@@ -223,11 +224,85 @@ def get_players(
         p["player_id"] = next((d.get("player_id") for d in filtered if _normalize_player(d.get("player") or "") == canonical), None)
     if player_id is not None:
         players = [p for p in players if p.get("player_id") == player_id]
+    # Attach recorded-match win% (date-filtered when a range is active).
+    date_filtered = date_from is not None or date_to is not None or player_id is not None
+    deck_ids = (
+        [d.get("deck_id") for d in filtered if d.get("deck_id") is not None] if date_filtered else None
+    )
+    winrate_by_player = _match_winrate_by_player(deck_ids)
+    for p in players:
+        ms = winrate_by_player.get(p.get("player_id")) if p.get("player_id") is not None else None
+        p["recorded_matches"] = ms["recorded_matches"] if ms else 0
+        p["match_win_pct"] = ms["match_win_pct"] if ms else None
     return {"players": players}
 
 
 def _empty_player_stats() -> dict:
     return {"wins": 0, "top2": 0, "top4": 0, "top8": 0, "points": 0.0, "deck_count": 0}
+
+
+def _player_match_stats(deck_ids: list[int]) -> dict:
+    """Aggregate recorded per-match results (W/L/D) across the given decks.
+
+    Reads `MatchupRow` from the DB; the deck_ids should already be date-filtered
+    so the win% stays consistent with the rest of the (date-ranged) payload.
+    """
+    empty = {"recorded_matches": 0, "match_wins": 0, "match_losses": 0, "match_draws": 0, "match_win_pct": 0.0}
+    if not deck_ids or not state.database_available():
+        return empty
+    with _db.session_scope() as session:
+        rows = (
+            session.query(_db.MatchupRow.result)
+            .filter(_db.MatchupRow.deck_id.in_(deck_ids))
+            .filter(_db.MatchupRow.result.in_(["win", "loss", "draw", "intentional_draw"]))
+            .all()
+        )
+    total = len(rows)
+    if not total:
+        return empty
+    wins = sum(1 for (r,) in rows if (r or "").lower() == "win")
+    losses = sum(1 for (r,) in rows if (r or "").lower() == "loss")
+    return {
+        "recorded_matches": total,
+        "match_wins": wins,
+        "match_losses": losses,
+        "match_draws": total - wins - losses,
+        "match_win_pct": round(wins / total * 100, 1),
+    }
+
+
+def _match_winrate_by_player(deck_ids: list[int] | None) -> dict[int, dict]:
+    """Map player_id -> {recorded_matches, match_win_pct} from MatchupRow.
+
+    Aggregated in SQL grouped by player_id. If deck_ids is given (date-filtered
+    view), restrict to those decks so the win% matches the filtered leaderboard;
+    pass None to aggregate across all decks.
+    """
+    if not state.database_available():
+        return {}
+    if deck_ids is not None and not deck_ids:
+        return {}
+    wins_expr = func.sum(case((func.lower(_db.MatchupRow.result) == "win", 1), else_=0))
+    with _db.session_scope() as session:
+        q = (
+            session.query(_db.DeckRow.player_id, func.count().label("total"), wins_expr.label("wins"))
+            .join(_db.MatchupRow, _db.MatchupRow.deck_id == _db.DeckRow.deck_id)
+            .filter(_db.MatchupRow.result.in_(["win", "loss", "draw", "intentional_draw"]))
+            .filter(_db.DeckRow.player_id.isnot(None))
+        )
+        if deck_ids is not None:
+            q = q.filter(_db.DeckRow.deck_id.in_(deck_ids))
+        rows = q.group_by(_db.DeckRow.player_id).all()
+    out: dict[int, dict] = {}
+    for pid, total, wins in rows:
+        total = int(total or 0)
+        if not total:
+            continue
+        out[pid] = {
+            "recorded_matches": total,
+            "match_win_pct": round(int(wins or 0) / total * 100, 1),
+        }
+    return out
 
 
 def _player_detail_payload(
@@ -253,6 +328,7 @@ def _player_detail_payload(
         for d in player_decks
     ]
     deck_summaries.sort(key=lambda x: _deck_sort_key(x))
+    match_stats = _player_match_stats([d.get("deck_id") for d in player_decks if d.get("deck_id") is not None])
     return {
         "player": display,
         "player_id": player_id,
@@ -263,6 +339,7 @@ def _player_detail_payload(
         "points": stat["points"],
         "deck_count": stat["deck_count"],
         "decks": deck_summaries,
+        **match_stats,
     }
 
 
