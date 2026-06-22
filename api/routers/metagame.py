@@ -646,6 +646,17 @@ def get_metagame(
             ordered = [c for c in color_code_order if c in colors]
             if ordered:
                 row["colors"] = ordered
+
+    # Attach tournament wins (rank="1" decks) per archetype.
+    wins_by_arch: dict[str, int] = {}
+    for d in decks:
+        arch = (d.archetype or "").strip()
+        if arch and normalize_rank(d.rank or "") == "1":
+            wins_by_arch[arch.lower()] = wins_by_arch.get(arch.lower(), 0) + 1
+    for row in result.get("archetype_distribution", []):
+        arch = (row.get("archetype") or "").strip()
+        row["wins"] = wins_by_arch.get(arch.lower(), 0)
+
     full_leaderboard = player_leaderboard(
         decks, normalize_player=_normalize_player, rank_weights=rank_weights
     )
@@ -1233,11 +1244,13 @@ def get_archetype_detail(
         include_basic_lands=True,
     )
     deck_count_top8 = sum(1 for d in decks if is_top8(d.rank))
+    deck_count_wins = sum(1 for d in decks if normalize_rank(d.rank or "") == "1")
     display_arch = _db.normalize_archetype_display(decoded.strip()) or decoded.strip()
     return {
         "archetype": display_arch,
         "deck_count": len(decks),
         "deck_count_top8": deck_count_top8,
+        "deck_count_wins": deck_count_wins,
         "average_analysis": average_analysis,
         "top_cards_main": top_main,
         "top_players": top_players,

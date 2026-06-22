@@ -501,6 +501,7 @@ export async function getMatchupsSummary(params?: {
   return fetchApi(`/matchups/summary${q ? `?${q}` : ''}`)
 }
 
+
 export async function getMatchupsPlayersSummary(params?: {
   format_id?: string
   event_ids?: string

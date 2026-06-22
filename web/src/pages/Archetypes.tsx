@@ -31,7 +31,7 @@ export default function Archetypes() {
   const [lastEventDate, setLastEventDate] = useState<string | null>(null)
   const [events, setEvents] = useState<Event[]>([])
   const [formatName, setFormatName] = useState<string | null>(null)
-  type SortKey = 'archetype' | 'count' | 'pct' | 'countTop8' | 'pctTop8' | 'conversion'
+  type SortKey = 'archetype' | 'count' | 'pct' | 'countTop8' | 'pctTop8' | 'conversion' | 'wins'
   const [sortBy, setSortBy] = useState<SortKey>('pct')
   const [sortDesc, setSortDesc] = useState(true)
   const [filterColors, setFilterColors] = useState<string[]>([])
@@ -83,15 +83,15 @@ export default function Archetypes() {
 
   const archetypes = metagame?.archetype_distribution ?? []
   const archetypesTop8 = metagame?.archetype_distribution_top8 ?? []
-  const byName: Record<string, { archetype: string; count: number; pct: number; countTop8: number; pctTop8: number; conversion: number; colors?: string[] }> = {}
+  const byName: Record<string, { archetype: string; count: number; pct: number; countTop8: number; pctTop8: number; conversion: number; wins: number; colors?: string[] }> = {}
   for (const r of archetypes) {
     const key = (r.archetype || '').toLowerCase()
-    byName[key] = { ...r, countTop8: 0, pctTop8: 0, conversion: 0 }
+    byName[key] = { ...r, countTop8: 0, pctTop8: 0, conversion: 0, wins: r.wins ?? 0 }
   }
   for (const r of archetypesTop8) {
     const key = (r.archetype || '').toLowerCase()
     if (!byName[key]) {
-      byName[key] = { archetype: r.archetype, count: 0, pct: 0, countTop8: r.count, pctTop8: r.pct, conversion: 0, colors: r.colors }
+      byName[key] = { archetype: r.archetype, count: 0, pct: 0, countTop8: r.count, pctTop8: r.pct, conversion: 0, wins: 0, colors: r.colors }
     } else {
       byName[key].countTop8 = r.count
       byName[key].pctTop8 = r.pct
@@ -137,6 +137,9 @@ export default function Archetypes() {
         break
       case 'conversion':
         cmp = a.conversion - b.conversion
+        break
+      case 'wins':
+        cmp = a.wins - b.wins
         break
     }
     return sortDesc ? -cmp : cmp
@@ -322,6 +325,14 @@ export default function Archetypes() {
                   >
                     Conversion {sortBy === 'conversion' && (sortDesc ? '↓' : '↑')}
                   </th>
+                  <th
+                    style={{ textAlign: 'right', cursor: 'pointer', userSelect: 'none' }}
+                    onClick={() => handleSort('wins')}
+                    title="Sort by total match wins"
+                    aria-sort={sortBy === 'wins' ? (sortDesc ? 'descending' : 'ascending') : undefined}
+                  >
+                    Wins {sortBy === 'wins' && (sortDesc ? '↓' : '↑')}
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -348,6 +359,7 @@ export default function Archetypes() {
                       <td style={{ textAlign: 'right' }} title={`${row.countTop8} / ${row.count} decks`}>
                         {row.count > 0 ? `${row.conversion}%` : '—'}
                       </td>
+                      <td style={{ textAlign: 'right' }}>{row.wins > 0 ? row.wins : '—'}</td>
                     </tr>
                   )
                 })}
