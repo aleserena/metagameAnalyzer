@@ -247,6 +247,7 @@ export default function ArchetypeDetail() {
       (row.opponent_archetype || '').trim().toLowerCase() !== (detail.archetype || '').trim().toLowerCase()
   )
 
+
   const handleMatchupSort = (key: MatchupSortKey) => {
     if (matchupSortBy === key) setMatchupSortDesc((d) => !d)
     else {
@@ -312,6 +313,14 @@ export default function ArchetypeDetail() {
               {' · '}
               <span title={`${detail.deck_count_top8} of ${detail.deck_count} decks made top 8`}>
                 Conversion: {Math.round((detail.deck_count_top8 / detail.deck_count) * 1000) / 10}%
+              </span>
+            </>
+          )}
+          {(detail.deck_count_wins ?? 0) > 0 && (
+            <>
+              {' · '}
+              <span title="Number of 1st-place tournament finishes">
+                {detail.deck_count_wins} tournament win{detail.deck_count_wins !== 1 ? 's' : ''}
               </span>
             </>
           )}
