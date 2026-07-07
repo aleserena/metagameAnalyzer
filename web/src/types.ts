@@ -42,6 +42,8 @@ export interface ArchetypeDistribution {
   archetype: string
   count: number
   pct: number
+  /** Number of tournament wins (1st place finishes). */
+  wins?: number
   /** Commander-based color identity (WUBRG), when available. */
   colors?: string[]
 }
@@ -287,6 +289,7 @@ export interface ArchetypeDetail {
   archetype: string
   deck_count: number
   deck_count_top8?: number
+  deck_count_wins?: number
   average_analysis: ArchetypeAverageAnalysis
   top_cards_main: TopCard[]
   top_players?: PlayerStats[]

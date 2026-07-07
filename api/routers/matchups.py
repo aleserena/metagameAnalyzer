@@ -24,6 +24,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _to_effective_wld(result: str) -> tuple[int, int, int]:
+    raw = (result or "loss").strip().lower()
+    if raw == "intentional_draw":
+        return (0, 0, 1)
+    if raw == "intentional_draw_win":
+        return (1, 0, 0)
+    if raw == "intentional_draw_loss":
+        return (0, 1, 0)
+    canonical = _matchup_result_to_canonical(result or "loss")
+    if canonical == "win":
+        return (1, 0, 0)
+    if canonical == "loss":
+        return (0, 1, 0)
+    return (0, 0, 1)
+
+
 def _front_face_name(name: str) -> str:
     """Dual-faced style 'Front // Back' -> 'Front'. Unifies e.g. Norman Osborn and Norman Osborn // Green Goblin."""
     s = (name or "").strip()
@@ -96,19 +112,7 @@ def get_matchups_summary(
                 canonical_archetype.setdefault(raw.lower(), raw)
 
     def to_effective_wld(row):
-        raw = (row.get("result") or "loss").strip().lower()
-        if raw == "intentional_draw":
-            return (0, 0, 1)
-        if raw == "intentional_draw_win":
-            return (1, 0, 0)
-        if raw == "intentional_draw_loss":
-            return (0, 1, 0)
-        canonical = _matchup_result_to_canonical(row.get("result") or "loss")
-        if canonical == "win":
-            return (1, 0, 0)
-        if canonical == "loss":
-            return (0, 1, 0)
-        return (0, 0, 1)  # draw
+        return _to_effective_wld(row.get("result") or "loss")
 
     def norm_arch(name: str) -> str:
         return canonical_archetype.get((name or "").lower(), name or "(unknown)")
@@ -229,6 +233,7 @@ def get_matchups_summary(
         "min_matches": min_matches,
         "include_opponents_below_min": include_opponents_below_min,
     }
+
 
 
 @router.get("/api/v1/matchups/players-summary", dependencies=[Depends(require_database)], tags=["Matchups"])
