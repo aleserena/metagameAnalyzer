@@ -26,22 +26,17 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 
 from api import db as _db
 
 
 def _load_env() -> None:
-    project_root = Path(__file__).resolve().parent.parent
-    env_base = project_root / ".env"
-    if not env_base.exists():
-        return
-    try:
-        from dotenv import load_dotenv
+    """Load .env and the DB_ENV override (.env.dev/.env.staging/.env.prod).
 
-        load_dotenv(env_base, override=False)
-    except Exception:
-        return
+    api.config does the layered load; api.db does not import it, so without this
+    the script sees no DATABASE_URL and DB_ENV=prod silently has no effect.
+    """
+    import api.config  # noqa: F401
 
 
 def _pick_merge(
