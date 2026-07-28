@@ -1815,7 +1815,7 @@ def merge_players_by_names(session: Session, alias: str, canonical: str) -> None
 
     # Resolve the alias side by display_name first. Callers such as add_player_alias persist
     # the alias row before merging, and resolve_name_to_player_id checks aliases before
-    # players, so it would answer with the canonical id and make this a silent no-op â€”
+    # players, so it would answer with the canonical id and make this a silent no-op —
     # leaving a duplicate players row that splits the player across the matchup matrix.
     dup = session.query(PlayerRow).filter(PlayerRow.display_name == alias).first()
     pid_alias = dup.id if dup is not None else resolve_name_to_player_id(session, alias)[0]
