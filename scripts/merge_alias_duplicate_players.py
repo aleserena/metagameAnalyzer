@@ -15,11 +15,15 @@ Run with --apply repeatedly until "no merges" if the DB had chained duplicates (
 
 Requires PostgreSQL (``DATABASE_URL``).
 
+Pass ``--db-env`` to choose the database. Without it the ambient ``DB_ENV`` decides, and
+``.env`` sets that to ``staging`` — so omitting it operates on staging, not production.
+Every run prints the database it resolved to; read that line before trusting the output.
+
 Examples:
-  python3 -m scripts.merge_alias_duplicate_players --dry-run
-  python3 -m scripts.merge_alias_duplicate_players --apply
-  python3 -m scripts.merge_alias_duplicate_players --apply --case-insensitive
-  python3 -m scripts.merge_alias_duplicate_players --apply --keep-redundant-aliases
+  python3 -m scripts.merge_alias_duplicate_players --dry-run --db-env prod
+  python3 -m scripts.merge_alias_duplicate_players --apply --db-env prod
+  python3 -m scripts.merge_alias_duplicate_players --apply --db-env staging --case-insensitive
+  python3 -m scripts.merge_alias_duplicate_players --apply --db-env prod --keep-redundant-aliases
 """
 
 from __future__ import annotations
@@ -28,15 +32,7 @@ import argparse
 import json
 
 from api import db as _db
-
-
-def _load_env() -> None:
-    """Load .env and the DB_ENV override (.env.dev/.env.staging/.env.prod).
-
-    api.config does the layered load; api.db does not import it, so without this
-    the script sees no DATABASE_URL and DB_ENV=prod silently has no effect.
-    """
-    import api.config  # noqa: F401
+from scripts._env import VALID_DB_ENVS, load_env
 
 
 def _pick_merge(
@@ -66,6 +62,11 @@ def main() -> None:
         action="store_true",
         help="Do not delete player_aliases rows whose alias equals the target display_name",
     )
+    parser.add_argument(
+        "--db-env",
+        choices=VALID_DB_ENVS,
+        help="Which database to target. Overrides DB_ENV; .env defaults it to staging.",
+    )
     args = parser.parse_args()
 
     if not args.dry_run and not args.apply:
@@ -73,7 +74,8 @@ def main() -> None:
     if args.dry_run and args.apply:
         parser.error("Use only one of --dry-run or --apply")
 
-    _load_env()
+    target = load_env(args.db_env)
+    print(f"target database: {target}")
     if not _db.is_database_available():
         raise RuntimeError("Database not configured (DATABASE_URL unset or invalid).")
 
