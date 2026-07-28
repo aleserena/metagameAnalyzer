@@ -8,8 +8,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from api.db import (
+    PlayerRow,
     get_or_create_player,
     get_player_by_id,
+    merge_players_by_names,
     resolve_name_to_player_id,
     set_player_alias,
 )
@@ -71,3 +73,43 @@ def test_resolve_name_to_player_id_with_alias(db_session_rollback):
     direct_id, direct_name = resolve_name_to_player_id(session, "Bob")
     assert direct_id == pid
     assert direct_name == "Bob"
+
+
+def test_merge_players_by_names_merges_duplicate_when_alias_row_already_exists(db_session_rollback):
+    """The duplicate is merged even if the alias row was written first.
+
+    ``add_player_alias`` persists the alias before merging. Resolving the alias
+    side by alias table first would return the canonical id, making the merge a
+    silent no-op and leaving a duplicate players row that splits the player's
+    record across the matchup matrix.
+    """
+    session = db_session_rollback
+    dup_id, _ = get_or_create_player(session, "ZZTest Dal Miro")
+    canon_id, _ = get_or_create_player(session, "ZZTest Dalmiro Vilca")
+    assert dup_id != canon_id
+
+    set_player_alias(session, "ZZTest Dal Miro", "ZZTest Dalmiro Vilca")
+    session.flush()
+
+    merge_players_by_names(session, "ZZTest Dal Miro", "ZZTest Dalmiro Vilca")
+    session.flush()
+
+    assert get_player_by_id(session, dup_id) is None, "duplicate players row should be merged away"
+    assert get_player_by_id(session, canon_id) is not None
+    remaining = session.query(PlayerRow).filter(PlayerRow.display_name == "ZZTest Dal Miro").first()
+    assert remaining is None
+
+
+def test_merge_players_by_names_is_noop_without_a_duplicate_row(db_session_rollback):
+    """An alias with no duplicate players row leaves the canonical player untouched."""
+    session = db_session_rollback
+    canon_id, _ = get_or_create_player(session, "ZZTest Solo Player")
+    set_player_alias(session, "ZZTest Solo Nickname", "ZZTest Solo Player")
+    session.flush()
+
+    merge_players_by_names(session, "ZZTest Solo Nickname", "ZZTest Solo Player")
+    session.flush()
+
+    row = get_player_by_id(session, canon_id)
+    assert row is not None
+    assert row.display_name == "ZZTest Solo Player"
