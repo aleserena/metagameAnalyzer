@@ -260,9 +260,10 @@ def sync_prices() -> dict:
 #
 # The syncs download hundreds of MB and can run for minutes, which would exceed
 # an HTTP request timeout. The admin endpoints start a background thread and the
-# UI polls ``get_sync_status``. Status is process-local (in-memory): a server
+# UI polls ``get_sync_status``. Job status is process-local (in-memory): a server
 # restart resets it to idle, which is fine since the DB upserts are idempotent.
-# Only one sync runs at a time (they touch the same table).
+# The last *successful* completion time is persisted separately (see LAST_SYNC_KEYS)
+# so the UI can show it after a restart. Only one sync runs at a time (same table).
 
 _JOB_NAMES = ("metadata", "prices")
 _JOB_FNS: dict[str, Callable[[], dict]] = {"metadata": sync_metadata, "prices": sync_prices}
@@ -279,17 +280,77 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# The in-memory registry above is process-local, so a restart loses "when did we last
+# sync?" — which is exactly what the Settings page needs to show. Successful runs are
+# therefore also recorded in the ``settings`` table (key/value, no migration needed).
+LAST_SYNC_KEYS = {"metadata": "mtgjson_last_sync_metadata", "prices": "mtgjson_last_sync_prices"}
+
+
+def _record_last_sync(name: str, finished_at: str, result: dict) -> None:
+    """Persist a successful sync's completion time. Best-effort: never fails the job."""
+    try:
+        from api import db as _db
+
+        if not _db.is_database_available():
+            return
+        with _db.session_scope() as session:
+            _db.set_setting(session, LAST_SYNC_KEYS[name], {"finished_at": finished_at, "result": result})
+    except Exception:  # noqa: BLE001 - bookkeeping only; the sync itself already succeeded
+        logger.exception("Could not record last sync time for %r", name)
+
+
+def get_last_sync_times() -> dict:
+    """Return {job_name: ISO timestamp | None} for the last successful sync of each job.
+
+    Falls back to MAX(cards.updated_at) for the metadata job so cards synced before
+    this bookkeeping existed still report a time instead of "never".
+    """
+    times: dict[str, str | None] = {name: None for name in _JOB_NAMES}
+    try:
+        from api import db as _db
+
+        if not _db.is_database_available():
+            return times
+        with _db.session_scope() as session:
+            for name, key in LAST_SYNC_KEYS.items():
+                value = _db.get_setting(session, key)
+                if isinstance(value, dict):
+                    times[name] = value.get("finished_at")
+            if times["metadata"] is None:
+                fallback = _db.get_cards_last_updated(session)
+                if fallback is not None:
+                    # The column is naive but stores UTC; tag it so the browser
+                    # doesn't read it as local time.
+                    if fallback.tzinfo is None:
+                        fallback = fallback.replace(tzinfo=timezone.utc)
+                    times["metadata"] = fallback.isoformat()
+    except Exception:  # noqa: BLE001 - status must stay readable even if the DB is down
+        logger.exception("Could not read last MTGJSON sync times")
+    return times
+
+
 def get_sync_status() -> dict:
-    """Return the current sync job status (which job is running, and per-job state)."""
+    """Return the current sync job status (which job is running, and per-job state).
+
+    Each job carries ``last_success_at``: the last *persisted* successful completion,
+    which survives restarts unlike the in-memory ``finished_at``.
+    """
+    last = get_last_sync_times()  # outside the lock: this hits the DB
     with _JOB_LOCK:
-        return {"running": _RUNNING["name"], "jobs": {k: dict(v) for k, v in _JOBS.items()}}
+        running = _RUNNING["name"]
+        jobs = {k: dict(v) for k, v in _JOBS.items()}
+    for name, job in jobs.items():
+        job["last_success_at"] = last.get(name)
+    return {"running": running, "jobs": jobs}
 
 
 def _run_job(name: str, fn: Callable[[], dict]) -> None:
     try:
         result = fn()
+        finished_at = _now_iso()
         with _JOB_LOCK:
-            _JOBS[name].update(status="success", finished_at=_now_iso(), result=result, error=None)
+            _JOBS[name].update(status="success", finished_at=finished_at, result=result, error=None)
+        _record_last_sync(name, finished_at, result)
     except Exception as exc:  # noqa: BLE001 - surfaced to the UI via status
         logger.exception("MTGJSON sync job %r failed", name)
         with _JOB_LOCK:

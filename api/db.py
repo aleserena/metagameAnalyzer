@@ -2073,6 +2073,15 @@ def get_card_uuids(session: Session) -> set[str]:
     return {u for (u,) in rows if u}
 
 
+def get_cards_last_updated(session: Session):
+    """Return MAX(cards.updated_at) — when card metadata was last upserted, or None.
+
+    Used as a fallback "last synced" timestamp for cards synced before the sync time
+    was recorded in ``settings`` (see ``api/services/mtgjson.py``).
+    """
+    return session.query(func.max(CardRow.updated_at)).scalar()
+
+
 def _card_role_predicate(role: str | None):
     """Return a SQLAlchemy predicate restricting cards to a commander ``role``.
 
