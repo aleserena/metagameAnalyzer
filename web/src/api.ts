@@ -1099,6 +1099,8 @@ export type MtgjsonSyncJob = {
   finished_at: string | null
   result: { cards_synced?: number; prices_updated?: number } | null
   error: string | null
+  /** Last successful completion, persisted server-side (survives restarts). */
+  last_success_at: string | null
 }
 
 export type MtgjsonSyncStatus = {

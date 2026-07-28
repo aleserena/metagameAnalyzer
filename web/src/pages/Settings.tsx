@@ -32,6 +32,13 @@ const DEFAULT_RANK_WEIGHTS: Record<string, number> = {
   '65-128': 0.125,
 }
 
+/** Format a sync timestamp for display, e.g. "27/07/2026, 14:32". */
+function formatSyncTime(iso: string | null | undefined): string {
+  if (!iso) return 'Never'
+  const d = new Date(iso)
+  return isNaN(d.getTime()) ? 'Unknown' : d.toLocaleString()
+}
+
 export default function Settings() {
   const [aliases, setAliases] = useState<Record<string, string>>({})
   const [newAlias, setNewAlias] = useState('')
@@ -433,6 +440,33 @@ export default function Settings() {
             {clearingDecks ? 'Clearing...' : 'Clear decks.json'}
           </button>
         </div>
+        {/* Only rendered once the status has loaded — otherwise every user would
+            briefly see "Never" regardless of when the last sync actually ran. */}
+        {syncStatus && (
+          <div
+            style={{
+              display: 'flex',
+              gap: '1.5rem',
+              flexWrap: 'wrap',
+              marginTop: '0.75rem',
+              fontSize: '0.85rem',
+              color: 'var(--text-muted)',
+            }}
+          >
+            <span>
+              Cards last synced:{' '}
+              <span style={{ color: 'var(--text)' }}>
+                {formatSyncTime(syncStatus.jobs.metadata.last_success_at)}
+              </span>
+            </span>
+            <span>
+              Prices last updated:{' '}
+              <span style={{ color: 'var(--text)' }}>
+                {formatSyncTime(syncStatus.jobs.prices.last_success_at)}
+              </span>
+            </span>
+          </div>
+        )}
         {syncStatus?.running != null && (
           <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '0.75rem' }}>
             {syncStatus.running === 'metadata' ? 'Card metadata sync' : 'Price sync'} running in the

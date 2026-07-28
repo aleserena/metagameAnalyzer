@@ -160,6 +160,34 @@ def _load_decks_from_db() -> None:
         logger.exception("Failed to load decks from DB: %s", e)
 
 
+def log_split_player_identities() -> None:
+    """Warn when an alias string still has a ``players`` row of its own.
+
+    That duplicate splits one person across two ids: the leaderboard merges them by
+    name, but the matchup matrix keys off the id and shows two separate rows, so
+    neither carries the player's full record. Detection only — the merge is applied
+    deliberately via ``scripts.merge_alias_duplicate_players``.
+    """
+    if not state.database_available():
+        return
+    try:
+        with _db.session_scope() as session:
+            dupes = _db.collect_alias_duplicate_player_merges(session)
+    except Exception as e:
+        logger.warning("Could not check for split player identities: %s", e)
+        return
+    if not dupes:
+        return
+    detail = "; ".join(f"{alias!r} (id={dup_id}) -> id={canon_id}" for dup_id, canon_id, alias in dupes)
+    logger.warning(
+        "Split player identities detected (%d): %s. These players appear twice on the "
+        "matchup matrix. Fix with: python3 -m scripts.merge_alias_duplicate_players --apply",
+        len(dupes),
+        detail,
+        extra={"event": "split_player_identities", "count": len(dupes)},
+    )
+
+
 def _persist_decks_to_db(decks: list[dict], origin: str = None) -> None:
     """Write decks to DB (upsert each). Resolve player name to player_id before each upsert. Then reload state.decks from DB."""
     if not _database_available() or _db is None:

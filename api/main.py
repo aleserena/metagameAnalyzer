@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 from api.routers import router as api_router
 from api.state import (
+    log_split_player_identities,
     state,
 )
 
@@ -44,6 +45,7 @@ _project_root = Path(__file__).resolve().parent.parent  # used by the static-fil
 async def lifespan(_app):
     """Log startup and shutdown for monitoring (e.g. Railway)."""
     logger.info("Application startup", extra={"event": "startup"})
+    log_split_player_identities()
     yield
     logger.info("Application shutdown", extra={"event": "shutdown"})
 

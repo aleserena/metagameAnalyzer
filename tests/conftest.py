@@ -3,6 +3,11 @@
 import pytest
 from fastapi.testclient import TestClient
 
+# Load .env / .env.$DB_ENV up front. api.db does not import api.config, so without this
+# the DB-backed tests only see DATABASE_URL when another module imported api.main first
+# (alphabetical luck) and silently skip when run on their own.
+import api.config  # noqa: F401,E402  isort:skip
+
 # Import app and auth/DB dependencies for override fixture (done lazily to avoid import side effects in non-API tests)
 _app_ref = None
 _dep_refs = None

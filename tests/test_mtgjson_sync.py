@@ -191,6 +191,60 @@ def test_sync_job_runs_in_background_and_reports_status(monkeypatch):
         release.set()
 
 
+def test_get_sync_status_exposes_last_success_at(monkeypatch):
+    """Each job in the status carries the persisted last-successful-sync timestamp."""
+    monkeypatch.setattr(
+        mtgjson,
+        "get_last_sync_times",
+        lambda: {"metadata": "2026-07-20T10:00:00+00:00", "prices": None},
+    )
+    jobs = mtgjson.get_sync_status()["jobs"]
+    assert jobs["metadata"]["last_success_at"] == "2026-07-20T10:00:00+00:00"
+    assert jobs["prices"]["last_success_at"] is None
+
+
+def test_get_last_sync_times_without_database(monkeypatch):
+    """Without a database the last-sync lookup returns None per job instead of raising."""
+    from api import db as _db
+
+    monkeypatch.setattr(_db, "is_database_available", lambda: False)
+    assert mtgjson.get_last_sync_times() == {"metadata": None, "prices": None}
+
+
+def test_successful_job_records_last_sync_time(monkeypatch):
+    """A successful run persists its completion time via _record_last_sync."""
+    recorded = {}
+    monkeypatch.setitem(mtgjson._JOB_FNS, "metadata", lambda: {"cards_synced": 3})
+    monkeypatch.setattr(
+        mtgjson,
+        "_record_last_sync",
+        lambda name, finished_at, result: recorded.update(name=name, finished_at=finished_at, result=result),
+    )
+    with mtgjson._JOB_LOCK:
+        mtgjson._RUNNING["name"] = None
+        mtgjson._JOBS["metadata"].update(status="idle", started_at=None, finished_at=None, result=None, error=None)
+
+    mtgjson.start_sync_job("metadata")
+    assert _wait_until(lambda: mtgjson.get_sync_status()["running"] is None)
+    assert recorded["name"] == "metadata"
+    assert recorded["result"] == {"cards_synced": 3}
+    assert recorded["finished_at"] == mtgjson.get_sync_status()["jobs"]["metadata"]["finished_at"]
+
+
+def test_failed_job_does_not_record_last_sync_time(monkeypatch):
+    """A failed run leaves the persisted last-sync time untouched."""
+    calls = []
+    monkeypatch.setitem(mtgjson._JOB_FNS, "prices", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(mtgjson, "_record_last_sync", lambda *a: calls.append(a))
+    with mtgjson._JOB_LOCK:
+        mtgjson._RUNNING["name"] = None
+        mtgjson._JOBS["prices"].update(status="idle", started_at=None, finished_at=None, result=None, error=None)
+
+    mtgjson.start_sync_job("prices")
+    assert _wait_until(lambda: mtgjson.get_sync_status()["jobs"]["prices"]["status"] == "error")
+    assert calls == []
+
+
 def test_sync_job_captures_error(monkeypatch):
     def boom():
         raise RuntimeError("download failed")

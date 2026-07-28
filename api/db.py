@@ -1813,7 +1813,12 @@ def merge_players_by_names(session: Session, alias: str, canonical: str) -> None
     if pid_canonical is None:
         pid_canonical, display = get_or_create_player(session, canonical)
 
-    pid_alias, _ = resolve_name_to_player_id(session, alias)
+    # Resolve the alias side by display_name first. Callers such as add_player_alias persist
+    # the alias row before merging, and resolve_name_to_player_id checks aliases before
+    # players, so it would answer with the canonical id and make this a silent no-op —
+    # leaving a duplicate players row that splits the player across the matchup matrix.
+    dup = session.query(PlayerRow).filter(PlayerRow.display_name == alias).first()
+    pid_alias = dup.id if dup is not None else resolve_name_to_player_id(session, alias)[0]
     if pid_alias is None or pid_alias == pid_canonical:
         return
 
@@ -2066,6 +2071,15 @@ def get_card_uuids(session: Session) -> set[str]:
     """Return all non-null ``mtgjson_uuid`` values (the printings we need prices for)."""
     rows = session.query(CardRow.mtgjson_uuid).filter(CardRow.mtgjson_uuid.isnot(None)).all()
     return {u for (u,) in rows if u}
+
+
+def get_cards_last_updated(session: Session):
+    """Return MAX(cards.updated_at) — when card metadata was last upserted, or None.
+
+    Used as a fallback "last synced" timestamp for cards synced before the sync time
+    was recorded in ``settings`` (see ``api/services/mtgjson.py``).
+    """
+    return session.query(func.max(CardRow.updated_at)).scalar()
 
 
 def _card_role_predicate(role: str | None):

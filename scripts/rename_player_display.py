@@ -4,9 +4,14 @@ sync denormalized decks.player, matchup opponent strings, and inverse rows.
 
 Use on production (Railway) after SSH/shell with DATABASE_URL, or locally against a copy.
 
+Pass ``--db-env`` to choose the database. Without it the ambient ``DB_ENV`` decides, and
+``.env`` sets that to ``staging`` — so omitting it operates on staging, not production
+(a player id from prod will usually report "No player with id=N" there). Every run prints
+the database it resolved to; read that line before trusting the output.
+
 Examples:
-  python3 -m scripts.rename_player_display --player-id 43 --to "Pedro Picco" --dry-run
-  python3 -m scripts.rename_player_display --player-id 43 --to "Pedro Picco" --apply
+  python3 -m scripts.rename_player_display --player-id 43 --to "Pedro Picco" --dry-run --db-env prod
+  python3 -m scripts.rename_player_display --player-id 43 --to "Pedro Picco" --apply --db-env prod
 
 After --apply, restart the API or reload decks so in-memory caches pick up deck.player changes.
 """
@@ -15,22 +20,9 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 
 from api import db as _db
-
-
-def _load_env() -> None:
-    project_root = Path(__file__).resolve().parent.parent
-    env_base = project_root / ".env"
-    if not env_base.exists():
-        return
-    try:
-        from dotenv import load_dotenv
-
-        load_dotenv(env_base, override=False)
-    except Exception:
-        return
+from scripts._env import VALID_DB_ENVS, load_env
 
 
 def main() -> None:
@@ -44,6 +36,11 @@ def main() -> None:
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument(
+        "--db-env",
+        choices=VALID_DB_ENVS,
+        help="Which database to target. Overrides DB_ENV; .env defaults it to staging.",
+    )
     args = parser.parse_args()
 
     if not args.dry_run and not args.apply:
@@ -51,7 +48,8 @@ def main() -> None:
     if args.dry_run and args.apply:
         parser.error("Use only one of --dry-run or --apply")
 
-    _load_env()
+    target = load_env(args.db_env)
+    print(f"target database: {target}")
     if not _db.is_database_available():
         raise RuntimeError("Database not configured (DATABASE_URL unset or invalid).")
 
