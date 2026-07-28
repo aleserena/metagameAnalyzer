@@ -2077,9 +2077,16 @@ def _card_role_predicate(role: str | None):
     if not role:
         return None
     r = role.strip().lower()
-    is_legendary_creature = CardRow.type_line.ilike("%legendary%") & CardRow.type_line.ilike("%creature%")
     if r == "commander":
-        return is_legendary_creature | CardRow.oracle_text.ilike("%can be your commander%")
+        # Legendary Vehicles/Spacecraft are commander-legal since the 2025 rules change.
+        commander_type = (
+            CardRow.type_line.ilike("%creature%")
+            | CardRow.type_line.ilike("%vehicle%")
+            | CardRow.type_line.ilike("%spacecraft%")
+        )
+        return (CardRow.type_line.ilike("%legendary%") & commander_type) | CardRow.oracle_text.ilike(
+            "%can be your commander%"
+        )
     if r == "partner":
         # Generic Partner only — exclude "Partner with [name]" specific pairings.
         return CardRow.oracle_text.ilike("%partner%") & ~CardRow.oracle_text.ilike("%partner with%")

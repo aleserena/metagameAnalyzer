@@ -31,6 +31,12 @@ def test_role_predicate_commander_includes_legendary_creature_and_can_be_command
     assert "can be your commander" in sql
 
 
+def test_role_predicate_commander_includes_legendary_vehicles_and_spacecraft():
+    sql = _sql(_card_role_predicate("commander"))
+    assert "vehicle" in sql
+    assert "spacecraft" in sql
+
+
 def test_role_predicate_partner_excludes_partner_with():
     sql = _sql(_card_role_predicate("partner"))
     assert "%partner%" in sql
