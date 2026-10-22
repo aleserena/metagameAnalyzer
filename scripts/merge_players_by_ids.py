@@ -5,10 +5,14 @@ Maintenance script: merge one or more player rows into a canonical player by **i
 Uses `api.db.merge_players`: repoints decks, matchups, emails, aliases, then
 deletes each merged-away `PlayerRow`.
 
-Usage (DATABASE_URL in env or `.env`):
+Pass `--db-env` to choose the database. Without it the ambient `DB_ENV` decides, and
+`.env` sets that to `staging` — so omitting it operates on staging, not production.
+Every run prints the database it resolved to; read that line before trusting the output.
 
-    python3 -m scripts.merge_players_by_ids --merge-from 101 102 --to 42 --dry-run
-    python3 -m scripts.merge_players_by_ids --merge-from 101 102 --to 42 --apply
+Usage:
+
+    python3 -m scripts.merge_players_by_ids --merge-from 101 102 --to 42 --dry-run --db-env prod
+    python3 -m scripts.merge_players_by_ids --merge-from 101 102 --to 42 --apply --db-env prod
 
 Optional:
 
@@ -19,22 +23,9 @@ Optional:
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
 from api import db as _db
-
-
-def _load_env() -> None:
-    project_root = Path(__file__).resolve().parent.parent
-    env_base = project_root / ".env"
-    if not env_base.exists():
-        return
-    try:
-        from dotenv import load_dotenv
-
-        load_dotenv(env_base, override=False)
-    except Exception:
-        return
+from scripts._env import VALID_DB_ENVS, load_env
 
 
 def _count_decks(session, player_id: int) -> int:
@@ -76,9 +67,15 @@ def main() -> None:
     )
     parser.add_argument("--dry-run", action="store_true", help="Show plan only")
     parser.add_argument("--apply", action="store_true", help="Write changes")
+    parser.add_argument(
+        "--db-env",
+        choices=VALID_DB_ENVS,
+        help="Which database to target. Overrides DB_ENV; .env defaults it to staging.",
+    )
     args = parser.parse_args()
 
-    _load_env()
+    target = load_env(args.db_env)
+    print(f"target database: {target}")
 
     if not args.dry_run and not args.apply:
         parser.error("Specify either --dry-run or --apply")
