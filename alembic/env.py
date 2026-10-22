@@ -37,8 +37,8 @@ if config.config_file_name is not None:
     # Allow DATABASE_URL to override sqlalchemy.url (only if it looks like a postgres URL)
     url = (os.getenv("DATABASE_URL") or "").strip()
     if url and (url.startswith("postgresql://") or url.startswith("postgres://")):
-        if url.startswith("postgres://"):
-            url = url.replace("postgres://", "postgresql://", 1)
+        # Pin psycopg2: SQLAlchemy 2.1+ maps a bare postgresql:// to psycopg (v3), which isn't installed.
+        url = "postgresql+psycopg2://" + url.split("://", 1)[1]
         config.set_main_option("sqlalchemy.url", url)
 
 target_metadata = Base.metadata
@@ -70,8 +70,8 @@ def run_migrations_online() -> None:
             "DATABASE_URL must be a full PostgreSQL URL (postgresql://user:password@host:port/database). "
             "You have something like host:port only; copy the full DATABASE_URL from Railway or your provider."
         )
-    if url.startswith("postgres://"):
-        url = url.replace("postgres://", "postgresql://", 1)
+    # Pin psycopg2: SQLAlchemy 2.1+ maps a bare postgresql:// to psycopg (v3), which isn't installed.
+    url = "postgresql+psycopg2://" + url.split("://", 1)[1]
     # For remote hosts (e.g. Railway), enforce SSL and allow time for DB to wake
     connect_args = {}
     if "localhost" not in url and "127.0.0.1" not in url:

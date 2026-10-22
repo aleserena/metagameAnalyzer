@@ -171,8 +171,9 @@ def _get_engine():
             "DATABASE_URL is set but not a PostgreSQL URL (expected postgresql://user:pass@host:port/db). Ignoring."
         )
         return None
-    if url.startswith("postgres://"):
-        url = url.replace("postgres://", "postgresql://", 1)
+    # Pin the psycopg2 driver: SQLAlchemy 2.1+ maps a bare postgresql:// to psycopg (v3),
+    # which isn't installed, so create_engine would fail and silently disable the DB.
+    url = "postgresql+psycopg2://" + url.split("://", 1)[1]
     try:
         return create_engine(url, pool_pre_ping=True, echo=os.getenv("SQL_ECHO", "").lower() in ("1", "true"))
     except Exception as e:
