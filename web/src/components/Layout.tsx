@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, Outlet, useLocation } from 'react-router-dom'
 import { Toaster } from 'react-hot-toast'
 import Navbar from './Navbar'
+import { useAuth } from '../contexts/AuthContext'
 import { GITHUB_REPO } from '../config'
 import { fetchWithTimeout } from '../utils'
 
@@ -17,13 +18,16 @@ export default function Layout() {
   const location = useLocation()
   const [buildId, setBuildId] = useState<string | null>(null)
   const [dbEnv, setDbEnv] = useState<string | null>(null)
+  const [dbStatus, setDbStatus] = useState<string | null>(null)
+  const { user } = useAuth()
 
   useEffect(() => {
     fetchWithTimeout('/api/v1/info')
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error('Info fetch failed'))))
-      .then((data: { build_id?: string; db_env?: string }) => {
+      .then((data: { build_id?: string; db_env?: string; db_status?: string }) => {
         setBuildId(data.build_id ?? 'unknown')
         setDbEnv(data.db_env ?? 'unknown')
+        setDbStatus(data.db_status ?? null)
       })
       .catch(() => {
         setBuildId('unknown')
@@ -58,6 +62,13 @@ export default function Layout() {
     <div className="layout">
       <Navbar />
       <main className="main">
+        {user === 'admin' && dbStatus === 'unavailable' && (
+          <div className="error" role="alert">
+            <strong>Database unavailable.</strong> DATABASE_URL is set but the API cannot use the database, so
+            the site is running without data and changes will not be saved. Check the deploy logs
+            (event=db_unavailable) and /api/v1/health.
+          </div>
+        )}
         <Outlet />
       </main>
       <footer className="app-footer">

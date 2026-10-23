@@ -35,7 +35,8 @@ def test_health(client):
     """GET /api/v1/health returns ok."""
     r = client.get("/api/v1/health")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok"}
+    assert r.json()["status"] == "ok"
+    assert r.json()["database"] in ("ok", "not_configured")
 
 
 def test_info(client):
@@ -47,6 +48,7 @@ def test_info(client):
     assert "db_env" in data
     assert data["build_id"] in ("dev",) or len(data["build_id"]) == 7
     assert data["db_env"] in ("dev", "staging", "prod", "postgres", "json")
+    assert data["db_status"] in ("ok", "unavailable", "not_configured")
 
 
 def test_get_decks_pagination(client, sample_decks):
@@ -903,6 +905,35 @@ def test_get_matchups_summary(client_with_overrides):
     )
     assert r3.status_code == 200
     assert r3.json()["include_opponents_below_min"] is True
+
+
+def test_get_matchups_summary_ignores_unknown_archetype(client_with_overrides):
+    """Matchups where either side is "(unknown)" or blank are excluded from the archetype table."""
+    @contextmanager
+    def mock_session_scope():
+        yield None
+
+    def row(deck_id, arch, opp, result="win"):
+        return {
+            "deck_id": deck_id, "opponent_deck_id": None, "archetype": arch,
+            "opponent_archetype": opp, "result": result, "round": 1,
+            "format_id": "EDH", "event_id": "e1", "date": "01/01/26",
+        }
+
+    rows = [
+        row(1, "Tymna Kraum", "Kinnan"),
+        row(2, "Tymna Kraum", "(unknown)"),
+        row(3, "(Unknown)", "Kinnan"),
+        row(4, "Kinnan", None),
+    ]
+    with patch("api.routers.matchups._db") as mock_db:
+        mock_db.session_scope = mock_session_scope
+        mock_db.list_matchups_with_deck_info.return_value = rows
+        r = client_with_overrides.get("/api/v1/matchups/summary")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["archetypes"] == ["Kinnan", "Tymna Kraum"]
+    assert all(e["matches"] == 1 for e in data["list"])
 
 
 # --- POST /api/v1/load ---

@@ -4,8 +4,10 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import requests
 from fastapi import Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
+from src.mtgtop8.hadouken import HadoukenEvent, fetch_hadouken_event
 from src.mtgtop8.normalize import (
     canonical_card_name_for_compare as _canonical_card_key,
 )
@@ -27,6 +29,8 @@ from api.schemas.events import (
     DeckPairPreview,
     EventExportData,
     EventResponse,
+    HadoukenApplyBody,
+    HadoukenPreviewBody,
     MergeConflictItem,
     MergeEventsBody,
     MergePreviewResponse,
@@ -36,6 +40,7 @@ from api.schemas.settings import (
     SendFeedbackLinkToPlayerBody,
 )
 from api.schemas.upload import CreateUploadLinksBody
+from api.services import hadouken as _hadouken
 from api.state import (
     _events_from_decks,
     _get_event_by_id_from_decks,
@@ -926,6 +931,54 @@ def add_blank_deck_to_event(event_id: str):
         _db.upsert_deck(session, blank, origin=_db.ORIGIN_MANUAL)
     _load_decks_from_db()
     return {"event_id": event_id, "deck_id": deck_id, "message": "Deck added"}
+
+
+def _fetch_hadouken_or_error(url: str) -> HadoukenEvent:
+    try:
+        hev = fetch_hadouken_event(url)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except requests.RequestException as e:
+        logger.warning("Hadouken fetch failed for %s: %s", url, e)
+        raise HTTPException(status_code=502, detail="Could not download the Hadouken page")
+    if not hev.standings:
+        raise HTTPException(status_code=400, detail="No standings found on the Hadouken page")
+    return hev
+
+
+@router.post("/api/v1/events/{event_id}/hadouken/preview", dependencies=[Depends(require_admin), Depends(require_database)])
+def preview_hadouken_import(event_id: str, body: HadoukenPreviewBody):
+    """Preview completing this event with players and round results from a Hadouken league page (read-only)."""
+    hev = _fetch_hadouken_or_error(body.url)
+    try:
+        with _db.session_scope() as session:
+            return _hadouken.build_preview(session, event_id, hev)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Event not found")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/api/v1/events/{event_id}/hadouken/apply", dependencies=[Depends(require_admin), Depends(require_database)])
+def apply_hadouken_import(event_id: str, body: HadoukenApplyBody):
+    """Create missing decks and import all round results from a Hadouken league page into this event."""
+    hev = _fetch_hadouken_or_error(body.url)
+    try:
+        with _db.session_scope() as session:
+            result = _hadouken.apply_import(
+                session,
+                event_id,
+                hev,
+                body.player_map,
+                {name: edit.model_dump() for name, edit in body.standings.items()},
+            )
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Event not found")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    _load_decks_from_db()
+    _invalidate_events_cache()
+    return result
 
 
 @router.post("/api/v1/events/{event_id}/upload-links", dependencies=[Depends(require_admin), Depends(require_database)])

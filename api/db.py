@@ -160,29 +160,48 @@ class CardRow(Base):
     updated_at = Column(DateTime, nullable=False, server_default=func.now())
 
 
+def redact_db_url(text: str) -> str:
+    """Mask the password in any ``scheme://user:password@host`` URL inside ``text``.
+
+    Engine errors can echo the full DATABASE_URL, and those messages end up in logs,
+    the health endpoint, emails and GitHub issues.
+    """
+    from api.logging_config import redact_secrets
+
+    return redact_secrets(text)
+
+
 def _get_engine():
+    global _engine_error
     url = os.getenv("DATABASE_URL")
     if not url or not url.strip():
         return None
     url = url.strip()
     # Must be a full postgres URL (postgresql:// or postgres://), not just host:port
     if not (url.startswith("postgresql://") or url.startswith("postgres://")):
-        logger.debug(
-            "DATABASE_URL is set but not a PostgreSQL URL (expected postgresql://user:pass@host:port/db). Ignoring."
-        )
+        _engine_error = "DATABASE_URL is set but not a PostgreSQL URL (expected postgresql://user:pass@host:port/db)"
+        logger.error("%s. Database features disabled.", _engine_error, extra={"event": "db_unavailable"})
         return None
     # Pin the psycopg2 driver: SQLAlchemy 2.1+ maps a bare postgresql:// to psycopg (v3),
     # which isn't installed, so create_engine would fail and silently disable the DB.
     url = "postgresql+psycopg2://" + url.split("://", 1)[1]
     try:
-        return create_engine(url, pool_pre_ping=True, echo=os.getenv("SQL_ECHO", "").lower() in ("1", "true"))
+        return create_engine(
+            url,
+            pool_pre_ping=True,
+            # Bounded connect so the health check fails fast instead of hanging on an unreachable host
+            connect_args={"connect_timeout": 10},
+            echo=os.getenv("SQL_ECHO", "").lower() in ("1", "true"),
+        )
     except Exception as e:
-        logger.warning("Failed to create DB engine: %s. Database features disabled.", e)
+        _engine_error = f"Failed to create DB engine: {redact_db_url(e)}"
+        logger.error("%s. Database features disabled.", _engine_error, extra={"event": "db_unavailable"})
         return None
 
 
 _engine = None
 _engine_tried = False  # So we only try once and don't spam logs on every request
+_engine_error: str | None = None  # Why the engine is None although DATABASE_URL is set
 
 
 def get_engine():
@@ -196,6 +215,30 @@ def get_engine():
 
 def is_database_available() -> bool:
     return get_engine() is not None
+
+
+def is_database_configured() -> bool:
+    """Whether DATABASE_URL is set at all (i.e. the deployment expects a database)."""
+    return bool((os.getenv("DATABASE_URL") or "").strip())
+
+
+def get_engine_error() -> str | None:
+    """Why the engine could not be created although DATABASE_URL is set, else None."""
+    get_engine()
+    return _engine_error
+
+
+def ping_database() -> str | None:
+    """Run ``SELECT 1``. Return None when the DB answers, else a redacted error message."""
+    engine = get_engine()
+    if engine is None:
+        return _engine_error or "Database not configured (DATABASE_URL unset)"
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return None
+    except Exception as e:
+        return f"Database unreachable: {redact_db_url(e)}"
 
 
 def get_session_factory():

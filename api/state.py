@@ -16,12 +16,17 @@ from src.mtgtop8.storage import load_json, save_json
 from api.config import DATA_DIR
 from api.helpers import _event_from_deck_dict, _normalize_split_cards
 
+logger = logging.getLogger(__name__)
+
+# Set when api.db fails to import, so the startup DB check can report it instead of the
+# app silently running without a database.
+db_import_error: str | None = None
 try:
     from api import db as _db
-except ImportError:
+except ImportError as e:
     _db = None
-
-logger = logging.getLogger(__name__)
+    db_import_error = f"Could not import api.db: {e}"
+    logger.error("%s. Database features disabled.", db_import_error, extra={"event": "db_unavailable"})
 
 
 class AppState:

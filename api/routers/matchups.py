@@ -50,6 +50,11 @@ def _front_face_name(name: str) -> str:
     return s
 
 
+def _is_unknown_archetype(name: str | None) -> bool:
+    s = (name or "").strip().lower()
+    return not s or s == "(unknown)"
+
+
 @router.get("/api/v1/matchups/summary", dependencies=[Depends(require_database)], tags=["Matchups"])
 def get_matchups_summary(
     format_id: str | None = Query(None),
@@ -101,6 +106,9 @@ def get_matchups_summary(
                 continue
         # Bye and drop count as rounds for validation but are not used in matchup calculations
         if (r.get("result") or "").strip().lower() in ("bye", "drop"):
+            continue
+        # Unknown archetypes (missing or literal "(unknown)") carry no metagame signal
+        if _is_unknown_archetype(r.get("archetype")) or _is_unknown_archetype(r.get("opponent_archetype")):
             continue
         filtered.append(r)
 

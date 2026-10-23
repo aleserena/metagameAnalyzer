@@ -1,4 +1,4 @@
-import type { Deck, MetagameReport, Event, PlayerStats, SimilarDeck, ArchetypeDetail, ArchetypeWeeklyStats, CardHeatmap, ChurnReport, HealthReport, H2HSummary, H2HDetail, CommanderSynergy } from './types'
+import type { Deck, MetagameReport, Event, PlayerStats, SimilarDeck, ArchetypeDetail, ArchetypeWeeklyStats, CardHeatmap, ChurnReport, HealthReport, H2HSummary, H2HDetail, CommanderSynergy, HadoukenPreview, HadoukenApplyResult } from './types'
 import { getToken } from './contexts/AuthContext'
 import { fetchWithTimeout } from './utils'
 
@@ -56,7 +56,7 @@ async function fetchWithAuth(
   return responseType === 'blob' ? res.blob() : res.json()
 }
 
-async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
+async function fetchApi<T>(path: string, options?: RequestInit & { timeoutMs?: number }): Promise<T> {
   const res = await fetchWithTimeout(`${API_BASE}${path}`, {
     ...options,
     headers: {
@@ -307,6 +307,31 @@ export async function exportEvent(eventId: number | string): Promise<Blob> {
 
 export async function importEvent(body: unknown): Promise<{ event_id: string; message: string; deck_count?: number }> {
   return fetchApi('/events/import', { method: 'POST', body: JSON.stringify(body) })
+}
+
+/** Preview completing an event with players and round results from a Hadouken league page (read-only). */
+export async function previewHadoukenImport(eventId: string, url: string): Promise<HadoukenPreview> {
+  return fetchApi(`/events/${encodeURIComponent(eventId)}/hadouken/preview`, {
+    method: 'POST',
+    body: JSON.stringify({ url }),
+  })
+}
+
+/**
+ * Apply a Hadouken import. playerMap: Hadouken name -> deck_id of this event, or null to create a blank deck.
+ * standings: place/points corrected in the preview (only edited players).
+ */
+export async function applyHadoukenImport(
+  eventId: string,
+  url: string,
+  playerMap: Record<string, number | null>,
+  standings: Record<string, { rank: number; points: number }> = {}
+): Promise<HadoukenApplyResult> {
+  return fetchApi(`/events/${encodeURIComponent(eventId)}/hadouken/apply`, {
+    method: 'POST',
+    body: JSON.stringify({ url, player_map: playerMap, standings }),
+    timeoutMs: 120_000, // downloads the page and writes all decks/matchups; slower than a normal request
+  })
 }
 
 export async function updateEvent(

@@ -6,7 +6,7 @@ Route -> handler-function map for the FastAPI app. **Grep for the handler name**
 
 Auth column: `admin` = admin token required, `event-edit` = admin **or** a valid event-edit token, `DB` = database required. Blank = public.
 
-Total endpoints: **93**.
+Total endpoints: **95**.
 
 ## Health / Info / Auth / Feedback
 
@@ -60,6 +60,8 @@ Total endpoints: **93**.
 | POST | `/api/v1/events/{event_id}/decks` | `upload_decks_to_event` (in `api/routers/events.py`) | admin, DB |
 | POST | `/api/v1/events/{event_id}/decks/add` | `add_blank_deck_to_event` (in `api/routers/events.py`) | event-edit, DB |
 | GET | `/api/v1/events/{event_id}/export` | `export_event` (in `api/routers/events.py`) | event-edit |
+| POST | `/api/v1/events/{event_id}/hadouken/apply` | `apply_hadouken_import` (in `api/routers/events.py`) | admin, DB |
+| POST | `/api/v1/events/{event_id}/hadouken/preview` | `preview_hadouken_import` (in `api/routers/events.py`) | admin, DB |
 | GET | `/api/v1/events/{event_id}/matchup-discrepancies` | `get_matchup_discrepancies` (in `api/routers/events.py`) | admin, DB |
 | GET | `/api/v1/events/{event_id}/missing-matchups` | `get_missing_matchups` (in `api/routers/events.py`) | admin, DB |
 | POST | `/api/v1/events/{event_id}/send-feedback-link-to-player` | `send_feedback_link_to_player` (in `api/routers/events.py`) | admin, DB |
