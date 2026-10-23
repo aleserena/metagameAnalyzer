@@ -34,6 +34,7 @@ import Modal from '../components/Modal'
 import UpdateDeckForm from '../components/event/UpdateDeckForm'
 import UploadDeckForm from '../components/event/UploadDeckForm'
 import MatchupsForm from '../components/event/MatchupsForm'
+import HadoukenImportModal from '../components/event/HadoukenImportModal'
 import PageError from '../components/PageError'
 import PageSkeleton from '../components/PageSkeleton'
 import CardSearchInput from '../components/CardSearchInput'
@@ -117,6 +118,7 @@ export default function EventDetail() {
   const [loadingMatchups, setLoadingMatchups] = useState(false)
   const [savingMatchups, setSavingMatchups] = useState(false)
   const [exportingEvent, setExportingEvent] = useState(false)
+  const [hadoukenImportOpen, setHadoukenImportOpen] = useState(false)
 
   const canEditEvent = user === 'admin' || eventEditMode
   const canDeleteEvent = user === 'admin'
@@ -881,6 +883,11 @@ export default function EventDetail() {
                 >
                   {exportingEvent ? 'Exporting…' : 'Export event'}
                 </button>
+                {user === 'admin' && (
+                  <button type="button" className="btn" onClick={() => setHadoukenImportOpen(true)}>
+                    Import from Hadouken
+                  </button>
+                )}
                 {canDeleteEvent && (
                   <button type="button" className="btn" style={{ color: 'var(--danger, #c00)' }} onClick={handleDeleteClick} disabled={deleting}>
                     Delete event
@@ -1280,6 +1287,17 @@ export default function EventDetail() {
             onCancel={closeUpdateMatchupsModal}
           />
         </Modal>
+      )}
+
+      {hadoukenImportOpen && eventId && (
+        <HadoukenImportModal
+          eventId={eventId}
+          onClose={() => setHadoukenImportOpen(false)}
+          onImported={() => {
+            refetch()
+            if (missingMatchups !== null) loadMissingMatchups()
+          }}
+        />
       )}
 
       {confirmDeleteEvent && (

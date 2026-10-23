@@ -244,6 +244,42 @@ export interface Event {
   origin?: 'mtgtop8' | 'manual'
 }
 
+/** How a Hadouken player was matched to an event deck: 'none' means a blank deck will be created. */
+export type HadoukenMatchKind = 'player' | 'reordered' | 'partial' | 'none'
+
+export interface HadoukenPreview {
+  hadouken: { url: string; name: string; date: string; format_id: string; store: string; player_count: number }
+  event: { event_id: string; event_name: string; date: string; format_id: string; player_count: number }
+  warnings: string[]
+  players: Array<{
+    name: string
+    /** Place by tournament points (ties keep the Hadouken page order) */
+    rank: number
+    /** Place as shown on the Hadouken page */
+    hadouken_rank: number
+    points: number
+    wins: number
+    losses: number
+    draws: number
+    deck_id: number | null
+    match: HadoukenMatchKind
+  }>
+  decks: Array<{ deck_id: number; player: string; rank: string; archetype: string }>
+  unmatched_deck_ids: number[]
+  pairings: Array<{ round: number; player1: string; player2: string; games1: number; games2: number; result1: string; result2: string }>
+  conflicts: Array<{ round: number; player1: string; player2: string; existing: string; hadouken: string }>
+  existing_matchup_count: number
+}
+
+export interface HadoukenApplyResult {
+  event_id: string
+  decks_created: number
+  decks_matched: number
+  matches_imported: number
+  aliases_added: number
+  player_count: number
+}
+
 export interface PlayerStats {
   player: string
   player_id?: number

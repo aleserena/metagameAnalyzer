@@ -95,6 +95,24 @@ class MergeEventsBody(BaseModel):
     deck_resolutions: dict[str, dict[str, str]] = {}
 
 
+class HadoukenPreviewBody(BaseModel):
+    url: str  # https://hadoleague.vercel.app/torneos/<slug>
+
+
+class HadoukenStandingEdit(BaseModel):
+    """Correction made in the preview to a Hadouken standing."""
+    rank: int | None = None
+    points: int | None = None
+
+
+class HadoukenApplyBody(BaseModel):
+    url: str
+    # Hadouken player name -> event deck_id to attach the results to; null creates a blank deck for that player
+    player_map: dict[str, int | None] = Field(default_factory=dict)
+    # Hadouken player name -> edited place/points (only players that were changed)
+    standings: dict[str, HadoukenStandingEdit] = Field(default_factory=dict)
+
+
 class ScrapeBody(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

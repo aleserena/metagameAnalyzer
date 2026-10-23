@@ -306,7 +306,8 @@ async def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
                                         event_name=ev_name or ev_name_raw or existing.name,
                                         date=sample.get("date", existing.date),
                                         format_id=sample.get("format_id", existing.format_id),
-                                        player_count=int(sample.get("player_count", 0) or existing.player_count or 0),
+                                        # Keep the larger count: it may have been completed from another source (e.g. Hadouken)
+                                        player_count=max(int(sample.get("player_count", 0) or 0), existing.player_count or 0),
                                         store=ev_store or existing.store,
                                         location=ev_location or existing.location,
                                     )
