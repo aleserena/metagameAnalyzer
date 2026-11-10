@@ -105,3 +105,23 @@ def test_failed_deck_is_reported_and_others_kept(monkeypatch, workers):
     )
     assert sorted(d.deck_id for d in decks) == [1, 3]
     assert errors == [(77, 2, "boom")]
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("1", "1"),
+        ("3-4", "3-4"),
+        ("33-64", "33-64"),
+        ("65-128", "65-128"),
+        ("47", "47"),
+        ("128", "128"),
+        ("129", None),
+        ("0", None),
+        ("Top 8", None),
+    ],
+)
+def test_parse_rank_text(text, expected):
+    from src.mtgtop8.scraper import _parse_rank_text
+
+    assert _parse_rank_text(text) == expected

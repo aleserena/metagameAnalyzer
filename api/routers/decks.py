@@ -734,6 +734,27 @@ def _parse_moxfield_commanders(obj) -> list[str]:
     return [e["card"] for e in entries for _ in range(e["qty"])]
 
 
+def _extract_moxfield_boards(data: dict) -> tuple[list[str], list[dict], list[dict]]:
+    """Return (commanders, mainboard, sideboard) from a Moxfield v2 or v3 response."""
+    boards = data.get("boards")
+    if isinstance(boards, dict):
+
+        def cards(name: str):
+            board = boards.get(name)
+            return board.get("cards") if isinstance(board, dict) else None
+
+        return (
+            _parse_moxfield_commanders(cards("commanders")),
+            _parse_moxfield_board(cards("mainboard")),
+            _parse_moxfield_board(cards("sideboard")),
+        )
+    return (
+        _parse_moxfield_commanders(data.get("commanders")),
+        _parse_moxfield_board(data.get("mainboard")),
+        _parse_moxfield_board(data.get("sideboard")),
+    )
+
+
 @router.post("/api/v1/decks/import-moxfield", dependencies=[Depends(require_admin)])
 def import_moxfield_deck(body: ImportMoxfieldBody):
     """Fetch a public Moxfield deck by URL and return commanders, mainboard, sideboard for the editor."""
@@ -779,9 +800,9 @@ def import_moxfield_deck(body: ImportMoxfieldBody):
             detail="Could not fetch deck from Moxfield. The deck may be private, or Moxfield may be blocking requests. Try again later or paste the deck list manually (Export from Moxfield → Moxfield format).",
         )
     try:
-        commanders = _parse_moxfield_commanders(data.get("commanders"))
-        mainboard = _parse_moxfield_board(data.get("mainboard"))
-        sideboard = _parse_moxfield_board(data.get("sideboard"))
+        commanders, mainboard, sideboard = _extract_moxfield_boards(data)
+        if not commanders and not mainboard:
+            raise HTTPException(status_code=502, detail="Moxfield returned a deck with no cards")
         return {
             "commanders": commanders,
             "mainboard": mainboard,

@@ -1008,8 +1008,7 @@ _player_analysis_cache: dict[tuple, dict] = {}
 def _player_analysis_cache_signature() -> tuple:
     weights = settings_service.get_rank_weights()
     weights_sig = tuple(sorted((str(k), float(v)) for k, v in (weights or {}).items()))
-    # id(state.decks) plus len gives cheap invalidation on reload (new list) or append.
-    return (id(state.decks), len(state.decks), weights_sig)
+    return (state.decks_version, weights_sig)
 
 
 def _player_analysis_cached(

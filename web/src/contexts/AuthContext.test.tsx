@@ -83,4 +83,27 @@ describe('AuthContext', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Logout' }))
     expect(screen.getByTestId('user')).toHaveTextContent('none')
   })
+
+  it('keeps the token and the admin session when the auth check fails for a network reason', async () => {
+    localStorage.setItem('admin_token', 'tok')
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
+    render(
+      <AuthProvider>
+        <TestConsumer />
+      </AuthProvider>
+    )
+    await waitFor(() => expect(screen.getByTestId('user')).toHaveTextContent('admin'))
+    expect(localStorage.getItem('admin_token')).toBe('tok')
+  })
+
+  it('removes the token when the server answers 401', async () => {
+    localStorage.setItem('admin_token', 'tok')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 401 })))
+    render(
+      <AuthProvider>
+        <TestConsumer />
+      </AuthProvider>
+    )
+    await waitFor(() => expect(localStorage.getItem('admin_token')).toBeNull())
+  })
 })

@@ -1361,3 +1361,39 @@ def test_matchup_summary_counts_a_mirror_match_once(client_with_overrides):
 def test_patch_matchup_rejects_unknown_result(client_with_overrides):
     r = client_with_overrides.patch("/api/v1/matchups/1", json={"result": "banana"})
     assert r.status_code == 422
+
+
+def test_commander_tech_cards_include_rank_3_4_decks(client):
+    def deck(i, rank, extra):
+        main = [{"qty": 1, "card": "Sol Ring"}]
+        if extra:
+            main.append({"qty": 1, "card": "Tech Card"})
+        return {
+            "deck_id": 700 + i,
+            "event_id": 70,
+            "format_id": "EDH",
+            "name": "D",
+            "player": f"P{i}",
+            "player_id": 700 + i,
+            "event_name": "E",
+            "date": "01/01/25",
+            "rank": rank,
+            "player_count": 16,
+            "sideboard": [],
+            "commanders": ["Tymna the Weaver"],
+            "archetype": "Tymna",
+            "mainboard": main,
+        }
+
+    state.set_decks([deck(i, "3-4", True) for i in range(3)] + [deck(i, "9-16", False) for i in range(3, 9)])
+    with patch("api.routers.metagame.lookup_cards", return_value={}):
+        r = client.get("/api/v1/commanders/Tymna%20the%20Weaver/synergies")
+    assert "Tech Card" in [c["card"] for c in r.json()["tech_cards"]]
+
+
+def test_player_analysis_cache_key_uses_decks_version():
+    from api.routers.players import _player_analysis_cache_signature
+
+    before = _player_analysis_cache_signature()
+    state.set_decks(list(state.decks))
+    assert _player_analysis_cache_signature() != before

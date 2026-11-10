@@ -1018,8 +1018,8 @@ def get_commander_synergies(
                 main_count[c] = main_count.get(c, 0) + 1
                 seen.add(c)
 
-    # Top-placing decks (rank 1–4)
-    top_decks = [d for d in filtered if (d.get("rank") or "").strip() in {"1", "2", "3", "4"}]
+    # Top-placing decks (rank 1–4, including the "3-4" band)
+    top_decks = [d for d in filtered if normalize_rank((d.get("rank") or "")) in {"1", "2", "3-4"}]
     top_total = len(top_decks)
     top_count: dict[str, int] = {}
     if top_total > 0:

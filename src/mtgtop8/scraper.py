@@ -205,6 +205,18 @@ def _detect_section(text: str) -> str | None:
     return None
 
 
+_RANK_BANDS = ("1", "2", "3-4", "5-8", "9-16", "17-32", "33-64", "65-128")
+
+
+def _parse_rank_text(text: str) -> str | None:
+    """Return the rank text if it is a known band or an integer 1-128, else None."""
+    if text in _RANK_BANDS:
+        return text
+    if text.isdigit() and 1 <= int(text) <= 128:
+        return text
+    return None
+
+
 def scrape_deck_robust(
     event_id: int,
     deck_id: int,
@@ -253,16 +265,10 @@ def scrape_deck_robust(
     chosen = soup.find("div", class_="chosen_tr")
     if chosen:
         for div in chosen.find_all("div", class_="S14"):
-            text = div.get_text(strip=True)
-            if text in ("1", "2", "3-4", "5-8", "9-16", "17-32"):
-                rank = text
+            parsed = _parse_rank_text(div.get_text(strip=True))
+            if parsed is not None:
+                rank = parsed
                 break
-            # Some events show single numbers (3, 4, 5, ... 32); accept them
-            if text.isdigit():
-                n = int(text)
-                if 1 <= n <= 32:
-                    rank = text
-                    break
 
     archetype_link = soup.find("a", href=re.compile(r"archetype\?a="))
     if archetype_link:
