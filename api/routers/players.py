@@ -5,7 +5,6 @@ from datetime import datetime
 from urllib.parse import unquote
 
 from fastapi import Depends, HTTPException, Query, Request
-from sqlalchemy import case, func
 from src.mtgtop8.analyzer import (
     archetype_aggregate_analysis,
     archetype_distribution,
@@ -29,6 +28,7 @@ from api.helpers import (
     _normalize_search,
     _parse_date_sortkey,
 )
+from api.results import effective_wld
 from api.schemas.players import (
     PlayerAliasBody,
     PlayerAnalysisResponse,
@@ -251,24 +251,7 @@ def _player_match_stats(deck_ids: list[int]) -> dict:
     if not deck_ids or not state.database_available():
         return empty
     with _db.session_scope() as session:
-        rows = (
-            session.query(_db.MatchupRow.result)
-            .filter(_db.MatchupRow.deck_id.in_(deck_ids))
-            .filter(_db.MatchupRow.result.in_(["win", "loss", "draw", "intentional_draw"]))
-            .all()
-        )
-    total = len(rows)
-    if not total:
-        return empty
-    wins = sum(1 for (r,) in rows if (r or "").lower() == "win")
-    losses = sum(1 for (r,) in rows if (r or "").lower() == "loss")
-    return {
-        "recorded_matches": total,
-        "match_wins": wins,
-        "match_losses": losses,
-        "match_draws": total - wins - losses,
-        "match_win_pct": round(wins / total * 100, 1),
-    }
+        return _db.match_record_for_decks(session, deck_ids)
 
 
 def _match_winrate_by_player(deck_ids: list[int] | None) -> dict[int, dict]:
@@ -282,27 +265,8 @@ def _match_winrate_by_player(deck_ids: list[int] | None) -> dict[int, dict]:
         return {}
     if deck_ids is not None and not deck_ids:
         return {}
-    wins_expr = func.sum(case((func.lower(_db.MatchupRow.result) == "win", 1), else_=0))
     with _db.session_scope() as session:
-        q = (
-            session.query(_db.DeckRow.player_id, func.count().label("total"), wins_expr.label("wins"))
-            .join(_db.MatchupRow, _db.MatchupRow.deck_id == _db.DeckRow.deck_id)
-            .filter(_db.MatchupRow.result.in_(["win", "loss", "draw", "intentional_draw"]))
-            .filter(_db.DeckRow.player_id.isnot(None))
-        )
-        if deck_ids is not None:
-            q = q.filter(_db.DeckRow.deck_id.in_(deck_ids))
-        rows = q.group_by(_db.DeckRow.player_id).all()
-    out: dict[int, dict] = {}
-    for pid, total, wins in rows:
-        total = int(total or 0)
-        if not total:
-            continue
-        out[pid] = {
-            "recorded_matches": total,
-            "match_win_pct": round(int(wins or 0) / total * 100, 1),
-        }
-    return out
+        return _db.match_winrate_by_player(session, deck_ids)
 
 
 def _player_detail_payload(
@@ -437,48 +401,32 @@ def get_player_analysis_by_name(
 def get_player_head_to_head(player_id: int):
     """All opponents with aggregated W/L/D record for a given player."""
     with _db.session_scope() as session:
-        rows = (
-            session.query(_db.MatchupRow, _db.DeckRow)
-            .join(_db.DeckRow, _db.MatchupRow.deck_id == _db.DeckRow.deck_id)
-            .filter(_db.DeckRow.player_id == player_id)
-            .filter(_db.MatchupRow.opponent_player_id.isnot(None))
-            .filter(_db.MatchupRow.result.in_(["win", "loss", "draw", "intentional_draw"]))
-            .all()
-        )
+        rows = _db.head_to_head_rows(session, player_id)
 
     if not rows:
         return {"player_id": player_id, "opponents": []}
 
     # Aggregate per opponent
     opp_stats: dict[int, dict] = {}
-    for matchup, deck in rows:
-        oid = matchup.opponent_player_id
+    for row in rows:
+        oid = row["opponent_player_id"]
         if oid not in opp_stats:
             opp_stats[oid] = {
                 "opponent_player_id": oid,
-                "opponent_player": matchup.opponent_player or "",
+                "opponent_player": row["opponent_player"] or "",
                 "wins": 0, "losses": 0, "draws": 0,
                 "matches": 0,
                 "formats": {},
             }
         s = opp_stats[oid]
-        s["matches"] += 1
-        result = (matchup.result or "").lower()
-        if result == "win":
-            s["wins"] += 1
-        elif result == "loss":
-            s["losses"] += 1
-        else:
-            s["draws"] += 1
-        fmt = deck.format_id or "Unknown"
+        wld = effective_wld(row["result"]) or (0, 0, 1)
+        fmt = row["format_id"] or "Unknown"
         if fmt not in s["formats"]:
             s["formats"][fmt] = {"wins": 0, "losses": 0, "draws": 0}
-        if result == "win":
-            s["formats"][fmt]["wins"] += 1
-        elif result == "loss":
-            s["formats"][fmt]["losses"] += 1
-        else:
-            s["formats"][fmt]["draws"] += 1
+        s["matches"] += 1
+        for key, n in zip(("wins", "losses", "draws"), wld):
+            s[key] += n
+            s["formats"][fmt][key] += n
 
     # Build response list, sorted by matches desc
     opponents = []
@@ -507,14 +455,7 @@ def get_player_head_to_head(player_id: int):
 def get_player_head_to_head_detail(player_id: int, opponent_id: int):
     """Full per-match encounter history between two players."""
     with _db.session_scope() as session:
-        rows = (
-            session.query(_db.MatchupRow, _db.DeckRow)
-            .join(_db.DeckRow, _db.MatchupRow.deck_id == _db.DeckRow.deck_id)
-            .filter(_db.DeckRow.player_id == player_id)
-            .filter(_db.MatchupRow.opponent_player_id == opponent_id)
-            .filter(_db.MatchupRow.result.in_(["win", "loss", "draw", "intentional_draw"]))
-            .all()
-        )
+        rows = _db.head_to_head_rows(session, player_id, opponent_id)
 
     if not rows:
         return {"player_id": player_id, "opponent_id": opponent_id, "matches": []}
@@ -529,33 +470,36 @@ def get_player_head_to_head_detail(player_id: int, opponent_id: int):
     opponent_name = _display_name(opponent_id)
 
     encounters = []
-    for matchup, deck in rows:
+    for row in rows:
         # Look up opponent deck archetype from state.decks
-        opp_archetype = matchup.opponent_archetype
-        if opp_archetype is None and matchup.opponent_deck_id is not None:
-            opp_d = next((d for d in state.decks if d.get("deck_id") == matchup.opponent_deck_id), None)
+        opp_archetype = row["opponent_archetype"]
+        if opp_archetype is None and row["opponent_deck_id"] is not None:
+            opp_d = next((d for d in state.decks if d.get("deck_id") == row["opponent_deck_id"]), None)
             if opp_d:
                 opp_archetype = opp_d.get("archetype")
 
         encounters.append({
-            "deck_id": deck.deck_id,
-            "event_id": deck.event_id,
-            "event_name": deck.event_name or "",
-            "date": deck.date or "",
-            "format_id": deck.format_id or "",
-            "round": matchup.round,
-            "result": matchup.result,
-            "player_archetype": deck.archetype,
-            "opponent_deck_id": matchup.opponent_deck_id,
+            "deck_id": row["deck_id"],
+            "event_id": row["event_id"],
+            "event_name": row["event_name"] or "",
+            "date": row["date"] or "",
+            "format_id": row["format_id"] or "",
+            "round": row["round"],
+            "result": row["result"],
+            "player_archetype": row["archetype"],
+            "opponent_deck_id": row["opponent_deck_id"],
             "opponent_archetype": opp_archetype,
         })
 
     # Sort by date descending
     encounters.sort(key=lambda x: _parse_date_sortkey(x["date"] or ""), reverse=True)
 
-    wins = sum(1 for e in encounters if e["result"] == "win")
-    losses = sum(1 for e in encounters if e["result"] == "loss")
-    draws = sum(1 for e in encounters if e["result"] in ("draw", "intentional_draw"))
+    wins = losses = draws = 0
+    for e in encounters:
+        w, lo, d = effective_wld(e["result"]) or (0, 0, 1)
+        wins += w
+        losses += lo
+        draws += d
 
     return {
         "player_id": player_id,

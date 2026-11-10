@@ -373,3 +373,32 @@ def test_upsert_same_opponent_different_rounds(db_session_rollback):
     assert len(bob_rows) == 2
     rounds = sorted(r["round"] for r in bob_rows)
     assert rounds == [1, 4]
+
+
+def test_match_record_counts_intentional_draw_winners(db_session_rollback):
+    from api.db import match_record_for_decks
+
+    session = db_session_rollback
+    eid = f"{_TEST_EVENT_PREFIX}record"
+    create_event(session, "Rec", "01/01/25", "ST", event_id=eid, player_count=4)
+    upsert_deck(session, _make_deck(_TEST_DECK_ID_BASE + 901, eid, "Rec Player"))
+    session.flush()
+    upsert_matchups_for_deck(
+        session,
+        _TEST_DECK_ID_BASE + 901,
+        [
+            {"opponent_player": "Rec Opp 1", "result": "win", "round": 1},
+            {"opponent_player": "Rec Opp 2", "result": "intentional_draw_win", "round": 2},
+            {"opponent_player": "Rec Opp 3", "result": "intentional_draw_loss", "round": 3},
+            {"opponent_player": "Rec Opp 4", "result": "draw", "round": 4},
+            {"opponent_player": "Bye", "result": "bye", "round": 5},
+        ],
+    )
+    session.flush()
+    assert match_record_for_decks(session, [_TEST_DECK_ID_BASE + 901]) == {
+        "recorded_matches": 4,
+        "match_wins": 2,
+        "match_losses": 1,
+        "match_draws": 1,
+        "match_win_pct": 50.0,
+    }

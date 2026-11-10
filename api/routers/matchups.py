@@ -6,6 +6,7 @@ from api.dependencies import (
     require_admin,
     require_database,
 )
+from api.results import effective_wld
 from api.schemas.matchups import PatchMatchupBody
 
 try:
@@ -22,22 +23,6 @@ from api.route_helpers import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-
-def _to_effective_wld(result: str) -> tuple[int, int, int]:
-    raw = (result or "loss").strip().lower()
-    if raw == "intentional_draw":
-        return (0, 0, 1)
-    if raw == "intentional_draw_win":
-        return (1, 0, 0)
-    if raw == "intentional_draw_loss":
-        return (0, 1, 0)
-    canonical = _matchup_result_to_canonical(result or "loss")
-    if canonical == "win":
-        return (1, 0, 0)
-    if canonical == "loss":
-        return (0, 1, 0)
-    return (0, 0, 1)
 
 
 def _front_face_name(name: str) -> str:
@@ -120,7 +105,7 @@ def get_matchups_summary(
                 canonical_archetype.setdefault(raw.lower(), raw)
 
     def to_effective_wld(row):
-        return _to_effective_wld(row.get("result") or "loss")
+        return effective_wld(row.get("result") or "loss") or (0, 0, 1)
 
     def norm_arch(name: str) -> str:
         return canonical_archetype.get((name or "").lower(), name or "(unknown)")
@@ -278,19 +263,7 @@ def get_matchups_players_summary(
         filtered.append(r)
 
     def to_effective_wld(row):
-        raw = (row.get("result") or "loss").strip().lower()
-        if raw == "intentional_draw":
-            return (0, 0, 1)
-        if raw == "intentional_draw_win":
-            return (1, 0, 0)
-        if raw == "intentional_draw_loss":
-            return (0, 1, 0)
-        canonical = _matchup_result_to_canonical(row.get("result") or "loss")
-        if canonical == "win":
-            return (1, 0, 0)
-        if canonical == "loss":
-            return (0, 1, 0)
-        return (0, 0, 1)
+        return effective_wld(row.get("result") or "loss") or (0, 0, 1)
 
     # Aggregate by (player, opponent_player). Use front-face name so "Norman Osborn" and
     # "Norman Osborn // Green Goblin" are one row (dual-faced names unified across the app).

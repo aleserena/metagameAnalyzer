@@ -32,6 +32,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, aliased, declarative_base, sessionmaker
 
+from api.results import COUNTED_RESULTS, effective_wld, invert_result
+
 logger = logging.getLogger(__name__)
 
 # Manual event IDs use prefix "m" + number (m1, m2, ...) to distinguish from scraped numeric IDs
@@ -1029,18 +1031,7 @@ def count_effective_matchups_for_deck(session: Session, deck_id: int) -> int:
     return as_deck + as_opponent
 
 
-def _invert_matchup_result(result: str) -> str:
-    """Return the opponent's result: win<->loss, intentional_draw_win<->intentional_draw_loss, draw and intentional_draw unchanged."""
-    r = (result or "").strip().lower()
-    if r in ("win", "2-1", "1-0"):
-        return "loss"
-    if r in ("loss", "1-2", "0-1"):
-        return "win"
-    if r == "intentional_draw_win":
-        return "intentional_draw_loss"
-    if r == "intentional_draw_loss":
-        return "intentional_draw_win"
-    return result  # draw, intentional_draw, id, etc.
+_invert_matchup_result = invert_result
 
 
 def upsert_matchups_for_deck(
@@ -1357,6 +1348,105 @@ def list_matchups_reported_against_player_id(session: Session, event_id: str, op
         }
         for m, d in rows
     ]
+
+
+def match_record_for_decks(session: Session, deck_ids: list[int]) -> dict:
+    """Aggregate recorded per-match results (W/L/D) across the given decks."""
+    empty = {"recorded_matches": 0, "match_wins": 0, "match_losses": 0, "match_draws": 0, "match_win_pct": 0.0}
+    if not deck_ids:
+        return empty
+    rows = (
+        session.query(MatchupRow.result)
+        .filter(MatchupRow.deck_id.in_(deck_ids))
+        .filter(func.lower(MatchupRow.result).in_(COUNTED_RESULTS))
+        .all()
+    )
+    wins = losses = draws = 0
+    for (result,) in rows:
+        wld = effective_wld(result)
+        if wld is None:
+            continue
+        wins += wld[0]
+        losses += wld[1]
+        draws += wld[2]
+    total = wins + losses + draws
+    if not total:
+        return empty
+    return {
+        "recorded_matches": total,
+        "match_wins": wins,
+        "match_losses": losses,
+        "match_draws": draws,
+        "match_win_pct": round(wins / total * 100, 1),
+    }
+
+
+def match_winrate_by_player(session: Session, deck_ids: list[int] | None) -> dict[int, dict]:
+    """Map player_id -> {recorded_matches, match_win_pct}; deck_ids=None aggregates across all decks."""
+    if deck_ids is not None and not deck_ids:
+        return {}
+    q = (
+        session.query(DeckRow.player_id, MatchupRow.result)
+        .join(MatchupRow, MatchupRow.deck_id == DeckRow.deck_id)
+        .filter(func.lower(MatchupRow.result).in_(COUNTED_RESULTS))
+        .filter(DeckRow.player_id.isnot(None))
+    )
+    if deck_ids is not None:
+        q = q.filter(DeckRow.deck_id.in_(deck_ids))
+    tallies: dict[int, list[int]] = {}
+    for pid, result in q.all():
+        wld = effective_wld(result)
+        if wld is None:
+            continue
+        t = tallies.setdefault(pid, [0, 0])
+        t[0] += 1
+        t[1] += wld[0]
+    return {
+        pid: {"recorded_matches": total, "match_win_pct": round(wins / total * 100, 1)}
+        for pid, (total, wins) in tallies.items()
+    }
+
+
+def head_to_head_rows(session: Session, player_id: int, opponent_id: int | None = None) -> list[dict]:
+    """Counted matchups for a player (optionally against one opponent), joined with deck/event columns."""
+    q = (
+        session.query(
+            MatchupRow.opponent_player_id,
+            MatchupRow.opponent_player,
+            MatchupRow.opponent_deck_id,
+            MatchupRow.opponent_archetype,
+            MatchupRow.result,
+            MatchupRow.round,
+            DeckRow.deck_id,
+            DeckRow.event_id,
+            DeckRow.event_name,
+            DeckRow.date,
+            DeckRow.format_id,
+            DeckRow.archetype,
+        )
+        .join(DeckRow, MatchupRow.deck_id == DeckRow.deck_id)
+        .filter(DeckRow.player_id == player_id)
+        .filter(func.lower(MatchupRow.result).in_(COUNTED_RESULTS))
+    )
+    if opponent_id is None:
+        q = q.filter(MatchupRow.opponent_player_id.isnot(None))
+    else:
+        q = q.filter(MatchupRow.opponent_player_id == opponent_id)
+    keys = (
+        "opponent_player_id",
+        "opponent_player",
+        "opponent_deck_id",
+        "opponent_archetype",
+        "result",
+        "round",
+        "deck_id",
+        "event_id",
+        "event_name",
+        "date",
+        "format_id",
+        "archetype",
+    )
+    return [dict(zip(keys, row)) for row in q.all()]
 
 
 # --- Repository helpers: players ---

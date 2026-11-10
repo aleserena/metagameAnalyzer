@@ -45,7 +45,7 @@ except ImportError:
 from fastapi import APIRouter
 
 from api.route_helpers import (
-    _is_intentional_draw_result,
+    opponent_report_to_prefill,
 )
 
 logger = logging.getLogger(__name__)
@@ -644,26 +644,9 @@ def get_deck_matchups(deck_id: int):
             current_player_norm = _normalize_player(current_player)
             reported_against_me = _db.list_matchups_reported_against_player(session, event_id, current_player_norm)
             for r in reported_against_me:
-                res = (r.get("result") or "").strip().lower()
-                if res == "win":
-                    inv_result = "loss"
-                elif res == "loss":
-                    inv_result = "win"
-                elif res == "intentional_draw_win":
-                    inv_result = "intentional_draw_loss"
-                elif res == "intentional_draw_loss":
-                    inv_result = "intentional_draw_win"
-                else:
-                    inv_result = "draw" if res == "intentional_draw" else "draw"
-                # Use normalized name so it matches opponent dropdown (deck list uses normalized player)
-                reporting_player = _normalize_player((r.get("reporting_player") or "").strip())
-                if reporting_player and reporting_player != "(unknown)":
-                    opponent_reported_matchups.append({
-                        "opponent_player": reporting_player,
-                        "result": inv_result,
-                        "intentional_draw": _is_intentional_draw_result(res),
-                        "round": r.get("round"),
-                    })
+                prefill = opponent_report_to_prefill(r, _normalize_player)
+                if prefill:
+                    opponent_reported_matchups.append(prefill)
     return {"matchups": rows, "opponent_reported_matchups": opponent_reported_matchups}
 
 

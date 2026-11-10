@@ -26,6 +26,7 @@ from api.helpers import (
     _window_summary_from_dicts,
     _yymmdd_to_ordinal,
 )
+from api.results import effective_wld
 from api.services import settings as settings_service
 from api.state import (
     _normalize_player,
@@ -177,16 +178,13 @@ def get_metagame_health(
                 arch = (r.get("archetype") or "(unknown)").strip()
                 if arch == "(unknown)":
                     continue
-                result = (r.get("result") or "").lower()
-                if result not in ("win", "loss", "draw", "intentional_draw"):
+                wld = effective_wld(r.get("result"))
+                if wld is None:
                     continue
                 if arch not in arch_agg:
                     arch_agg[arch] = {"wins": 0.0, "matches": 0}
                 arch_agg[arch]["matches"] += 1
-                if result == "win":
-                    arch_agg[arch]["wins"] += 1.0
-                elif result in ("draw", "intentional_draw"):
-                    arch_agg[arch]["wins"] += 0.5
+                arch_agg[arch]["wins"] += wld[0] + 0.5 * wld[2]
             # Only archetypes with ≥ 5 matches; weight each by sqrt(match_count)
             arch_wr_data: list[tuple[float, int]] = [
                 (v["wins"] / v["matches"], v["matches"])
