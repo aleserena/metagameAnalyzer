@@ -871,7 +871,7 @@ def apply_hadouken_import(event_id: str, body: HadoukenApplyBody):
 def create_upload_links(event_id: str, request: Request, body: CreateUploadLinksBody | None = None):
     """Create one or more one-time upload links for an event (admin-only). Pass deck_id to create a link that updates that deck."""
     body = body or CreateUploadLinksBody()
-    expires_at = None
+    expires_at = None  # None -> db.create_upload_link applies DEFAULT_LINK_EXPIRY_DAYS
     if body.expires_in_days is not None and body.expires_in_days > 0:
         expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=body.expires_in_days)
     with _db.session_scope() as session:
@@ -884,13 +884,13 @@ def create_upload_links(event_id: str, request: Request, body: CreateUploadLinks
             # One-time link to edit event and decks (no delete event, no new links)
             _db.invalidate_upload_links_for_slot(session, event_id, _db.LINK_TYPE_EVENT_EDIT)
             token = secrets.token_urlsafe(32)
-            _db.create_upload_link(
+            row = _db.create_upload_link(
                 session, token, event_id, expires_at=expires_at, link_type=_db.LINK_TYPE_EVENT_EDIT
             )
             links.append({
                 "token": token,
                 "url": f"{base_url}/events/{event_id}?token={token}",
-                "expires_at": expires_at.isoformat() if expires_at else None,
+                "expires_at": row.expires_at.isoformat() if row.expires_at else None,
             })
         elif body.type == "feedback" and body.deck_id is not None:
             # One-time feedback link for this deck (Event page). Form submits to POST /api/upload/{token}/feedback
@@ -902,13 +902,13 @@ def create_upload_links(event_id: str, request: Request, body: CreateUploadLinks
                 raise HTTPException(status_code=404, detail="Deck not found in this event")
             _db.invalidate_upload_links_for_slot(session, event_id, _db.LINK_TYPE_FEEDBACK, deck_id=body.deck_id)
             token = secrets.token_urlsafe(32)
-            _db.create_upload_link(
+            row = _db.create_upload_link(
                 session, token, event_id, expires_at=expires_at, deck_id=body.deck_id, link_type=_db.LINK_TYPE_FEEDBACK
             )
             links.append({
                 "token": token,
                 "url": f"{base_url}/upload/{token}",
-                "expires_at": expires_at.isoformat() if expires_at else None,
+                "expires_at": row.expires_at.isoformat() if row.expires_at else None,
                 "deck_id": body.deck_id,
             })
         elif body.deck_id is not None:
@@ -921,22 +921,22 @@ def create_upload_links(event_id: str, request: Request, body: CreateUploadLinks
                 raise HTTPException(status_code=404, detail="Deck not found in this event")
             _db.invalidate_upload_links_for_slot(session, event_id, _db.LINK_TYPE_DECK_UPDATE, deck_id=body.deck_id)
             token = secrets.token_urlsafe(32)
-            _db.create_upload_link(session, token, event_id, expires_at=expires_at, deck_id=body.deck_id)
+            row = _db.create_upload_link(session, token, event_id, expires_at=expires_at, deck_id=body.deck_id)
             links.append({
                 "token": token,
                 "url": f"{base_url}/upload/{token}",
-                "expires_at": expires_at.isoformat() if expires_at else None,
+                "expires_at": row.expires_at.isoformat() if row.expires_at else None,
                 "deck_id": body.deck_id,
             })
         else:
             count = max(1, min(body.count, 50))
             for _ in range(count):
                 token = secrets.token_urlsafe(32)
-                _db.create_upload_link(session, token, event_id, expires_at=expires_at)
+                row = _db.create_upload_link(session, token, event_id, expires_at=expires_at)
                 links.append({
                     "token": token,
                     "url": f"{base_url}/upload/{token}",
-                    "expires_at": expires_at.isoformat() if expires_at else None,
+                    "expires_at": row.expires_at.isoformat() if row.expires_at else None,
                 })
         return {"links": links}
 

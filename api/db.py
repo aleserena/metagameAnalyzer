@@ -12,7 +12,7 @@ import os
 import re
 import unicodedata
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import (
@@ -97,6 +97,7 @@ class SettingsRow(Base):
     value = Column(JSONB, nullable=False)
 
 
+DEFAULT_LINK_EXPIRY_DAYS = 7
 LINK_TYPE_DECK_UPLOAD = "deck_upload"
 LINK_TYPE_DECK_UPDATE = "deck_update"
 LINK_TYPE_EVENT_EDIT = "event_edit"
@@ -817,10 +818,12 @@ def create_upload_link(
     deck_id: int | None = None,
     link_type: str = LINK_TYPE_DECK_UPLOAD,
 ) -> EventUploadLinkRow:
-    """Insert a one-time upload link. Token from secrets.token_urlsafe(32). If deck_id is set and link_type is deck_upload, becomes deck_update. link_type: deck_upload | deck_update | event_edit | feedback."""
+    """Insert a one-time upload link. Token from secrets.token_urlsafe(32). If deck_id is set and link_type is deck_upload, becomes deck_update. link_type: deck_upload | deck_update | event_edit | feedback. Without expires_at the link expires after DEFAULT_LINK_EXPIRY_DAYS (naive UTC)."""
     eid = _event_id_str(event_id)
     if deck_id is not None and link_type == LINK_TYPE_DECK_UPLOAD:
         link_type = LINK_TYPE_DECK_UPDATE
+    if expires_at is None:
+        expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=DEFAULT_LINK_EXPIRY_DAYS)
     row = EventUploadLinkRow(
         token=token,
         event_id=eid,
