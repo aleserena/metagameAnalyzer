@@ -631,8 +631,9 @@ def _resolve_merge_pairs(decks_keep: list[dict], decks_remove: list[dict], playe
             pairs.append((k["deck_id"], d["deck_id"]))
             used_keep.add(k["deck_id"])
             used_remove.add(d["deck_id"])
+    auto_remove = set(used_remove)
     for pm in player_merges:
-        if pm.deck_id_remove in used_remove:
+        if pm.deck_id_remove in auto_remove:
             continue
         if pm.deck_id_keep not in keep_ids:
             raise ValueError(f"Deck {pm.deck_id_keep} to keep is not in the kept event")
@@ -640,6 +641,8 @@ def _resolve_merge_pairs(decks_keep: list[dict], decks_remove: list[dict], playe
             raise ValueError(f"Deck {pm.deck_id_remove} to remove is not in the removed event")
         if pm.deck_id_keep in used_keep:
             raise ValueError(f"Deck {pm.deck_id_keep} to keep is paired more than once")
+        if pm.deck_id_remove in used_remove:
+            raise ValueError(f"Deck {pm.deck_id_remove} to remove is paired more than once")
         pairs.append((pm.deck_id_keep, pm.deck_id_remove))
         used_keep.add(pm.deck_id_keep)
         used_remove.add(pm.deck_id_remove)

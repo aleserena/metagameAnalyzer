@@ -29,3 +29,9 @@ def test_manual_pair_for_auto_paired_remove_is_ignored():
 def test_invalid_manual_pair_is_rejected(pair):
     with pytest.raises(ValueError):
         _resolve_merge_pairs(KEEP, REMOVE, [pair])
+
+
+def test_remove_deck_used_by_two_manual_pairs_is_rejected():
+    pairs = [NS(deck_id_keep=11, deck_id_remove=21), NS(deck_id_keep=99, deck_id_remove=21)]
+    with pytest.raises(ValueError):
+        _resolve_merge_pairs(KEEP, REMOVE, pairs)
