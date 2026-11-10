@@ -41,6 +41,7 @@ from api.schemas.settings import (
 )
 from api.schemas.upload import CreateUploadLinksBody
 from api.services import hadouken as _hadouken
+from api.services.event_export import build_event_export
 from api.services.event_import import import_event_payload
 from api.state import (
     _events_from_decks,
@@ -440,85 +441,34 @@ def get_event_by_id(event_id: str):
     raise HTTPException(status_code=404, detail="Event not found")
 
 
-@router.get(
-    "/api/v1/events/{event_id}/export",
-    dependencies=[Depends(require_admin_or_event_edit)],
-)
-def export_event(event_id: str):
-    """Export an event and all related data (decks, matchups, player emails) as JSON."""
-    event_dict: dict | None = None
-    decks: list[dict] = []
-    matchups: list[dict] = []
-    player_emails: dict[str, str] = {}
-    players_list: list[dict] = []
+@router.get("/api/v1/events/{event_id}/export")
+def export_event(event_id: str, role: str = Depends(require_admin_or_event_edit)):
+    """Export an event and all related data as JSON. Player emails are admin-only."""
+    payload: EventExportData | None = None
 
     if state.database_available():
         try:
             with _db.session_scope() as session:
-                row = _db.get_event(session, event_id)
-                if not row:
-                    raise HTTPException(status_code=404, detail="Event not found")
-                event_dict = _db.event_row_to_dict(row)
-                decks = _db.get_decks_by_event(session, event_id)
-
-                # Collect matchups for all decks in this event (single batched query).
-                deck_ids = [d.get("deck_id") for d in decks if d.get("deck_id") is not None]
-                matchups.extend(_db.list_matchups_by_decks(session, deck_ids))
-
-                # Collect player emails only for players in this event. Batch by
-                # player_id (resolving by display name does a per-name full-table scan).
-                pid_to_name = {
-                    d.get("player_id"): (d.get("player") or "").strip()
-                    for d in decks
-                    if d.get("player_id") is not None and (d.get("player") or "").strip()
-                }
-                if pid_to_name:
-                    email_by_id = _db.get_emails_for_player_ids(session, list(pid_to_name))
-                    player_emails = {
-                        pid_to_name[pid]: email
-                        for pid, email in email_by_id.items()
-                        if pid in pid_to_name
-                    }
-
-                # Collect distinct player_ids from decks and matchups for optional players array
-                player_ids: set[int] = set()
-                for d in decks:
-                    pid = d.get("player_id")
-                    if pid is not None:
-                        player_ids.add(pid)
-                for m in matchups:
-                    pid = m.get("opponent_player_id")
-                    if pid is not None:
-                        player_ids.add(pid)
-                players_list.clear()
-                player_rows = _db.get_players_by_ids(session, list(player_ids))
-                for pid in sorted(player_ids):
-                    row = player_rows.get(pid)
-                    if row:
-                        players_list.append({"id": row.id, "display_name": row.display_name or ""})
-        except HTTPException:
-            raise
+                payload = build_event_export(session, event_id, include_emails=(role == "admin"))
         except Exception as e:
             logger.exception("Failed to export event from database: %s", e)
             raise HTTPException(status_code=500, detail="Failed to export event")
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Event not found")
     else:
         ev = _get_event_by_id_from_decks(event_id)
         if not ev:
             raise HTTPException(status_code=404, detail="Event not found")
-        event_dict = ev
-        decks = [d for d in state.decks if str(d.get("event_id")) == str(event_id)]
-        matchups = []
-        player_emails = {}
+        payload = EventExportData(
+            schema_version=1,
+            event=EventResponse(**ev),
+            decks=[d for d in state.decks if str(d.get("event_id")) == str(event_id)],
+            matchups=[],
+            player_emails={},
+            players=[],
+        )
 
-    payload = EventExportData(
-        schema_version=1,
-        event=EventResponse(**event_dict),
-        decks=decks,
-        matchups=matchups,
-        player_emails=player_emails,
-        players=players_list,
-    )
-    filename = f"event-{event_dict['event_id']}.json"
+    filename = f"event-{payload.event.event_id}.json"
     return JSONResponse(
         content=payload.model_dump(),
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},

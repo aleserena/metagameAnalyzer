@@ -523,9 +523,13 @@ def get_budget_alternatives(
     return {"deck_id": deck_id, "threshold": threshold, "currency": currency, "source": source, "alternatives": alternatives}
 
 
-@router.put("/api/v1/decks/{deck_id}", dependencies=[Depends(require_admin_or_event_edit_deck), Depends(require_database)])
-def update_deck_endpoint(deck_id: int, body: UpdateDeckBody):
-    """Update deck metadata (admin-only)."""
+@router.put("/api/v1/decks/{deck_id}", dependencies=[Depends(require_database)])
+def update_deck_endpoint(
+    deck_id: int,
+    body: UpdateDeckBody,
+    role: str = Depends(require_admin_or_event_edit_deck),
+):
+    """Update deck metadata. Moving a deck to another event is admin-only."""
     deck_dict = _get_deck_by_id(deck_id)
     if not deck_dict:
         raise HTTPException(status_code=404, detail="Deck not found")
@@ -543,6 +547,12 @@ def update_deck_endpoint(deck_id: int, body: UpdateDeckBody):
         current["rank"] = body.rank
     if body.archetype is not None:
         current["archetype"] = body.archetype
+    if (
+        role != "admin"
+        and body.event_id is not None
+        and str(body.event_id) != str(deck_dict.get("event_id"))
+    ):
+        raise HTTPException(status_code=403, detail="Only an admin can move a deck to another event")
     if body.event_id is not None:
         with _db.session_scope() as session:
             ev = _db.get_event(session, body.event_id)

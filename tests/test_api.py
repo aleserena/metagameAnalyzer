@@ -1415,3 +1415,43 @@ def test_patch_matchup_round_conflict_returns_409(client_with_overrides):
         r = client_with_overrides.patch("/api/v1/matchups/1", json={"round": 2})
     assert r.status_code == 409
     assert r.json()["detail"] == "A result already exists for that round"
+
+
+@pytest.fixture
+def client_as_event_editor():
+    from api.dependencies import (
+        require_admin_or_event_edit,
+        require_admin_or_event_edit_deck,
+        require_database,
+    )
+
+    app.dependency_overrides[require_admin_or_event_edit_deck] = lambda deck_id: "event_edit"
+    app.dependency_overrides[require_admin_or_event_edit] = lambda event_id: "event_edit"
+    app.dependency_overrides[require_database] = lambda: None
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_event_editor_cannot_move_deck_to_another_event(client_as_event_editor):
+    r = client_as_event_editor.put("/api/v1/decks/811597", json={"event_id": "99999"})
+    assert r.status_code == 403
+    assert r.json()["detail"] == "Only an admin can move a deck to another event"
+
+
+def test_event_editor_may_resend_the_current_event_id(client_as_event_editor):
+    from api.routers import decks as dr
+
+    with patch.object(dr._db, "session_scope"), patch.object(dr._db, "get_event", return_value=None):
+        r = client_as_event_editor.put("/api/v1/decks/811597", json={"event_id": "80455"})
+    assert r.status_code != 403
+
+
+def test_admin_can_still_move_a_deck(client_with_overrides):
+    from api.routers import decks as dr
+
+    with patch.object(dr._db, "session_scope"), patch.object(dr._db, "get_event", return_value=None):
+        r = client_with_overrides.put("/api/v1/decks/811597", json={"event_id": "99999"})
+    assert r.status_code == 400
+    assert r.json()["detail"] == "Event not found"
