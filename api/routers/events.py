@@ -612,6 +612,40 @@ def import_event(body: EventExportData):
         raise HTTPException(status_code=500, detail="Failed to import event")
 
 
+def _resolve_merge_pairs(decks_keep: list[dict], decks_remove: list[dict], player_merges: list) -> list[tuple[int, int]]:
+    """Pair decks for an event merge: same player first, then manual pairs.
+
+    Raises ValueError naming the deck when a manual pair references a deck outside
+    its event or reuses a deck already paired.
+    """
+    keep_by_player_id = {d["player_id"]: d for d in decks_keep if d.get("player_id") is not None}
+    keep_ids = {d["deck_id"] for d in decks_keep}
+    remove_ids = {d["deck_id"] for d in decks_remove}
+    pairs: list[tuple[int, int]] = []
+    used_keep: set[int] = set()
+    used_remove: set[int] = set()
+    for d in decks_remove:
+        pid = d.get("player_id")
+        if pid is not None and pid in keep_by_player_id:
+            k = keep_by_player_id[pid]
+            pairs.append((k["deck_id"], d["deck_id"]))
+            used_keep.add(k["deck_id"])
+            used_remove.add(d["deck_id"])
+    for pm in player_merges:
+        if pm.deck_id_remove in used_remove:
+            continue
+        if pm.deck_id_keep not in keep_ids:
+            raise ValueError(f"Deck {pm.deck_id_keep} to keep is not in the kept event")
+        if pm.deck_id_remove not in remove_ids:
+            raise ValueError(f"Deck {pm.deck_id_remove} to remove is not in the removed event")
+        if pm.deck_id_keep in used_keep:
+            raise ValueError(f"Deck {pm.deck_id_keep} to keep is paired more than once")
+        pairs.append((pm.deck_id_keep, pm.deck_id_remove))
+        used_keep.add(pm.deck_id_keep)
+        used_remove.add(pm.deck_id_remove)
+    return pairs
+
+
 @router.post(
     "/api/v1/events/merge",
     dependencies=[Depends(require_admin), Depends(require_database)],
@@ -658,23 +692,11 @@ def merge_events(body: MergeEventsBody):
         with _db.session_scope() as session:
             decks_keep = _db.get_decks_by_event(session, keep_row.event_id)
             decks_remove = _db.get_decks_by_event(session, remove_row.event_id)
-        keep_by_player_id = {}
-        for d in decks_keep:
-            pid = d.get("player_id")
-            if pid is not None:
-                keep_by_player_id[pid] = d
-        auto_pairs: list[tuple[dict, dict]] = []
-        paired_remove_ids: set[int] = set()
-        for d in decks_remove:
-            pid = d.get("player_id")
-            if pid is not None and pid in keep_by_player_id:
-                auto_pairs.append((keep_by_player_id[pid], d))
-                paired_remove_ids.add(d["deck_id"])
-        all_pairs: list[tuple[int, int]] = [(k["deck_id"], r["deck_id"]) for k, r in auto_pairs]
-        for pm in body.player_merges:
-            if pm.deck_id_remove not in paired_remove_ids:
-                all_pairs.append((pm.deck_id_keep, pm.deck_id_remove))
-                paired_remove_ids.add(pm.deck_id_remove)
+        try:
+            all_pairs = _resolve_merge_pairs(decks_keep, decks_remove, body.player_merges)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        paired_remove_ids = {r for _, r in all_pairs}
         deck_keep_by_id = {d["deck_id"]: d for d in decks_keep}
         deck_remove_by_id = {d["deck_id"]: d for d in decks_remove}
 
@@ -753,6 +775,8 @@ def merge_events(body: MergeEventsBody):
             "decks_merged": decks_merged,
             "decks_moved": decks_moved,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Merge events failed: %s", e)
         raise HTTPException(status_code=500, detail="Failed to merge events.")
