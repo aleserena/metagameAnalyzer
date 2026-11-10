@@ -1643,3 +1643,13 @@ def test_list_decks_color_filter_and_no_shared_mutation(client, sample_decks):
     assert [d["deck_id"] for d in r.json()["decks"]] == [811597]
     assert r.json()["decks"][0]["color_identity"] == ["U", "R"]
     assert all("color_identity" not in d for d in state.decks)
+
+
+def test_list_decks_color_filter_skipped_when_lookup_fails(client, sample_decks):
+    from api.services import deck_index
+
+    with patch.object(deck_index, "lookup_cards", side_effect=RuntimeError("boom")):
+        r = client.get("/api/v1/decks?colors=U,R")
+    decks = r.json()["decks"]
+    assert len(decks) == len(state.decks)
+    assert all("color_identity" not in d for d in decks)

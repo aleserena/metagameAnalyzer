@@ -41,7 +41,13 @@ def test_duplicate_map_follows_the_data_version(sample_decks):
         assert spy.call_count == 2
 
 
-def test_color_lookup_failure_yields_empty_map(sample_decks):
+def test_color_lookup_failure_returns_none_and_retries(sample_decks):
     state.set_decks(list(sample_decks))
     with patch.object(deck_index, "lookup_cards", side_effect=RuntimeError("boom")):
-        assert deck_index.color_identities() == {}
+        assert deck_index.color_identities() is None
+    meta = {
+        "Spider-Man 2099": {"color_identity": ["U", "R"]},
+        "Terra, Magical Adept": {"color_identity": ["R", "U"]},
+    }
+    with patch.object(deck_index, "lookup_cards", return_value=meta):
+        assert deck_index.color_identities() == {811597: ["U", "R"], 811598: ["U", "R"]}

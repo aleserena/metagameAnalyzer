@@ -141,7 +141,7 @@ def list_decks(
         color_filter = {c for c in wanted if c in valid} or None
 
     colors_by_deck = deck_index.color_identities()
-    if color_filter:
+    if color_filter and colors_by_deck is not None:
         # Require deck to contain all selected colors.
         filtered = [
             d for d in filtered
@@ -158,7 +158,7 @@ def list_decks(
     # Normalize player names for display (merge aliases)
     page = [{**d, "player": _normalize_player(d.get("player") or "")} for d in page]
     for d in page:
-        ci = colors_by_deck.get(d.get("deck_id"))
+        ci = colors_by_deck.get(d.get("deck_id")) if colors_by_deck is not None else None
         if ci:
             d["color_identity"] = list(ci)
     if is_admin == "admin" and event_id is not None and state.database_available():

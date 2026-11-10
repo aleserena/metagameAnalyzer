@@ -2,7 +2,7 @@
 
 Both values depend only on the deck list (and, for colors, on card data, which
 bumps ``state.decks_version`` via ``state.touch()`` after a sync), so each is
-computed at most once per version. One lock guards both so concurrent cold
+computed at most once per version. Each has its own lock so concurrent cold
 callers trigger a single computation.
 """
 
@@ -16,7 +16,8 @@ from src.mtgtop8.models import Deck
 
 logger = logging.getLogger(__name__)
 
-_lock = threading.Lock()
+_dup_lock = threading.Lock()
+_color_lock = threading.Lock()
 _duplicates: tuple[int, dict[int, list[int]]] | None = None
 _colors: tuple[int, dict[int, list[str]]] | None = None
 
@@ -28,7 +29,7 @@ _EDH_FORMATS = {"EDH", "CEDH", "COMMANDER"}
 def duplicate_map() -> dict[int, list[int]]:
     """``find_duplicate_decks`` over all of ``state.decks``, cached per data version."""
     global _duplicates
-    with _lock:
+    with _dup_lock:
         version = state.decks_version
         if _duplicates is None or _duplicates[0] != version:
             decks = [Deck.from_dict(d) for d in state.decks]
@@ -58,13 +59,14 @@ def _build_color_identities(deck_dicts: list[dict]) -> dict[int, list[str]]:
     return result
 
 
-def color_identities() -> dict[int, list[str]]:
+def color_identities() -> dict[int, list[str]] | None:
     """deck_id -> commander colors (W,U,B,R,G then C), cached per data version.
 
-    A lookup failure is logged and yields an empty map for that version.
+    On a lookup failure the error is logged and None is returned without caching,
+    so the next call retries.
     """
     global _colors
-    with _lock:
+    with _color_lock:
         version = state.decks_version
         if _colors is None or _colors[0] != version:
             try:
@@ -72,6 +74,6 @@ def color_identities() -> dict[int, list[str]]:
             except Exception:
                 # Color identity is cosmetic; do not fail requests over it.
                 logger.exception("Color identity lookup failed")
-                value = {}
+                return None
             _colors = (version, value)
         return _colors[1]
