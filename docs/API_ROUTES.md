@@ -6,7 +6,7 @@ Route -> handler-function map for the FastAPI app. **Grep for the handler name**
 
 Auth column: `admin` = admin token required, `event-edit` = admin **or** a valid event-edit token, `DB` = database required. Blank = public.
 
-Total endpoints: **95**.
+Total endpoints: **96**.
 
 ## Health / Info / Auth / Feedback
 
@@ -149,6 +149,7 @@ Total endpoints: **95**.
 | GET | `/api/v1/export` | `export_decks` (in `api/routers/data.py`) | admin |
 | POST | `/api/v1/load` | `load_decks` (in `api/routers/data.py`) | admin, DB |
 | POST | `/api/v1/scrape` | `run_scrape` (in `api/routers/data.py`) | admin |
+| GET | `/api/v1/scrape/status` | `get_scrape_status` (in `api/routers/data.py`) | admin |
 | POST | `/api/v1/scrape/stop` | `stop_scrape` (in `api/routers/data.py`) | admin |
 
 ## Other

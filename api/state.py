@@ -7,7 +7,6 @@ capture once and never see updated.
 """
 
 import logging
-import threading
 from pathlib import Path
 
 from src.mtgtop8.models import Deck
@@ -37,7 +36,6 @@ class AppState:
         self.metagame_cache: dict | None = None
         self.events_cache: list[dict] | None = None  # cached list for GET /api/events
         self.player_aliases: dict[str, str] = {}  # alias -> canonical
-        self.scrape_cancel_event: threading.Event | None = None
 
     def database_available(self) -> bool:
         """Whether the DB is configured and reachable.
@@ -153,8 +151,12 @@ def _load_from_file(path: str) -> None:
     _invalidate_metagame()
 
 
-def _load_decks_from_db() -> None:
-    """Load all decks from DB into state.decks. No-op if DB not available."""
+def _load_decks_from_db(*, strict: bool = False) -> None:
+    """Load all decks from DB into state.decks. No-op if DB not available.
+
+    state.decks is only replaced after the query succeeds. With ``strict`` a failure is
+    re-raised (so a caller can report it) instead of being logged and swallowed.
+    """
     if not _database_available():
         return
     try:
@@ -163,6 +165,8 @@ def _load_decks_from_db() -> None:
         _invalidate_metagame()
     except Exception as e:
         logger.exception("Failed to load decks from DB: %s", e)
+        if strict:
+            raise
 
 
 def log_split_player_identities() -> None:

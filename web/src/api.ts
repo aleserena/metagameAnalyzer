@@ -1,4 +1,4 @@
-import type { Deck, MetagameReport, Event, PlayerStats, SimilarDeck, ArchetypeDetail, ArchetypeWeeklyStats, CardHeatmap, ChurnReport, HealthReport, H2HSummary, H2HDetail, CommanderSynergy, HadoukenPreview, HadoukenApplyResult } from './types'
+import type { Deck, MetagameReport, Event, PlayerStats, SimilarDeck, ArchetypeDetail, ArchetypeWeeklyStats, CardHeatmap, ChurnReport, HealthReport, H2HSummary, H2HDetail, CommanderSynergy, HadoukenPreview, HadoukenApplyResult, ScrapeJobSnapshot } from './types'
 import { getToken } from './contexts/AuthContext'
 import { fetchWithTimeout } from './utils'
 
@@ -1196,16 +1196,21 @@ export async function loadDecksFromPath(path: string): Promise<{ loaded: number;
   })
 }
 
-export async function runScrape(params: {
+export async function startScrape(body: {
   format?: string
   period?: string
   store?: string
   event_ids?: string
-}): Promise<{ loaded: number; message: string; progress: string[] }> {
+  force_replace?: boolean
+}): Promise<{ job: ScrapeJobSnapshot }> {
   return fetchApi('/scrape', {
     method: 'POST',
-    body: JSON.stringify(params),
+    body: JSON.stringify(body),
   })
+}
+
+export async function getScrapeStatus(after: number): Promise<{ job: ScrapeJobSnapshot | null }> {
+  return fetchApi(`/scrape/status?after=${after}`)
 }
 
 export async function stopScrape(): Promise<{ message: string }> {

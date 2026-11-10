@@ -1,12 +1,8 @@
 import json
 import logging
-import re
-import threading
-import time
 
-from fastapi import Depends, File, HTTPException, Request, UploadFile
-from fastapi.responses import Response, StreamingResponse
-from src.mtgtop8.scraper import scrape
+from fastapi import Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import JSONResponse, Response
 
 from api.dependencies import (
     require_admin,
@@ -21,10 +17,15 @@ from api.schemas.events import (
     LoadBody,
     ScrapeBody,
 )
-from api.services.scrape_store import persist_scraped_decks
+from api.services.scrape_job import (
+    ScrapeAlreadyRunning,
+    current_job,
+    request_stop,
+    snapshot,
+    start_job,
+)
 from api.state import (
     _invalidate_metagame,
-    _load_decks_from_db,
     _load_from_file,
     _persist_decks_to_db,
     state,
@@ -150,10 +151,8 @@ def run_analyze():
 
 
 @router.post("/api/v1/scrape")
-async def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
-    """Trigger scrape with SSE progress streaming."""
-    import queue
-
+def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
+    """Start a scrape as a server-side job (poll GET /api/v1/scrape/status)."""
     format_id = body.format_id
     period = body.period
     store = body.store
@@ -183,130 +182,35 @@ async def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
                 if eid is not None and str(eid).isdigit()
             }
 
-    state.scrape_cancel_event = threading.Event()
-    start_time = time.time()
     logger.info(
-        "Scrape started: format=%s period=%s store=%s event_ids=%s ignore_existing=%s force_replace=%s db_available=%s skip_count=%s",
+        "Scrape requested: format=%s period=%s store=%s event_ids=%s ignore_existing=%s force_replace=%s db_available=%s skip_count=%s",
         format_id, period, store, scrape_event_ids, body.ignore_existing_events, body.force_replace,
         state.database_available(), len(skip_event_ids) if skip_event_ids else 0,
     )
+    params = {
+        "format_id": format_id,
+        "period": period,
+        "store": store,
+        "event_ids": scrape_event_ids,
+        "skip_event_ids": None if body.force_replace or scrape_event_ids else skip_event_ids,
+        "force_replace": body.force_replace,
+    }
+    try:
+        job = start_job(params)
+    except ScrapeAlreadyRunning:
+        raise HTTPException(status_code=409, detail="A scrape is already running")
+    return JSONResponse(status_code=202, content={"job": snapshot(job)})
 
-    q: queue.Queue[str | None] = queue.Queue()
-    result_holder: list = []
-    error_holder: list = []
 
-    def on_progress(msg: str) -> None:
-        q.put(msg)
-
-    def run_scraper() -> None:
-        try:
-            decks = scrape(
-                format_id=format_id,
-                period=period,
-                store=store,
-                event_ids=scrape_event_ids,
-                on_progress=on_progress,
-                skip_event_ids=None if body.force_replace or scrape_event_ids else skip_event_ids,
-                should_stop=lambda: state.scrape_cancel_event.is_set() if state.scrape_cancel_event else False,
-            )
-            result_holder.append(decks)
-        except Exception as e:
-            logger.exception(
-                "Scrape failed: format=%s period=%s event_ids=%s error=%s",
-                format_id, period, scrape_event_ids, e,
-            )
-            error_holder.append(str(e))
-        finally:
-            q.put(None)
-
-    thread = threading.Thread(target=run_scraper, daemon=True)
-    thread.start()
-
-    def event_stream():
-        total_events = 0
-        current_event = 0
-        total_decks_in_event = 0
-        current_deck_in_event = 0
-        while True:
-            try:
-                msg = q.get(timeout=300)
-            except queue.Empty:
-                yield f"data: {json.dumps({'type': 'error', 'message': 'Timeout'})}\n\n"
-                return
-            if msg is None:
-                break
-
-            pct = 0
-            events_match = re.search(r"Found (\d+) events", msg)
-            if events_match:
-                total_events = int(events_match.group(1))
-
-            event_match = re.match(r"\[(\d+)/(\d+)\]", msg)
-            if event_match:
-                current_event = int(event_match.group(1))
-                total_events = int(event_match.group(2))
-
-            deck_found = re.search(r"Found (\d+) decks", msg)
-            if deck_found:
-                total_decks_in_event = int(deck_found.group(1))
-                current_deck_in_event = 0
-
-            deck_parse = re.search(r"Parsing deck (\d+)/(\d+)", msg)
-            if deck_parse:
-                current_deck_in_event = int(deck_parse.group(1))
-                total_decks_in_event = int(deck_parse.group(2))
-
-            if total_events > 0:
-                event_pct = ((current_event - 1) / total_events) * 100 if current_event > 0 else 0
-                if total_decks_in_event > 0 and current_event > 0:
-                    deck_pct = (current_deck_in_event / total_decks_in_event) * (100 / total_events)
-                    pct = event_pct + deck_pct
-                else:
-                    pct = event_pct
-                pct = min(pct, 99)
-
-            yield f"data: {json.dumps({'type': 'progress', 'message': msg, 'pct': round(pct, 1)})}\n\n"
-
-        if error_holder:
-            duration = time.time() - start_time
-            logger.warning("Scrape failed after %.1fs: %s", duration, error_holder[0])
-            yield f"data: {json.dumps({'type': 'error', 'message': error_holder[0]})}\n\n"
-        elif result_holder:
-            decks = result_holder[0]
-            deck_dicts = [d.to_dict() for d in decks]
-            events_in_run = {str(d.get("event_id")) for d in deck_dicts if d.get("event_id") is not None}
-            if state.database_available():
-                try:
-                    with _db.session_scope() as session:
-                        persist_scraped_decks(session, deck_dicts, refresh_events=body.force_replace)
-                    _load_decks_from_db()
-                    duration = time.time() - start_time
-                    logger.info(
-                        "Scrape completed: decks=%s events=%s duration_sec=%.1f force_replace=%s",
-                        len(decks), len(events_in_run), duration, body.force_replace,
-                    )
-                except Exception as e:
-                    logger.exception("Failed to persist scraped decks to DB: %s", e)
-                    yield f"data: {json.dumps({'type': 'error', 'message': f'Failed to save scraped decks: {e}'})}\n\n"
-                    return
-            loaded = len(state.decks)
-            num_events = len(events_in_run)
-            cancelled = state.scrape_cancel_event is not None and state.scrape_cancel_event.is_set()
-            message = f"Scraped {len(decks)} decks from {num_events} event{'s' if num_events != 1 else ''}"
-            if cancelled:
-                message = f"Stopped. {message}"
-            yield f"data: {json.dumps({'type': 'cancelled' if cancelled else 'done', 'message': message, 'loaded': loaded, 'pct': 100})}\n\n"
-        else:
-            duration = time.time() - start_time
-            logger.warning("Scrape ended with unknown error after %.1fs", duration)
-            yield f"data: {json.dumps({'type': 'error', 'message': 'Unknown error'})}\n\n"
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+@router.get("/api/v1/scrape/status")
+def get_scrape_status(after: int = Query(0, ge=0), _: str = Depends(require_admin)):
+    """Status of the current (or most recent) scrape job; ``job`` is null when the server has none."""
+    job = current_job()
+    return {"job": snapshot(job, after) if job else None}
 
 
 @router.post("/api/v1/scrape/stop")
 def stop_scrape(_: str = Depends(require_admin)):
     """Request the current scrape to stop. Takes effect after the next progress check."""
-    if state.scrape_cancel_event is not None:
-        state.scrape_cancel_event.set()
+    request_stop()
     return {"message": "Stop requested"}

@@ -1,14 +1,13 @@
-import { useState, useEffect, useRef } from 'react'
-import { useBlocker } from 'react-router-dom'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import toast from 'react-hot-toast'
-import { getToken } from '../contexts/AuthContext'
-import { API_BASE, stopScrape } from '../api'
-import Modal from '../components/Modal'
+import { getScrapeStatus, startScrape, stopScrape } from '../api'
 import { reportError } from '../utils'
 import { FORMATS, META_EDH } from '../config'
+import type { ScrapeFailedDeck, ScrapeJobSnapshot } from '../types'
 
 const FORMAT_OPTIONS = Object.entries(FORMATS)
 const PERIOD_OPTIONS = Object.keys(META_EDH)
+const POLL_MS = 1500
 
 export default function Scrape() {
   const [format, setFormat] = useState('EDH')
@@ -20,104 +19,121 @@ export default function Scrape() {
   const [progress, setProgress] = useState<string[]>([])
   const [pct, setPct] = useState(0)
   const [errors, setErrors] = useState<string[]>([])
+  const [failedDecks, setFailedDecks] = useState<ScrapeFailedDeck[]>([])
   const logRef = useRef<HTMLDivElement>(null)
-  const blockerDialogRef = useRef<HTMLDivElement>(null)
-  const abortControllerRef = useRef<AbortController | null>(null)
-
-  const blocker = useBlocker(loading)
+  const jobIdRef = useRef<string | null>(null)
+  const afterRef = useRef(0)
+  const wasRunningRef = useRef(false)
+  const mountedRef = useRef(true)
+  const inFlightRef = useRef(false)
 
   useEffect(() => {
-    if (blocker.state === 'blocked' && blockerDialogRef.current) {
-      const focusable = blockerDialogRef.current.querySelector<HTMLButtonElement>('button')
-      focusable?.focus()
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
     }
-  }, [blocker.state])
+  }, [])
 
-  // Block browser tab close/refresh while scraping
+  const goIdle = useCallback((message: string) => {
+    wasRunningRef.current = false
+    jobIdRef.current = null
+    afterRef.current = 0
+    setLoading(false)
+    toast(message)
+  }, [])
+
+  const applySnapshot = useCallback((job: ScrapeJobSnapshot, requestedAfter: number) => {
+    jobIdRef.current = job.id
+    afterRef.current = job.next
+    if (job.messages.length > 0 || requestedAfter === 0) {
+      setProgress((prev) => (requestedAfter === 0 ? job.messages : [...prev, ...job.messages]))
+      setTimeout(() => logRef.current?.scrollTo?.(0, logRef.current.scrollHeight), 0)
+    }
+    setPct(job.pct)
+    setFailedDecks(job.failed_decks)
+    if (job.status === 'running') {
+      wasRunningRef.current = true
+      setLoading(true)
+      return
+    }
+    setLoading(false)
+    if (job.status === 'error') setErrors([job.message])
+    if (wasRunningRef.current) {
+      if (job.status === 'done') toast.success(job.message)
+      else if (job.status === 'cancelled') toast(job.message, { icon: '⏹' })
+      else toast.error(job.message)
+    }
+    wasRunningRef.current = false
+  }, [])
+
+  const poll = useCallback(async () => {
+    const requestedAfter = afterRef.current
+    try {
+      const { job } = await getScrapeStatus(requestedAfter)
+      if (!mountedRef.current) return
+      if (!job) {
+        if (wasRunningRef.current) goIdle('The scrape is no longer running on the server.')
+        else setLoading(false)
+        return
+      }
+      if (jobIdRef.current && jobIdRef.current !== job.id) {
+        // A different job than the one we were following: reload its log from the start.
+        afterRef.current = 0
+        jobIdRef.current = job.id
+        void poll()
+        return
+      }
+      applySnapshot(job, requestedAfter)
+    } catch {
+      if (!mountedRef.current) return
+      if (wasRunningRef.current) goIdle('The scrape is no longer running on the server.')
+      else setLoading(false)
+    }
+  }, [applySnapshot, goIdle])
+
+  // Reattach to a scrape already running on the server (or show the last result).
+  useEffect(() => {
+    void poll()
+  }, [poll])
+
+  // While a scrape runs, keep polling the server.
   useEffect(() => {
     if (!loading) return
-    const handler = (e: BeforeUnloadEvent) => {
-      e.preventDefault()
-    }
-    window.addEventListener('beforeunload', handler)
-    return () => window.removeEventListener('beforeunload', handler)
-  }, [loading])
+    const timer = setInterval(() => {
+      if (inFlightRef.current) return
+      inFlightRef.current = true
+      poll().finally(() => {
+        inFlightRef.current = false
+      })
+    }, POLL_MS)
+    return () => clearInterval(timer)
+  }, [loading, poll])
 
   const handleScrape = async () => {
     setLoading(true)
     setProgress([])
     setPct(0)
     setErrors([])
-    abortControllerRef.current = new AbortController()
-    const signal = abortControllerRef.current.signal
-
+    setFailedDecks([])
+    jobIdRef.current = null
+    afterRef.current = 0
     try {
-      const token = getToken()
-      const res = await fetch(`${API_BASE}/scrape`, {
-        method: 'POST',
-        signal,
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({
-          format,
-          period: period || undefined,
-          store: store || undefined,
-          event_ids: eventIds || undefined,
-          ...(forceReplace ? { force_replace: true } : {}),
-        }),
+      const { job } = await startScrape({
+        format,
+        period: period || undefined,
+        store: store || undefined,
+        event_ids: eventIds || undefined,
+        ...(forceReplace ? { force_replace: true } : {}),
       })
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: res.statusText }))
-        throw new Error(typeof err.detail === 'string' ? err.detail : res.statusText)
-      }
-
-      const reader = res.body?.getReader()
-      if (!reader) throw new Error('No response stream')
-
-      const decoder = new TextDecoder()
-      let buffer = ''
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() ?? ''
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue
-          try {
-            const data = JSON.parse(line.slice(6))
-            if (data.type === 'progress') {
-              setProgress((prev) => [...prev, data.message])
-              setPct(data.pct ?? 0)
-              setTimeout(() => logRef.current?.scrollTo(0, logRef.current.scrollHeight), 0)
-            } else if (data.type === 'done') {
-              toast.success(data.message)
-              setPct(100)
-            } else if (data.type === 'cancelled') {
-              toast(data.message, { icon: '⏹' })
-              setPct(100)
-            } else if (data.type === 'error') {
-              const errMsg = typeof data.message === 'string' ? data.message : reportError(data.message)
-              setErrors((prev) => [...prev, errMsg])
-              toast.error(errMsg)
-            }
-          } catch {
-            // ignore malformed lines
-          }
-        }
-      }
+      wasRunningRef.current = true
+      applySnapshot(job, 0)
     } catch (e) {
-      if (!(e instanceof Error && e.name === 'AbortError')) {
-        const errMsg = reportError(e)
-        setErrors((prev) => [...prev, errMsg])
-        toast.error(errMsg)
-      }
-    } finally {
+      const errMsg = reportError(e)
+      setErrors([errMsg])
+      toast.error(errMsg)
+      wasRunningRef.current = false
+      // A scrape may already be running (409): follow it instead of showing a dead form.
+      void poll()
       setLoading(false)
     }
   }
@@ -192,7 +208,6 @@ export default function Scrape() {
               style={{ background: 'var(--danger, #e53e3e)' }}
               onClick={() => {
                 stopScrape().catch(() => {})
-                abortControllerRef.current?.abort()
               }}
             >
               Stop
@@ -263,40 +278,35 @@ export default function Scrape() {
         </div>
       )}
 
-      {loading && (
-        <div style={{ marginTop: '1rem', color: 'var(--warning)', fontSize: '0.875rem' }}>
-          Scraping in progress. Please don't close or navigate away from this page.
+      {failedDecks.length > 0 && (
+        <div
+          style={{
+            marginTop: '1rem',
+            padding: '0.75rem 1rem',
+            background: 'rgba(229, 62, 62, 0.1)',
+            border: '1px solid var(--danger, #e53e3e)',
+            borderRadius: 8,
+            fontSize: '0.875rem',
+          }}
+          role="alert"
+        >
+          <strong style={{ display: 'block', marginBottom: '0.5rem' }}>
+            {failedDecks.length} deck{failedDecks.length !== 1 ? 's' : ''} failed
+          </strong>
+          <ul style={{ margin: 0, paddingLeft: '1.25rem' }}>
+            {failedDecks.map((f, i) => (
+              <li key={i} style={{ marginBottom: '0.25rem', wordBreak: 'break-word' }}>
+                Event {f.event_id ?? '?'}, deck {f.deck_id}: {f.error}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
-      {blocker.state === 'blocked' && (
-        <Modal
-          title="Scraping is in progress. Are you sure you want to leave?"
-          onClose={() => blocker.reset?.()}
-          closeOnOverlayClick={false}
-          size={400}
-          contentRef={blockerDialogRef}
-        >
-          <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
-            <button
-              type="button"
-              className="btn"
-              onClick={() => blocker.reset?.()}
-              aria-label="Stay on page"
-            >
-              Stay
-            </button>
-            <button
-              type="button"
-              className="btn"
-              style={{ background: 'var(--danger, #e53e3e)' }}
-              onClick={() => blocker.proceed?.()}
-              aria-label="Leave page"
-            >
-              Leave
-            </button>
-          </div>
-        </Modal>
+      {loading && (
+        <div style={{ marginTop: '1rem', color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+          Scraping runs on the server. You can leave this page and come back; progress and results are kept.
+        </div>
       )}
     </div>
   )

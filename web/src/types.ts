@@ -392,3 +392,22 @@ export interface CommanderSynergy {
   flex_cards: CommanderCardEntry[]
   tech_cards: CommanderTechCardEntry[]
 }
+
+export interface ScrapeFailedDeck {
+  deck_id: number | string
+  event_id: number | string | null
+  error: string
+}
+
+export interface ScrapeJobSnapshot {
+  id: string
+  status: 'running' | 'done' | 'cancelled' | 'error'
+  pct: number
+  messages: string[]
+  next: number
+  message: string
+  decks_saved: number
+  failed_decks: ScrapeFailedDeck[]
+  started_at: string
+  finished_at: string | null
+}
