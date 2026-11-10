@@ -1409,18 +1409,18 @@ def list_matchups_reported_against_player_id(session: Session, event_id: str, op
     if not deck_ids:
         return []
     rows = (
-        session.query(MatchupRow, DeckRow)
-        .join(DeckRow, MatchupRow.deck_id == DeckRow.deck_id)
+        session.query(DeckRow.player, MatchupRow.result, MatchupRow.round)
+        .join(MatchupRow, MatchupRow.deck_id == DeckRow.deck_id)
         .filter(DeckRow.event_id == eid, MatchupRow.opponent_player_id == opponent_player_id)
         .all()
     )
     return [
         {
-            "reporting_player": (d.player or "").strip(),
-            "result": (m.result or "").strip(),
-            "round": m.round,
+            "reporting_player": (player or "").strip(),
+            "result": (result or "").strip(),
+            "round": round_,
         }
-        for m, d in rows
+        for player, result, round_ in rows
     ]
 
 
@@ -2097,24 +2097,35 @@ def set_matchups_players_min_matches(session: Session, value: int) -> None:
 def list_matchups_with_deck_info(session: Session) -> list[dict]:
     """All matchups with their deck's archetype, format_id, date, event_id (for summary aggregation)."""
     rows = (
-        session.query(MatchupRow, DeckRow)
+        session.query(
+            MatchupRow.deck_id,
+            MatchupRow.opponent_deck_id,
+            MatchupRow.opponent_archetype,
+            MatchupRow.result,
+            MatchupRow.result_note,
+            MatchupRow.round,
+            DeckRow.archetype,
+            DeckRow.format_id,
+            DeckRow.event_id,
+            DeckRow.date,
+        )
         .join(DeckRow, MatchupRow.deck_id == DeckRow.deck_id)
         .all()
     )
     return [
         {
-            "deck_id": m.deck_id,
-            "opponent_deck_id": m.opponent_deck_id,
-            "archetype": matchup_aggregate_archetype_label(d.archetype),
-            "format_id": d.format_id or "",
-            "event_id": d.event_id,
-            "date": d.date or "",
-            "opponent_archetype": matchup_aggregate_archetype_label(m.opponent_archetype),
-            "result": m.result or "loss",
-            "result_note": m.result_note or "",
-            "round": m.round,
+            "deck_id": r.deck_id,
+            "opponent_deck_id": r.opponent_deck_id,
+            "archetype": matchup_aggregate_archetype_label(r.archetype),
+            "format_id": r.format_id or "",
+            "event_id": r.event_id,
+            "date": r.date or "",
+            "opponent_archetype": matchup_aggregate_archetype_label(r.opponent_archetype),
+            "result": r.result or "loss",
+            "result_note": r.result_note or "",
+            "round": r.round,
         }
-        for m, d in rows
+        for r in rows
     ]
 
 
@@ -2138,17 +2149,12 @@ def player_row_is_unnamed_placeholder(session: Session, player_id: int) -> bool:
     return _is_unnamed_placeholder_display(row.display_name or "")
 
 
-def _matchup_row_player_display(player_row: PlayerRow | None, denormalized: str) -> str:
+def _matchup_row_player_display(display_name: str | None, denormalized: str) -> str:
     """Label for matrix / summaries: use players.display_name unless it is Unnamed* and denormalized text is a real name."""
     den = (denormalized or "").strip()
-    if player_row is not None:
-        disp = (player_row.display_name or "").strip()
-        if (
-            disp
-            and _is_unnamed_placeholder_display(disp)
-            and den
-            and not _is_unnamed_placeholder_display(den)
-        ):
+    if display_name is not None:
+        disp = display_name.strip()
+        if disp and _is_unnamed_placeholder_display(disp) and den and not _is_unnamed_placeholder_display(den):
             return den
         if disp:
             return disp
@@ -2165,7 +2171,24 @@ def list_matchups_with_deck_and_players(session: Session) -> list[dict]:
     PlayerDeck = aliased(PlayerRow)
     PlayerOpp = aliased(PlayerRow)
     rows = (
-        session.query(MatchupRow, DeckRow, PlayerDeck, PlayerOpp)
+        session.query(
+            MatchupRow.deck_id,
+            MatchupRow.opponent_deck_id,
+            MatchupRow.opponent_player,
+            MatchupRow.opponent_archetype,
+            MatchupRow.result,
+            MatchupRow.result_note,
+            MatchupRow.round,
+            DeckRow.player_id,
+            DeckRow.player,
+            DeckRow.archetype,
+            DeckRow.format_id,
+            DeckRow.event_id,
+            DeckRow.date,
+            PlayerDeck.display_name.label("deck_player_display"),
+            PlayerOpp.id.label("opp_player_pk"),
+            PlayerOpp.display_name.label("opp_player_display"),
+        )
         .join(DeckRow, MatchupRow.deck_id == DeckRow.deck_id)
         .outerjoin(PlayerDeck, DeckRow.player_id == PlayerDeck.id)
         .outerjoin(PlayerOpp, MatchupRow.opponent_player_id == PlayerOpp.id)
@@ -2173,22 +2196,22 @@ def list_matchups_with_deck_and_players(session: Session) -> list[dict]:
     )
     return [
         {
-            "deck_id": m.deck_id,
-            "opponent_deck_id": m.opponent_deck_id,
-            "player_id": d.player_id,
-            "opponent_player_id": (p_opp.id if p_opp else None),
-            "player": _matchup_row_player_display(p_deck, d.player or ""),
-            "opponent_player": _matchup_row_player_display(p_opp, m.opponent_player or ""),
-            "archetype": matchup_aggregate_archetype_label(d.archetype),
-            "opponent_archetype": matchup_aggregate_archetype_label(m.opponent_archetype),
-            "format_id": d.format_id or "",
-            "event_id": d.event_id,
-            "date": d.date or "",
-            "result": m.result or "loss",
-            "result_note": m.result_note or "",
-            "round": m.round,
+            "deck_id": r.deck_id,
+            "opponent_deck_id": r.opponent_deck_id,
+            "player_id": r.player_id,
+            "opponent_player_id": r.opp_player_pk,
+            "player": _matchup_row_player_display(r.deck_player_display, r.player or ""),
+            "opponent_player": _matchup_row_player_display(r.opp_player_display, r.opponent_player or ""),
+            "archetype": matchup_aggregate_archetype_label(r.archetype),
+            "opponent_archetype": matchup_aggregate_archetype_label(r.opponent_archetype),
+            "format_id": r.format_id or "",
+            "event_id": r.event_id,
+            "date": r.date or "",
+            "result": r.result or "loss",
+            "result_note": r.result_note or "",
+            "round": r.round,
         }
-        for m, d, p_deck, p_opp in rows
+        for r in rows
     ]
 
 

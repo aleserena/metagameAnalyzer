@@ -423,3 +423,42 @@ def test_update_matchup_mirrors_result_and_round(db_session_rollback):
     session.flush()
     theirs = session.query(MatchupRow).filter(MatchupRow.deck_id == b).one()
     assert (theirs.result, theirs.round) == ("win", 2)
+
+
+def test_matchup_listings_do_not_select_decklists(db_session_rollback, sql_log):
+    from api.db import list_matchups_with_deck_and_players, list_matchups_with_deck_info
+
+    session = db_session_rollback
+    eid = f"{_TEST_EVENT_PREFIX}slim"
+    a, b = _TEST_DECK_ID_BASE + 921, _TEST_DECK_ID_BASE + 922
+    create_event(session, "Slim", "01/01/25", "ST", event_id=eid, player_count=2)
+    upsert_deck(session, _make_deck(a, eid, "Slim A"))
+    upsert_deck(session, _make_deck(b, eid, "Slim B"))
+    session.flush()
+    upsert_matchups_for_deck(
+        session, a, [{"opponent_player": "Slim B", "opponent_deck_id": b, "result": "win", "round": 1}]
+    )
+    session.flush()
+    sql_log.clear()
+    info = [r for r in list_matchups_with_deck_info(session) if r["event_id"] == eid]
+    players = [r for r in list_matchups_with_deck_and_players(session) if r["event_id"] == eid]
+    against = list_matchups_reported_against_player_id(session, eid, players[0]["opponent_player_id"])
+    assert against
+    assert not any("mainboard" in s or "sideboard" in s for s in sql_log)
+    assert set(info[0]) == {
+        "deck_id",
+        "opponent_deck_id",
+        "archetype",
+        "format_id",
+        "event_id",
+        "date",
+        "opponent_archetype",
+        "result",
+        "result_note",
+        "round",
+    }
+    assert set(players[0]) == set(info[0]) | {"player_id", "opponent_player_id", "player", "opponent_player"}
+    assert sorted((r["player"], r["opponent_player"], r["result"]) for r in players) == [
+        ("Slim A", "Slim B", "win"),
+        ("Slim B", "Slim A", "loss"),
+    ]
