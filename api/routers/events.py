@@ -41,6 +41,7 @@ from api.schemas.settings import (
 )
 from api.schemas.upload import CreateUploadLinksBody
 from api.services import hadouken as _hadouken
+from api.services.event_import import import_event_payload
 from api.state import (
     _events_from_decks,
     _get_event_by_id_from_decks,
@@ -596,91 +597,14 @@ def import_event(body: EventExportData):
 
     try:
         with _db.session_scope() as session:
-            # Create new manual event with a fresh ID
-            new_event_id = _db.next_manual_event_id(session)
-            ev = body.event
-            row = _db.create_event(
-                session,
-                event_name=(ev.event_name or "").strip() or "Unnamed",
-                date=(ev.date or "").strip(),
-                format_id=(ev.format_id or "").strip() or "EDH",
-                origin=_db.ORIGIN_MANUAL,
-                event_id=new_event_id,
-                player_count=ev.player_count or 0,
-                store=(ev.store or "").strip(),
-                location=(ev.location or "").strip(),
-            )
-            event_dict = _db.event_row_to_dict(row)
-
-            # Map old deck_ids -> new manual deck_ids
-            decks_data = body.decks or []
-            deck_id_map: dict[int, int] = {}
-            next_deck_id = _db.next_manual_deck_id(session)
-            for deck_dict_raw in decks_data:
-                if "deck_id" not in deck_dict_raw:
-                    raise HTTPException(status_code=400, detail="Each deck must include a 'deck_id' field")
-                try:
-                    old_deck_id = int(deck_dict_raw.get("deck_id"))
-                except Exception:
-                    raise HTTPException(status_code=400, detail="Each deck 'deck_id' must be an integer")
-                new_deck_id = next_deck_id
-                next_deck_id += 1
-                deck_id_map[old_deck_id] = new_deck_id
-
-                deck_data = dict(deck_dict_raw)
-                deck_data["deck_id"] = new_deck_id
-                deck_data["event_id"] = new_event_id
-                deck_data["event_name"] = event_dict.get("event_name") or deck_data.get("event_name") or ""
-                deck_data["date"] = event_dict.get("date") or deck_data.get("date") or ""
-                if not deck_data.get("format_id"):
-                    deck_data["format_id"] = event_dict.get("format_id", "") or "EDH"
-
-                _resolve_deck_player(session, deck_data)
-                deck_row = _db.dict_to_deck_row(deck_data, origin=_db.ORIGIN_MANUAL)
-                session.add(deck_row)
-
-            # Insert matchups, remapping deck IDs
-            matchups_data = body.matchups or []
-            per_deck_matchups: dict[int, list[dict]] = {}
-            for m_raw in matchups_data:
-                if "deck_id" not in m_raw:
-                    continue
-                try:
-                    old_deck_id = int(m_raw.get("deck_id"))
-                except Exception:
-                    continue
-                new_deck_id = deck_id_map.get(old_deck_id)
-                if new_deck_id is None:
-                    continue
-
-                opp_old = m_raw.get("opponent_deck_id")
-                new_opp_id = None
-                if opp_old is not None:
-                    try:
-                        new_opp_id = deck_id_map.get(int(opp_old))
-                    except Exception:
-                        new_opp_id = None
-
-                item = {
-                    "opponent_player": (m_raw.get("opponent_player") or "").strip(),
-                    "opponent_deck_id": new_opp_id,
-                    "opponent_archetype": m_raw.get("opponent_archetype"),
-                    "result": (m_raw.get("result") or "loss").strip() or "loss",
-                    "result_note": (m_raw.get("result_note") or None),
-                    "round": m_raw.get("round"),
-                }
-                per_deck_matchups.setdefault(new_deck_id, []).append(item)
-
-            for deck_id, items in per_deck_matchups.items():
-                _db.upsert_matchups_for_deck(session, deck_id, items)
-
-            # Restore player emails for players in this event
-            for player, email in (body.player_emails or {}).items():
-                _db.set_player_email(session, player, email)
+            try:
+                result = import_event_payload(session, body)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
 
         _load_decks_from_db()
         _invalidate_events_cache()
-        return {"event_id": event_dict["event_id"], "message": "imported", "deck_count": len(decks_data)}
+        return {"event_id": result["event_id"], "message": "imported", "deck_count": result["deck_count"]}
     except HTTPException:
         raise
     except Exception as e:
