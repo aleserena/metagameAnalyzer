@@ -168,3 +168,21 @@ def db_session_rollback():
     finally:
         session.rollback()
         session.close()
+
+
+@pytest.fixture
+def sql_log(db_session_rollback):
+    """List of every SQL statement executed on the test session's engine during the test."""
+    from sqlalchemy import event
+
+    engine = db_session_rollback.get_bind()
+    statements: list[str] = []
+
+    def _record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", _record)
+    try:
+        yield statements
+    finally:
+        event.remove(engine, "before_cursor_execute", _record)

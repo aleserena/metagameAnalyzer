@@ -30,7 +30,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.orm import Session, aliased, declarative_base, sessionmaker
+from sqlalchemy.orm import Session, aliased, declarative_base, sessionmaker, validates
 
 from api.results import COUNTED_RESULTS, effective_wld, invert_result
 
@@ -63,6 +63,13 @@ class PlayerRow(Base):
     __tablename__ = "players"
     id = Column(Integer, primary_key=True, autoincrement=True)
     display_name = Column(Text, nullable=False, unique=True)
+    # Accent-insensitive lowercase form of display_name (see _normalize_name_for_lookup); indexed for lookups.
+    name_key = Column(Text, nullable=True, index=True)
+
+    @validates("display_name")
+    def _sync_name_key(self, _key, value):
+        self.name_key = _normalize_name_for_lookup(value or "")
+        return value
 
 
 class DeckRow(Base):
@@ -1614,13 +1621,13 @@ def get_or_create_player(session: Session, display_name: str) -> tuple[int, str]
     # Before creating, find existing player by normalized name (e.g. Matías vs Matias)
     norm = _normalize_name_for_lookup(canonical)
     if norm:
-        for existing in session.query(PlayerRow).all():
-            if _normalize_name_for_lookup(existing.display_name or "") == norm:
-                if name != (existing.display_name or ""):
-                    alias_row = session.query(PlayerAliasRow).filter(PlayerAliasRow.alias == name).first()
-                    if not alias_row:
-                        session.add(PlayerAliasRow(alias=name, player_id=existing.id))
-                return existing.id, (existing.display_name or "")
+        existing = session.query(PlayerRow).filter(PlayerRow.name_key == norm).order_by(PlayerRow.id).first()
+        if existing:
+            if name != (existing.display_name or ""):
+                alias_row = session.query(PlayerAliasRow).filter(PlayerAliasRow.alias == name).first()
+                if not alias_row:
+                    session.add(PlayerAliasRow(alias=name, player_id=existing.id))
+            return existing.id, (existing.display_name or "")
     new_row = PlayerRow(display_name=canonical)
     session.add(new_row)
     session.flush()
@@ -1759,9 +1766,9 @@ def resolve_name_to_player_id(session: Session, name: str) -> tuple[int | None, 
     # Normalized lookup so new event data (e.g. "Matias") relates to existing "Matías"
     norm = _normalize_name_for_lookup(canonical)
     if norm:
-        for existing in session.query(PlayerRow).all():
-            if _normalize_name_for_lookup(existing.display_name or "") == norm:
-                return existing.id, (existing.display_name or "")
+        existing = session.query(PlayerRow).filter(PlayerRow.name_key == norm).order_by(PlayerRow.id).first()
+        if existing:
+            return existing.id, (existing.display_name or "")
     return None, n
 
 
