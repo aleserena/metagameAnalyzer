@@ -7,32 +7,18 @@ import hashlib
 import os
 import secrets
 import time
-from collections.abc import Mapping
 from datetime import datetime, timezone
 
 import jwt
 from fastapi import Header, HTTPException
 
+from api.config import is_deployed, validate_auth_config  # noqa: F401  (re-exported)
 from api.state import _database_available, _get_deck_by_id
 
 try:
     from api import db as _db
 except ImportError:
     _db = None
-
-def is_deployed(environ: Mapping[str, str] = os.environ) -> bool:
-    """True on Railway (same signal as api.services.alerts.alerts_enabled)."""
-    return bool(environ.get("RAILWAY_ENVIRONMENT_NAME", ""))
-
-
-def validate_auth_config(environ: Mapping[str, str] = os.environ) -> None:
-    """Refuse to run deployed without JWT_SECRET and ADMIN_PASSWORD. Names only, never values."""
-    if not is_deployed(environ):
-        return
-    missing = [name for name in ("JWT_SECRET", "ADMIN_PASSWORD") if not environ.get(name, "")]
-    if missing:
-        raise RuntimeError(f"Missing required environment variable(s) on Railway: {', '.join(missing)}")
-
 
 def derive_jwt_key(jwt_secret: str, admin_password: str) -> bytes:
     """Signing key: JWT_SECRET (SHA-256 if < 32 bytes), else from the admin password, else random per process."""

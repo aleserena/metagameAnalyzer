@@ -5,6 +5,7 @@ environment variables are loaded before anything reads them.
 """
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -33,3 +34,17 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # Max JSON upload size for admin load / deck import (bytes). Default 50 MiB.
 MAX_UPLOAD_JSON_BYTES = int(os.getenv("MAX_UPLOAD_JSON_BYTES", str(50 * 1024 * 1024)))
+
+
+def is_deployed(environ: Mapping[str, str] = os.environ) -> bool:
+    """True on Railway (same signal as api.services.alerts.alerts_enabled)."""
+    return bool(environ.get("RAILWAY_ENVIRONMENT_NAME", "").strip())
+
+
+def validate_auth_config(environ: Mapping[str, str] = os.environ) -> None:
+    """Refuse to run deployed without JWT_SECRET and ADMIN_PASSWORD. Names only, never values."""
+    if not is_deployed(environ):
+        return
+    missing = [name for name in ("JWT_SECRET", "ADMIN_PASSWORD") if not environ.get(name, "").strip()]
+    if missing:
+        raise RuntimeError(f"Missing required environment variable(s) on Railway: {', '.join(missing)}")

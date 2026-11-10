@@ -1,4 +1,7 @@
 import hashlib
+import subprocess
+import sys
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -49,3 +52,17 @@ def test_tokens_are_rejected_while_admin_login_is_disabled():
         assert deps._verify_admin_token(token) is False
     with patch.object(deps, "ADMIN_PASSWORD", "pw"):
         assert deps._verify_admin_token(token) is True
+
+
+def test_whitespace_only_values_are_treated_as_unset():
+    assert deps.is_deployed({"RAILWAY_ENVIRONMENT_NAME": "  "}) is False
+    with pytest.raises(RuntimeError, match="JWT_SECRET"):
+        deps.validate_auth_config({"RAILWAY_ENVIRONMENT_NAME": "production", "JWT_SECRET": "   ", "ADMIN_PASSWORD": "pw"})
+    with pytest.raises(RuntimeError, match="ADMIN_PASSWORD"):
+        deps.validate_auth_config({"RAILWAY_ENVIRONMENT_NAME": "production", "JWT_SECRET": "s" * 40, "ADMIN_PASSWORD": " "})
+
+
+def test_validator_lives_in_config_without_importing_state():
+    root = Path(__file__).resolve().parent.parent
+    code = "import api.config, sys; assert 'api.state' not in sys.modules; assert 'api.dependencies' not in sys.modules"
+    subprocess.run([sys.executable, "-c", code], cwd=root, check=True)
