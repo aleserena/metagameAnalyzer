@@ -718,7 +718,42 @@ def update_event(
         row.store = store
     if location is not None:
         row.location = location
+    sync_decks_with_event(session, eid)
     return True
+
+
+def sync_decks_with_event(session: Session, event_id: int | str) -> int:
+    """Copy the event's name, date, format and player count onto its decks.
+
+    Each deck stores its own copy of these fields. Empty event values are skipped so a
+    partly filled event never blanks a deck's copy, and ``player_count`` is copied only
+    when the event's is above 0. Returns the number of decks changed.
+    """
+    from src.mtgtop8.scraper import event_display_name
+
+    eid = _event_id_str(event_id)
+    ev = session.query(EventRow).filter(EventRow.event_id == eid).first()
+    if not ev:
+        return 0
+    wanted: dict[str, object] = {}
+    if (ev.name or "").strip():
+        wanted["event_name"] = event_display_name(ev.name, ev.store, ev.location)
+    if ev.date:
+        wanted["date"] = ev.date
+    if ev.format_id:
+        wanted["format_id"] = ev.format_id
+    if (ev.player_count or 0) > 0:
+        wanted["player_count"] = ev.player_count
+    changed = 0
+    for deck in session.query(DeckRow).filter(DeckRow.event_id == eid).all():
+        touched = False
+        for attr, value in wanted.items():
+            if getattr(deck, attr) != value:
+                setattr(deck, attr, value)
+                touched = True
+        if touched:
+            changed += 1
+    return changed
 
 
 def delete_event(session: Session, event_id: int | str, delete_decks: bool = False) -> bool:
