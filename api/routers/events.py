@@ -498,7 +498,7 @@ def update_event_endpoint(
         raise
     except Exception as e:
         logger.exception("Update event failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to update event")
 
 
 @router.delete("/api/v1/events/{event_id}", dependencies=[Depends(require_admin), Depends(require_database)])
@@ -516,7 +516,7 @@ def delete_event_endpoint(event_id: str):
         raise
     except Exception as e:
         logger.exception("Delete event failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to delete event")
 
 
 @router.post(
@@ -766,7 +766,7 @@ async def upload_decks_to_event(
         return {"event_id": event_id, "loaded": len(out), "message": f"Uploaded {len(out)} decks"}
     except Exception as e:
         logger.exception("Upload decks to event failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to upload decks")
 
 
 @router.post("/api/v1/events/{event_id}/decks/add", dependencies=[Depends(require_admin_or_event_edit), Depends(require_database)])

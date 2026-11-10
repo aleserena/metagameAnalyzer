@@ -380,6 +380,6 @@ def submit_decklist_with_upload_link(token: str, body: DeckListBody):
             _db.upsert_deck(session, current, origin=current.get("origin", _db.ORIGIN_MTGTOP8))
     except Exception as e:
         logger.exception("Deck list update failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to update deck list")
     _load_decks_from_db()
     return {"deck_id": deck_id, "message": "Deck list updated"}

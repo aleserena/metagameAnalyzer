@@ -617,7 +617,7 @@ def update_deck_endpoint(
         raise
     except Exception as e:
         logger.exception("Update deck failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to update deck")
 
 
 @router.delete("/api/v1/decks/{deck_id}", dependencies=[Depends(require_admin_or_event_edit_deck), Depends(require_database)])
@@ -634,7 +634,7 @@ def delete_deck_endpoint(deck_id: int):
         raise
     except Exception as e:
         logger.exception("Delete deck failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to delete deck")
 
 
 @router.get("/api/v1/decks/{deck_id}/matchups", dependencies=[Depends(require_admin_or_event_edit_deck), Depends(require_database)])

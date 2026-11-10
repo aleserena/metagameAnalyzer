@@ -147,7 +147,7 @@ def export_decks(_: str = Depends(require_admin)):
 
 
 @router.post("/api/v1/analyze")
-def run_analyze():
+def run_analyze(_: str = Depends(require_admin)):
     """Re-run analysis (no-op, metagame is computed on demand)."""
     _invalidate_metagame()
     return {"message": "Analysis will be recomputed on next /api/metagame request"}

@@ -146,7 +146,7 @@ Total endpoints: **97**.
 
 | Method | Path | Handler | Auth |
 |---|---|---|---|
-| POST | `/api/v1/analyze` | `run_analyze` (in `api/routers/data.py`) |  |
+| POST | `/api/v1/analyze` | `run_analyze` (in `api/routers/data.py`) | admin |
 | GET | `/api/v1/export` | `export_decks` (in `api/routers/data.py`) | admin |
 | POST | `/api/v1/load` | `load_decks` (in `api/routers/data.py`) | admin, DB |
 | POST | `/api/v1/scrape` | `run_scrape` (in `api/routers/data.py`) | admin |

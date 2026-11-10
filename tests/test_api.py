@@ -1541,3 +1541,17 @@ def test_cards_lookup_size_limits(client):
         assert too_many.status_code == 422
         too_long = client.post("/api/v1/cards/lookup", json={"names": ["y" * 201]})
         assert too_long.status_code == 422
+
+
+def test_analyze_requires_admin(client):
+    assert client.post("/api/v1/analyze").status_code == 401
+
+
+def test_internal_errors_do_not_leak_details(client_with_overrides):
+    from api.routers import decks as dr
+
+    with patch.object(dr._db, "session_scope", side_effect=RuntimeError("postgresql://user:hunter2@host/db")):
+        r = client_with_overrides.delete("/api/v1/decks/811597")
+    assert r.status_code == 500
+    assert r.json()["detail"] == "Failed to delete deck"
+    assert "hunter2" not in r.text
