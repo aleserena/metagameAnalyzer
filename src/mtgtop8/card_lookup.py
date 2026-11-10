@@ -250,8 +250,16 @@ def _fetch_paper_printing(card_name: str) -> dict | None:
     return None
 
 
+class _TransientLookupError(Exception):
+    """A Scryfall request failed in a way that says nothing about whether the card exists."""
+
+
 def _search_by_flavor_name(typed_name: str) -> dict | None:
-    """Search Scryfall for a card whose flavor_name matches typed_name. Returns card object or None."""
+    """Search Scryfall for a card whose flavor_name matches typed_name.
+
+    Returns the card, or None for a definitive miss (including Scryfall's 404 "no matches").
+    Raises _TransientLookupError on timeouts, connection errors, 429/5xx and bad payloads.
+    """
     if not typed_name or not typed_name.strip():
         return None
     time.sleep(REQUEST_DELAY)
@@ -264,6 +272,8 @@ def _search_by_flavor_name(typed_name: str) -> dict | None:
             headers=SCRYFALL_HEADERS,
             timeout=15,
         )
+        if r.status_code == 404:
+            return None
         r.raise_for_status()
         data = r.json()
         cards = data.get("data", []) or []
@@ -272,8 +282,8 @@ def _search_by_flavor_name(typed_name: str) -> dict | None:
             fn = card.get("flavor_name") or ""
             if fn.strip().lower() == normalized.lower():
                 return card
-    except (requests.RequestException, json.JSONDecodeError):
-        pass
+    except (requests.RequestException, json.JSONDecodeError) as exc:
+        raise _TransientLookupError(str(exc)) from exc
     return None
 
 
@@ -488,8 +498,13 @@ def _scryfall_lookup_cards(card_names: list[str]) -> dict[str, dict]:
 
     # Second pass: for names still not found, search by flavor_name (e.g. Universes Within names)
     still_missing = [n for n in names if n not in skip_flavor and (n not in result or result[n].get("error"))]
+    flavor_errored: set[str] = set()
     for orig_name in still_missing:
-        card = _search_by_flavor_name(orig_name)
+        try:
+            card = _search_by_flavor_name(orig_name)
+        except _TransientLookupError:
+            flavor_errored.add(orig_name)
+            continue
         if not card:
             continue
         if not _card_is_paper(card):
@@ -508,9 +523,12 @@ def _scryfall_lookup_cards(card_names: list[str]) -> dict[str, dict]:
     # Remember names Scryfall could not resolve so they are not re-fetched on every request.
     now = time.time()
     for name in names:
-        if name in checked and (name not in result or result[name].get("error")):
+        if name in result and not result[name].get("error"):
+            continue
+        result[name] = {"error": "not_found"}
+        # Only a definitive miss is remembered; transient failures are retried next request.
+        if name in checked and name not in flavor_errored:
             _card_cache[name] = {"error": "not_found", "checked_at": now}
-            result[name] = {"error": "not_found"}
 
     _save_cache()
     return result

@@ -188,3 +188,107 @@ def test_not_found_names_are_remembered_for_seven_days(monkeypatch):
     now[0] += cl.NOT_FOUND_TTL_SECONDS + 1
     cl._scryfall_lookup_cards(["Nonexistent Card"])
     assert calls == {"post": 2, "flavor": 2}
+
+
+def _setup_lookup(monkeypatch, cache, post, flavor):
+    from src.mtgtop8 import card_lookup as cl
+
+    monkeypatch.setattr(cl, "_card_cache", cache)
+    monkeypatch.setattr(cl, "_load_cache", lambda: None)
+    monkeypatch.setattr(cl, "_save_cache", lambda: None)
+    monkeypatch.setattr(cl.requests, "post", post)
+    monkeypatch.setattr(cl, "_search_by_flavor_name", flavor)
+    monkeypatch.setattr(cl.time, "sleep", lambda s: None)
+    return cl
+
+
+class _NotFoundResp:
+    status_code = 200
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return {"data": [], "not_found": [{"name": "Ghost Card"}]}
+
+
+def test_flavor_search_transient_error_is_not_cached(monkeypatch):
+    calls = {"flavor": 0}
+
+    def flavor(name):
+        calls["flavor"] += 1
+        raise card_lookup._TransientLookupError("429")
+
+    cache = {}
+    cl = _setup_lookup(monkeypatch, cache, lambda *a, **k: _NotFoundResp(), flavor)
+    assert cl._scryfall_lookup_cards(["Ghost Card"]) == {"Ghost Card": {"error": "not_found"}}
+    assert "Ghost Card" not in cache
+    cl._scryfall_lookup_cards(["Ghost Card"])
+    assert calls["flavor"] == 2
+
+
+def test_flavor_search_http_errors_classified(monkeypatch):
+    from src.mtgtop8 import card_lookup as cl
+
+    class Resp:
+        def __init__(self, code):
+            self.status_code = code
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise cl.requests.HTTPError(str(self.status_code))
+
+        def json(self):
+            return {"data": []}
+
+    monkeypatch.setattr(cl.time, "sleep", lambda s: None)
+    monkeypatch.setattr(cl.requests, "get", lambda *a, **k: Resp(404))
+    assert cl._search_by_flavor_name("x") is None
+    for code in (429, 503):
+        monkeypatch.setattr(cl.requests, "get", lambda *a, _c=code, **k: Resp(_c))
+        try:
+            cl._search_by_flavor_name("x")
+        except cl._TransientLookupError:
+            pass
+        else:
+            raise AssertionError("expected transient error")
+
+    def boom(*a, **k):
+        raise cl.requests.Timeout()
+
+    monkeypatch.setattr(cl.requests, "get", boom)
+    try:
+        cl._search_by_flavor_name("x")
+    except cl._TransientLookupError:
+        pass
+    else:
+        raise AssertionError("expected transient error")
+
+
+def test_failed_collection_chunk_is_not_cached_as_not_found(monkeypatch):
+    calls = {"post": 0}
+
+    def post(*a, **k):
+        calls["post"] += 1
+        raise card_lookup.requests.ConnectionError()
+
+    cache = {}
+    cl = _setup_lookup(monkeypatch, cache, post, lambda name: None)
+    cl._scryfall_lookup_cards(["Ghost Card"])
+    assert "Ghost Card" not in cache
+    cl._scryfall_lookup_cards(["Ghost Card"])
+    assert calls["post"] == 2
+
+
+def test_legacy_not_found_entry_is_refetched(monkeypatch):
+    calls = {"post": 0}
+
+    def post(*a, **k):
+        calls["post"] += 1
+        return _NotFoundResp()
+
+    cache = {"Ghost Card": {"error": "not_found"}}
+    cl = _setup_lookup(monkeypatch, cache, post, lambda name: None)
+    cl._scryfall_lookup_cards(["Ghost Card"])
+    assert calls["post"] == 1
+    assert "checked_at" in cache["Ghost Card"]
