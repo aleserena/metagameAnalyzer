@@ -1629,3 +1629,17 @@ def test_metagame_cache_follows_settings_changes(client, tmp_path, monkeypatch):
         ss.set_rank_weights({"1": 99.0})
         client.get("/api/v1/metagame")
         assert spy.call_count == 2
+
+
+def test_list_decks_color_filter_and_no_shared_mutation(client, sample_decks):
+    from api.services import deck_index
+
+    meta = {
+        "Spider-Man 2099": {"color_identity": ["U", "R"]},
+        "Terra, Magical Adept": {"color_identity": ["G"]},
+    }
+    with patch.object(deck_index, "lookup_cards", return_value=meta):
+        r = client.get("/api/v1/decks?colors=U,R")
+    assert [d["deck_id"] for d in r.json()["decks"]] == [811597]
+    assert r.json()["decks"][0]["color_identity"] == ["U", "R"]
+    assert all("color_identity" not in d for d in state.decks)

@@ -5,7 +5,6 @@ import requests
 from fastapi import Depends, HTTPException, Query
 from src.mtgtop8.analyzer import (
     deck_analysis,
-    effective_commanders,
     find_duplicate_decks,
     similar_decks,
 )
@@ -30,6 +29,7 @@ from api.helpers import (
 )
 from api.schemas.decks import ImportMoxfieldBody, UpdateDeckBody
 from api.schemas.matchups import AdminMatchupsBody
+from api.services import deck_index
 from api.state import (
     _get_deck_by_id,
     _load_decks_from_db,
@@ -140,40 +140,13 @@ def list_decks(
         valid = {"W", "U", "B", "R", "G", "C"}
         color_filter = {c for c in wanted if c in valid} or None
 
-    try:
-        if filtered:
-            deck_objs = [Deck.from_dict(d) for d in filtered]
-            commander_names = list(
-                {c for deck in deck_objs for c in effective_commanders(deck) if c}
-            )
-            metadata = lookup_cards(commander_names) if commander_names else {}
-            color_order = ["W", "U", "B", "R", "G", "C"]
-            filtered_with_colors: list[dict] = []
-            for deck_obj, d in zip(deck_objs, filtered):
-                ec = effective_commanders(deck_obj)
-                ci: set[str] = set()
-                for name in ec:
-                    entry = metadata.get(name)
-                    if entry and "error" not in entry:
-                        for c in entry.get("color_identity") or entry.get("colors") or []:
-                            if c in {"W", "U", "B", "R", "G"}:
-                                ci.add(c)
-                # Treat EDH/Commander decks with no colors as colorless ("C") for filtering and display.
-                is_edh = (deck_obj.format_id or "").upper() in {"EDH", "CEDH", "COMMANDER"}
-                if not ci and is_edh and ec:
-                    ci.add("C")
-                if ci:
-                    d["color_identity"] = [c for c in color_order if c in ci]
-                if color_filter:
-                    # Require deck to contain all selected colors.
-                    if not ci or not color_filter.issubset(ci):
-                        continue
-                    filtered_with_colors.append(d)
-            if color_filter:
-                filtered = filtered_with_colors
-    except Exception:
-        # Color identity and color filter are cosmetic; ignore lookup failures.
-        logger.exception("Color identity lookup failed for /api/decks")
+    colors_by_deck = deck_index.color_identities()
+    if color_filter:
+        # Require deck to contain all selected colors.
+        filtered = [
+            d for d in filtered
+            if color_filter.issubset(colors_by_deck.get(d.get("deck_id"), ()))
+        ]
 
     sort_val = sort if sort in ("date", "rank", "player", "name") else "date"
     order_val = order if order in ("asc", "desc") else "desc"
@@ -184,6 +157,10 @@ def list_decks(
 
     # Normalize player names for display (merge aliases)
     page = [{**d, "player": _normalize_player(d.get("player") or "")} for d in page]
+    for d in page:
+        ci = colors_by_deck.get(d.get("deck_id"))
+        if ci:
+            d["color_identity"] = list(ci)
     if is_admin == "admin" and event_id is not None and state.database_available():
         # Use the canonical player_id already on each deck so we can batch the email
         # lookup into a single IN-query. Resolving by display name here is both slow
@@ -219,8 +196,7 @@ def compare_decks(ids: str = Query(..., description="Comma-separated deck IDs"))
 
 def _deck_duplicate_info(deck_id: int) -> dict | None:
     """Return duplicate info for a deck: is_duplicate, duplicate_of, same_mainboard_ids, same_mainboard_decks, primary_deck."""
-    decks = [Deck.from_dict(d) for d in state.decks]
-    dup_map = find_duplicate_decks(decks)
+    dup_map = deck_index.duplicate_map()
     deck_map = {d.get("deck_id"): d for d in state.decks}
 
     def deck_summary(did: int) -> dict:
@@ -262,9 +238,11 @@ def list_duplicate_decks(
     event_ids: str | None = Query(None, description="Limit to events (comma-separated)"),
 ):
     """Decks with identical mainboard (duplicates across events)."""
-    candidate = _filter_decks_for_query(state.decks, None, event_ids, None, None)
-    decks = [Deck.from_dict(d) for d in candidate]
-    dup_map = find_duplicate_decks(decks)
+    if event_ids:
+        candidate = _filter_decks_for_query(state.decks, None, event_ids, None, None)
+        dup_map = find_duplicate_decks([Deck.from_dict(d) for d in candidate])
+    else:
+        dup_map = deck_index.duplicate_map()
     deck_map = {d.get("deck_id"): d for d in state.decks}
     result = []
     for primary_id, duplicate_ids in dup_map.items():
