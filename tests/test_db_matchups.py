@@ -462,3 +462,22 @@ def test_matchup_listings_do_not_select_decklists(db_session_rollback, sql_log):
         ("Slim A", "Slim B", "win"),
         ("Slim B", "Slim A", "loss"),
     ]
+
+
+def test_byes_count_in_the_bulk_completeness_check(db_session_rollback):
+    session = db_session_rollback
+    eid = f"{_TEST_EVENT_PREFIX}byes"
+    a, b, c = (_TEST_DECK_ID_BASE + n for n in (931, 932, 933))
+    create_event(session, "Byes", "01/01/25", "ST", event_id=eid, player_count=3)
+    for did, name in ((a, "Bye A"), (b, "Bye B"), (c, "Bye C")):
+        upsert_deck(session, _make_deck(did, eid, name))
+    session.flush()
+    upsert_matchups_for_deck(session, b, [{"opponent_player": "Bye", "result": "bye", "round": 2}])
+    upsert_matchups_for_deck(session, c, [{"opponent_player": "Bye", "result": "bye", "round": 1}])
+    session.flush()
+    upsert_matchups_for_deck(session, a, [
+        {"opponent_player": "Bye B", "opponent_deck_id": b, "result": "win", "round": 1},
+        {"opponent_player": "Bye C", "opponent_deck_id": c, "result": "win", "round": 2}])
+    session.flush()
+    assert list_missing_matchups_for_event(session, eid) == []
+    assert eid in list_event_ids_with_complete_matchups(session)

@@ -573,62 +573,35 @@ def list_event_ids_with_complete_matchups(session: Session) -> list[str]:
             .all()
         )
         dropped_deck_ids = {r[0] for r in dropped_rows}
-    # All matchups for these decks, with event_id and opponent_player_id
-    matchup_rows = (
+    # All matchups for these decks, grouped by event once
+    matchups_by_event: dict[str, list[tuple[int, int | None, int | None, str]]] = {}
+    for ev, did, opp_did, opp_pid, opp_name in (
         session.query(
             DeckRow.event_id,
             MatchupRow.deck_id,
             MatchupRow.opponent_deck_id,
             MatchupRow.opponent_player_id,
+            MatchupRow.opponent_player,
         )
         .join(MatchupRow, MatchupRow.deck_id == DeckRow.deck_id)
         .filter(DeckRow.event_id.in_(event_ids))
         .all()
-    )
+    ):
+        matchups_by_event.setdefault((ev or "").strip(), []).append((did, opp_did, opp_pid, opp_name))
 
     result = []
     for eid in event_ids:
         decks = decks_by_event.get(eid, [])
-        n = len(decks)
-        expected = _swiss_rounds_for_players(n)
-        if n == 0:
+        if not decks:
             result.append(eid)
             continue
-        ev_deck_ids = event_deck_ids.get(eid, set())
-        dropped_in_event = dropped_deck_ids & ev_deck_ids
-        player_id_to_deck_ids = event_player_to_decks.get(eid, {})
-        reported_by: dict[int, set[int]] = {}
-        reported_against: dict[int, set[int]] = {}
-        for ev, did, opp_did, opp_pid in matchup_rows:
-            if ev != eid:
-                continue
-            if did not in reported_by:
-                reported_by[did] = set()
-            if opp_did is not None and opp_did in ev_deck_ids:
-                reported_by[did].add(opp_did)
-            elif opp_pid is not None:
-                for opp_did_in_ev in player_id_to_deck_ids.get(opp_pid, []):
-                    if opp_did_in_ev != did:
-                        reported_by[did].add(opp_did_in_ev)
-            if did not in ev_deck_ids:
-                continue
-            victims = set()
-            if opp_did is not None and opp_did in ev_deck_ids:
-                victims.add(opp_did)
-            if opp_pid is not None:
-                victims.update(player_id_to_deck_ids.get(opp_pid, []))
-            for victim in victims:
-                if victim != did:
-                    reported_against.setdefault(victim, set()).add(did)
-        has_missing = False
-        for did, _pid, _ in decks:
-            if did in dropped_in_event:
-                continue
-            effective = reported_by.get(did, set()) | reported_against.get(did, set())
-            if len(effective) < expected:
-                has_missing = True
-                break
-        if not has_missing:
+        missing = _decks_missing_matchups(
+            decks,
+            matchups_by_event.get(eid, []),
+            dropped_deck_ids & event_deck_ids.get(eid, set()),
+            _swiss_rounds_for_players(len(decks)),
+        )
+        if not missing:
             result.append(eid)
     return result
 
@@ -1309,6 +1282,63 @@ def _swiss_rounds_for_players(n: int) -> int:
     return max(1, math.ceil(math.log2(n)))
 
 
+def _decks_missing_matchups(
+    decks: list[tuple[int, int, str]],
+    matchup_rows: list[tuple[int, int | None, int | None, str]],
+    dropped_deck_ids: set[int],
+    expected: int,
+) -> list[dict]:
+    """Pure completeness rule for one event.
+    decks: (deck_id, player_id, player); matchup_rows: (deck_id, opponent_deck_id, opponent_player_id,
+    opponent_player) for the event's decks only. A non-dropped deck is short when its distinct opponents
+    (reported by it or against it) plus its "Bye" rows are fewer than expected."""
+    event_deck_ids = {d[0] for d in decks}
+    player_id_to_deck_ids: dict[int, list[int]] = {}
+    for did, pid, _ in decks:
+        player_id_to_deck_ids.setdefault(pid, []).append(did)
+    rows_by_deck: dict[int, list[tuple[int, int | None, int | None, str]]] = {}
+    for row in matchup_rows:
+        rows_by_deck.setdefault(row[0], []).append(row)
+    # reporter deck ids per victim deck (rows reported against it)
+    against: dict[int, set[int]] = {}
+    for did, rows in rows_by_deck.items():
+        if did not in event_deck_ids:
+            continue
+        for _, opp_did, opp_pid, _opp_name in rows:
+            victims: set[int] = set()
+            if opp_did is not None and opp_did in event_deck_ids:
+                victims.add(opp_did)
+            if opp_pid is not None:
+                victims.update(player_id_to_deck_ids.get(opp_pid, []))
+            for victim in victims:
+                if victim != did:
+                    against.setdefault(victim, set()).add(did)
+    result = []
+    for deck_id, _my_pid, player in decks:
+        if deck_id in dropped_deck_ids:
+            continue
+        reported_by: set[int] = set()
+        bye_count = 0
+        for _, opp_did, opp_pid, opp_name in rows_by_deck.get(deck_id, []):
+            if opp_did is not None and opp_did in event_deck_ids:
+                reported_by.add(opp_did)
+            elif opp_pid is not None:
+                for other in player_id_to_deck_ids.get(opp_pid, []):
+                    if other != deck_id:
+                        reported_by.add(other)
+            if (opp_name or "").strip() == "Bye":
+                bye_count += 1
+        effective = len(reported_by | against.get(deck_id, set())) + bye_count
+        if effective < expected:
+            result.append({
+                "deck_id": deck_id,
+                "player": (player or "").strip() or "(unknown)",
+                "matchup_count": effective,
+                "expected_count": expected,
+            })
+    return result
+
+
 def list_missing_matchups_for_event(session: Session, event_id: str) -> list[dict]:
     """Decks in this event that have fewer matchups than expected (expected = Swiss rounds for player count).
     A round is counted as covered for a deck if either that deck reported it or another player reported
@@ -1322,22 +1352,16 @@ def list_missing_matchups_for_event(session: Session, event_id: str) -> list[dic
         .all()
     )
     n = len(decks)
-    expected = _swiss_rounds_for_players(n)
     if n == 0:
         return []
-    event_deck_ids = set(d.deck_id for d in decks)
-    player_id_to_deck_ids = {}
-    for d in decks:
-        player_id_to_deck_ids.setdefault(d.player_id, []).append(d.deck_id)
-    dropped_deck_ids = set()
-    if event_deck_ids:
-        rows = (
-            session.query(MatchupRow.deck_id)
-            .filter(MatchupRow.deck_id.in_(event_deck_ids), MatchupRow.result == "drop")
-            .distinct()
-            .all()
-        )
-        dropped_deck_ids = {r[0] for r in rows}
+    event_deck_ids = {d.deck_id for d in decks}
+    dropped_rows = (
+        session.query(MatchupRow.deck_id)
+        .filter(MatchupRow.deck_id.in_(event_deck_ids), MatchupRow.result == "drop")
+        .distinct()
+        .all()
+    )
+    dropped_deck_ids = {r[0] for r in dropped_rows}
     matchup_rows = (
         session.query(
             MatchupRow.deck_id,
@@ -1348,45 +1372,12 @@ def list_missing_matchups_for_event(session: Session, event_id: str) -> list[dic
         .filter(MatchupRow.deck_id.in_(event_deck_ids))
         .all()
     )
-    result = []
-    for d in decks:
-        deck_id, my_pid, player_name = d.deck_id, d.player_id, (d.player or "").strip() or "(unknown)"
-        if deck_id in dropped_deck_ids:
-            continue
-        reported_by = set()
-        for r in matchup_rows:
-            if r.deck_id != deck_id:
-                continue
-            if r.opponent_deck_id is not None and r.opponent_deck_id in event_deck_ids:
-                reported_by.add(r.opponent_deck_id)
-            elif r.opponent_player_id is not None:
-                for opp_did in player_id_to_deck_ids.get(r.opponent_player_id, []):
-                    if opp_did != deck_id:
-                        reported_by.add(opp_did)
-        reported_against = set()
-        for r in matchup_rows:
-            if r.deck_id == deck_id:
-                continue
-            if r.deck_id not in event_deck_ids:
-                continue
-            if r.opponent_deck_id == deck_id:
-                reported_against.add(r.deck_id)
-            elif r.opponent_player_id is not None and r.opponent_player_id == my_pid:
-                reported_against.add(r.deck_id)
-        bye_count = sum(
-            1
-            for r in matchup_rows
-            if r.deck_id == deck_id and (r.opponent_player or "").strip() == "Bye"
-        )
-        effective_count = len(reported_by | reported_against) + bye_count
-        if effective_count < expected:
-            result.append({
-                "deck_id": deck_id,
-                "player": player_name,
-                "matchup_count": effective_count,
-                "expected_count": expected,
-            })
-    return result
+    return _decks_missing_matchups(
+        [(d.deck_id, d.player_id, d.player) for d in decks],
+        [tuple(r) for r in matchup_rows],
+        dropped_deck_ids,
+        _swiss_rounds_for_players(n),
+    )
 
 
 def list_matchups_reported_against_player(session: Session, event_id: str, opponent_player: str) -> list[dict]:
