@@ -11,7 +11,7 @@ class SiteFeedbackBody(BaseModel):
     type: str = "bug"  # bug | enhancement | question
     title: str = ""
     description: str = ""
-    email: str | None = None
+    email: str | None = Field(default=None, max_length=254)
     website: str | None = None  # honeypot: bots often fill this; humans leave empty
     captcha_token: str | None = None
     captcha_answer: int | None = None

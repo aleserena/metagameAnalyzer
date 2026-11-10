@@ -890,7 +890,7 @@ def create_upload_links(event_id: str, request: Request, body: CreateUploadLinks
             links.append({
                 "token": token,
                 "url": f"{base_url}/events/{event_id}?token={token}",
-                "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+                "expires_at": _db.iso_utc(row.expires_at),
             })
         elif body.type == "feedback" and body.deck_id is not None:
             # One-time feedback link for this deck (Event page). Form submits to POST /api/upload/{token}/feedback
@@ -908,7 +908,7 @@ def create_upload_links(event_id: str, request: Request, body: CreateUploadLinks
             links.append({
                 "token": token,
                 "url": f"{base_url}/upload/{token}",
-                "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+                "expires_at": _db.iso_utc(row.expires_at),
                 "deck_id": body.deck_id,
             })
         elif body.deck_id is not None:
@@ -925,7 +925,7 @@ def create_upload_links(event_id: str, request: Request, body: CreateUploadLinks
             links.append({
                 "token": token,
                 "url": f"{base_url}/upload/{token}",
-                "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+                "expires_at": _db.iso_utc(row.expires_at),
                 "deck_id": body.deck_id,
             })
         else:
@@ -936,7 +936,7 @@ def create_upload_links(event_id: str, request: Request, body: CreateUploadLinks
                 links.append({
                     "token": token,
                     "url": f"{base_url}/upload/{token}",
-                    "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+                    "expires_at": _db.iso_utc(row.expires_at),
                 })
         return {"links": links}
 

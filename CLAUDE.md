@@ -122,6 +122,6 @@ Variables documented in `.env.example`. A `.env` file with `DATABASE_URL` is req
 
 Key variables:
 - `DATABASE_URL` — PostgreSQL connection string (required)
-- `ADMIN_PASSWORD`, `JWT_SECRET` — authentication
+- `ADMIN_PASSWORD`, `JWT_SECRET` — authentication; both required on Railway (app refuses to start without them), optional locally. A local `.env` containing `RAILWAY_ENVIRONMENT_NAME` blocks startup and test collection unless both are set. Upload/edit links expire after 7 days by default.
 - `LOG_LEVEL`, `LOG_FORMAT=json` — production logging (JSON format auto-enabled on Railway)
 - `SCRAPER_MAX_WORKERS` — parallel scraping threads

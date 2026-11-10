@@ -462,7 +462,6 @@ def _scryfall_lookup_cards(card_names: list[str]) -> dict[str, dict]:
         except (requests.RequestException, json.JSONDecodeError):
             continue
 
-        checked.update(chunk)
         not_found_lookup_names = set()
         for nf in data.get("not_found", []):
             nf_name = nf.get("name", "") if isinstance(nf, dict) else str(nf)
@@ -473,12 +472,14 @@ def _scryfall_lookup_cards(card_names: list[str]) -> dict[str, dict]:
         for idx in range(len(chunk)):
             lookup_name = _name_for_scryfall(chunk[idx])
             if lookup_name in not_found_lookup_names:
+                checked.add(chunk[idx])  # Scryfall explicitly reported it missing
                 continue
             if data_idx >= len(data_list):
-                break
+                break  # short response: leftovers are unresolved, not "not found"
             card = data_list[data_idx]
             data_idx += 1
             orig_name = chunk[idx]
+            checked.add(orig_name)
 
             if not _card_is_paper(card):
                 paper_card = _fetch_paper_printing(card.get("name", ""))

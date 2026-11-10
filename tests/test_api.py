@@ -1,6 +1,7 @@
 """API integration tests using FastAPI TestClient."""
 
 import json
+import logging
 import re
 import sys
 from contextlib import contextmanager
@@ -1447,7 +1448,52 @@ def test_event_editor_may_resend_the_current_event_id(client_as_event_editor):
 
     with patch.object(dr._db, "session_scope"), patch.object(dr._db, "get_event", return_value=None):
         r = client_as_event_editor.put("/api/v1/decks/811597", json={"event_id": "80455"})
-    assert r.status_code != 403
+    assert r.status_code == 400
+
+
+def _fake_export(session, event_id, include_emails=False):
+    from api.schemas.events import EventExportData, EventResponse
+
+    return EventExportData(
+        schema_version=1,
+        event=EventResponse(event_id="80455", event_name="E", date="01/01/25", format_id="EDH"),
+        decks=[],
+        player_emails={"Ann": "p@example.com"} if include_emails else {},
+    )
+
+
+def test_event_editor_export_omits_player_emails(client_as_event_editor):
+    from api.routers import events as er
+
+    with (
+        patch.object(er.state, "database_available", return_value=True),
+        patch.object(er._db, "session_scope"),
+        patch.object(er, "build_event_export", side_effect=_fake_export),
+    ):
+        r = client_as_event_editor.get("/api/v1/events/80455/export")
+    assert r.status_code == 200
+    assert r.json()["player_emails"] == {}
+
+
+def test_admin_export_includes_player_emails(client_with_overrides):
+    from api.routers import events as er
+
+    with (
+        patch.object(er.state, "database_available", return_value=True),
+        patch.object(er._db, "session_scope"),
+        patch.object(er, "build_event_export", side_effect=_fake_export),
+    ):
+        r = client_with_overrides.get("/api/v1/events/80455/export")
+    assert r.status_code == 200
+    assert r.json()["player_emails"] == {"Ann": "p@example.com"}
+
+
+def test_site_feedback_email_is_length_limited(client):
+    from api.schemas.auth_feedback import SiteFeedbackBody
+
+    SiteFeedbackBody(email="a" * 254)
+    r = client.post("/api/v1/feedback", json={"title": "T", "email": "a" * 255})
+    assert r.status_code == 422
 
 
 def test_admin_can_still_move_a_deck(client_with_overrides):
@@ -1526,10 +1572,12 @@ def test_feedback_is_limited_to_five_per_hour(client, github_ok):
 
 
 def test_feedback_alert_failure_still_creates_issue_and_never_logs_address(client, github_ok, caplog):
+    caplog.set_level(logging.INFO)
     _post, mail = github_ok
     mail.side_effect = RuntimeError("smtp down")
     r = client.post("/api/v1/feedback", json=_feedback_body(client, email="reporter@example.com"))
     assert r.status_code == 200
+    assert "Could not forward feedback contact address" in caplog.text
     assert "reporter@example.com" not in caplog.text
 
 

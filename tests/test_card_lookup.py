@@ -292,3 +292,22 @@ def test_legacy_not_found_entry_is_refetched(monkeypatch):
     cl._scryfall_lookup_cards(["Ghost Card"])
     assert calls["post"] == 1
     assert "checked_at" in cache["Ghost Card"]
+
+
+def test_names_beyond_a_short_collection_response_are_not_cached_as_not_found(monkeypatch):
+    class Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"data": [{"name": "Real Card", "prices": {"usd": "1"}}], "not_found": []}
+
+    cache = {}
+    cl = _setup_lookup(monkeypatch, cache, lambda *a, **k: Resp(), lambda name: None)
+    monkeypatch.setattr(cl, "_card_is_paper", lambda card: True)
+    monkeypatch.setattr(cl, "_build_entry", lambda card: {"name": card["name"]})
+    cl._scryfall_lookup_cards(["Real Card", "Leftover Card"])
+    assert "Leftover Card" not in cache
+    assert cache["Real Card"] == {"name": "Real Card"}

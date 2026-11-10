@@ -48,6 +48,8 @@ try:
     validate_auth_config()
 except RuntimeError as exc:
     logger.critical(str(exc), extra={"event": "auth_config_invalid"})
+    # The import aborts here, so lifespan never runs: flush the queued alert email now.
+    shutdown_alerts()
     raise
 
 from api.routers import router as api_router

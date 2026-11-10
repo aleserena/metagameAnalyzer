@@ -848,6 +848,11 @@ def mark_upload_link_used(session: Session, token: str) -> bool:
     return True
 
 
+def iso_utc(dt: datetime | None) -> str | None:
+    """ISO string for a naive-UTC datetime with a ``Z`` suffix, so browsers parse it as UTC."""
+    return dt.isoformat() + "Z" if dt else None
+
+
 def get_all_upload_links(session: Session) -> list[dict]:
     """Return all upload links for admin listing."""
     rows = session.query(EventUploadLinkRow).order_by(EventUploadLinkRow.created_at.desc()).all()
@@ -857,9 +862,9 @@ def get_all_upload_links(session: Session) -> list[dict]:
             "event_id": r.event_id,
             "deck_id": getattr(r, "deck_id", None),
             "link_type": getattr(r, "link_type", "deck_upload"),
-            "created_at": r.created_at.isoformat() if r.created_at else None,
-            "used_at": r.used_at.isoformat() if r.used_at else None,
-            "expires_at": r.expires_at.isoformat() if r.expires_at else None,
+            "created_at": iso_utc(r.created_at),
+            "used_at": iso_utc(r.used_at),
+            "expires_at": iso_utc(r.expires_at),
             "label": r.label,
         }
         for r in rows
