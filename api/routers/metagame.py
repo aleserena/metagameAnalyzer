@@ -1,5 +1,6 @@
 import logging
 import math
+import threading
 from datetime import date
 from urllib.parse import unquote
 
@@ -492,6 +493,10 @@ def get_metagame_churn(
     }
 
 
+_METAGAME_CACHE_MAX = 64
+_metagame_cache_lock = threading.Lock()
+
+
 @router.get("/api/v1/metagame")
 def get_metagame(
     placement_weighted: bool = Query(False),
@@ -520,6 +525,22 @@ def get_metagame(
             out["summary_top8"] = {"total_decks": 0, "unique_players": 0, "unique_archetypes": 0}
             out["archetype_distribution_top8"] = []
         return out
+    cache_key = (
+        state.decks_version,
+        settings_service.version(),
+        placement_weighted,
+        ignore_lands,
+        date_from,
+        date_to,
+        event_id,
+        event_ids,
+        top8_only,
+        include_top8_breakdown,
+    )
+    with _metagame_cache_lock:
+        cached = state.metagame_cache.get(cache_key)
+    if cached is not None:
+        return cached
     filtered = _filter_decks_for_query(state.decks, event_id, event_ids, date_from, date_to)
     decks_all = [Deck.from_dict(d) for d in filtered]
     if top8_only:
@@ -661,6 +682,10 @@ def get_metagame(
     result["top_players"] = full_leaderboard[:5]
     # Unique players must match leaderboard (alias-aware): count distinct canonical players
     result["summary"]["unique_players"] = len(full_leaderboard)
+    with _metagame_cache_lock:
+        if len(state.metagame_cache) > _METAGAME_CACHE_MAX:
+            state.metagame_cache = {}
+        state.metagame_cache[cache_key] = result
     return result
 
 

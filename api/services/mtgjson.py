@@ -354,6 +354,9 @@ def _run_job(name: str, fn: Callable[[], dict]) -> None:
         with _JOB_LOCK:
             _JOBS[name].update(status="success", finished_at=finished_at, result=result, error=None)
         _record_last_sync(name, finished_at, result)
+        from api.state import state  # lazy: avoid a circular import at module load
+
+        state.touch()  # card colors/prices feed cached metagame responses
     except Exception as exc:  # noqa: BLE001 - surfaced to the UI via status
         logger.exception("MTGJSON sync job %r failed", name)
         with _JOB_LOCK:

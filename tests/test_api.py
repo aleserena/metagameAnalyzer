@@ -1603,3 +1603,29 @@ def test_internal_errors_do_not_leak_details(client_with_overrides):
     assert r.status_code == 500
     assert r.json()["detail"] == "Failed to delete deck"
     assert "hunter2" not in r.text
+
+
+def test_metagame_is_computed_once_per_data_version(client):
+    from api.routers import metagame as mg
+
+    with patch.object(mg, "analyze", wraps=mg.analyze) as spy, patch.object(mg, "lookup_cards", return_value={}):
+        a = client.get("/api/v1/metagame").json()
+        b = client.get("/api/v1/metagame").json()
+        assert a == b and spy.call_count == 1
+        client.get("/api/v1/metagame?top8_only=true")
+        assert spy.call_count == 2
+        state.set_decks(list(state.decks))
+        client.get("/api/v1/metagame")
+        assert spy.call_count == 3
+
+
+def test_metagame_cache_follows_settings_changes(client, tmp_path, monkeypatch):
+    import api.services.settings as ss
+    from api.routers import metagame as mg
+
+    monkeypatch.setattr(ss, "_DATA_DIR", tmp_path)
+    with patch.object(mg, "analyze", wraps=mg.analyze) as spy, patch.object(mg, "lookup_cards", return_value={}):
+        client.get("/api/v1/metagame")
+        ss.set_rank_weights({"1": 99.0})
+        client.get("/api/v1/metagame")
+        assert spy.call_count == 2

@@ -34,7 +34,7 @@ class AppState:
     def __init__(self) -> None:
         self.decks: list[dict] = []
         self.decks_version: int = 0  # bumped by set_decks so version-keyed caches can detect changes
-        self.metagame_cache: dict | None = None
+        self.metagame_cache: dict[tuple, dict] = {}  # finished /metagame responses keyed by version + query
         self.events_cache: list[dict] | None = None  # cached list for GET /api/events
         self.player_aliases: dict[str, str] = {}  # alias -> canonical
 
@@ -42,7 +42,13 @@ class AppState:
         """Replace the in-memory deck list and drop everything derived from it."""
         self.decks = decks
         self.decks_version += 1
-        self.metagame_cache = None
+        self.metagame_cache = {}
+        self.events_cache = None
+
+    def touch(self) -> None:
+        """Drop everything derived from the decks (e.g. after card data changes) without replacing them."""
+        self.decks_version += 1
+        self.metagame_cache = {}
         self.events_cache = None
 
     def database_available(self) -> bool:
@@ -144,7 +150,7 @@ def _get_event_by_id_from_decks(event_id: str) -> dict | None:
 
 
 def _invalidate_metagame() -> None:
-    state.metagame_cache = None
+    state.metagame_cache = {}
     state.events_cache = None
 
 

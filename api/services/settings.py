@@ -41,6 +41,19 @@ def _rank_weights_path() -> Path:
     return _settings_dir() / "rank_weights.json"
 
 
+_version = 0
+
+
+def version() -> int:
+    """Counter bumped whenever rank weights or the ignore-lands list change (cache key component)."""
+    return _version
+
+
+def _bump_version() -> None:
+    global _version
+    _version += 1
+
+
 def get_rank_weights() -> Dict[str, float]:
     """Load rank -> points mapping, falling back to analyzer defaults."""
     data = load_json(_rank_weights_path(), default={}, suppress_errors=True) or {}
@@ -55,6 +68,7 @@ def set_rank_weights(weights: Dict[str, float]) -> Dict[str, float]:
     # Filter out None values and coerce to float for consistency
     cleaned = {k: float(v) for k, v in weights.items() if v is not None}
     save_json(_rank_weights_path(), {"weights": cleaned}, indent=2, ensure_ascii=False)
+    _bump_version()
     return get_rank_weights()
 
 
@@ -72,6 +86,7 @@ def set_ignore_lands_cards(cards: List[str]) -> List[str]:
     cleaned = [c.strip() for c in cards if isinstance(c, str) and c.strip()]
     unique_sorted = sorted({c for c in cleaned})
     save_json(_ignore_lands_cards_path(), {"cards": unique_sorted}, indent=2, ensure_ascii=False)
+    _bump_version()
     return get_ignore_lands_cards()
 
 

@@ -267,3 +267,13 @@ def test_atomic_card_to_row_sets_front_face_name():
     )
     one = mtgjson.atomic_card_to_row("Sol Ring", [{"name": "Sol Ring"}])
     assert two["front_face_name"] == "Norman Osborn" and one["front_face_name"] is None
+
+
+def test_successful_job_drops_derived_caches(monkeypatch):
+    from api.state import state
+
+    monkeypatch.setattr(mtgjson, "_record_last_sync", lambda *a, **k: None)
+    before = state.decks_version
+    mtgjson._RUNNING["name"] = "metadata"
+    mtgjson._run_job("metadata", lambda: {"cards": 0})
+    assert state.decks_version == before + 1 and mtgjson._RUNNING["name"] is None

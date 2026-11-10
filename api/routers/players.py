@@ -146,6 +146,7 @@ def add_player_alias(body: PlayerAliasBody, _: str = Depends(require_admin)):
         raise HTTPException(status_code=400, detail="alias and canonical required")
     state.player_aliases[alias] = canonical
     _save_player_aliases()
+    state.touch()  # aliases change leaderboard/unique-player counts in cached responses
     # If DB is available, also persist alias + merge historical data there
     if state.database_available():
         try:
@@ -176,6 +177,7 @@ def remove_player_alias(alias: str, _: str = Depends(require_admin)):
                 _load_player_aliases()
                 _load_decks_from_db()
         _save_player_aliases()
+        state.touch()
     return {"aliases": state.player_aliases}
 
 
