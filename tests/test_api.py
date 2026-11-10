@@ -675,10 +675,11 @@ def test_auth_me_401_no_header(client):
 def test_auth_me_200(client):
     """GET /api/v1/auth/me returns user when valid token provided."""
     with patch.dict("os.environ", {"ADMIN_PASSWORD": "secret"}, clear=False):
-        with patch("api.routers.auth.ADMIN_PASSWORD", "secret"):
+        with patch("api.routers.auth.ADMIN_PASSWORD", "secret"), patch("api.dependencies.ADMIN_PASSWORD", "secret"):
             login_r = client.post("/api/v1/auth/login", json={"password": "secret"})
         token = login_r.json()["token"]
-        r = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+        with patch("api.dependencies.ADMIN_PASSWORD", "secret"):
+            r = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
     assert r.json() == {"user": "admin"}
 

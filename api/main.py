@@ -29,6 +29,14 @@ from api.logging_config import build_id, configure_logging, environment_name, re
 configure_logging()
 logger = logging.getLogger(__name__)
 
+from api.dependencies import validate_auth_config
+
+try:
+    validate_auth_config()
+except RuntimeError as exc:
+    logger.critical(str(exc), extra={"event": "auth_config_invalid"})
+    raise
+
 # Before importing api.state (which loads decks at import) so those errors are emailed too.
 from api.services.alerts import (
     check_database_on_startup,

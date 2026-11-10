@@ -5,7 +5,9 @@ Depends on api.state for the in-memory deck lookup and DB-availability check.
 
 import hashlib
 import os
+import secrets
 import time
+from collections.abc import Mapping
 from datetime import datetime, timezone
 
 import jwt
@@ -18,11 +20,34 @@ try:
 except ImportError:
     _db = None
 
+def is_deployed(environ: Mapping[str, str] = os.environ) -> bool:
+    """True on Railway (same signal as api.services.alerts.alerts_enabled)."""
+    return bool(environ.get("RAILWAY_ENVIRONMENT_NAME", ""))
+
+
+def validate_auth_config(environ: Mapping[str, str] = os.environ) -> None:
+    """Refuse to run deployed without JWT_SECRET and ADMIN_PASSWORD. Names only, never values."""
+    if not is_deployed(environ):
+        return
+    missing = [name for name in ("JWT_SECRET", "ADMIN_PASSWORD") if not environ.get(name, "")]
+    if missing:
+        raise RuntimeError(f"Missing required environment variable(s) on Railway: {', '.join(missing)}")
+
+
+def derive_jwt_key(jwt_secret: str, admin_password: str) -> bytes:
+    """Signing key: JWT_SECRET (SHA-256 if < 32 bytes), else from the admin password, else random per process."""
+    secret = jwt_secret or admin_password
+    if not secret:
+        return secrets.token_bytes(32)
+    raw = secret.encode("utf-8")
+    # PyJWT recommends at least 32 bytes for HS256; derive a 32-byte key if shorter
+    return raw if len(raw) >= 32 else hashlib.sha256(raw).digest()
+
+
 # Admin auth: single user, password from env, JWT for session
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
-JWT_SECRET = os.getenv("JWT_SECRET", ADMIN_PASSWORD or "dev-secret-change-in-production")
-# PyJWT recommends at least 32 bytes for HS256; derive a 32-byte key if secret is shorter to avoid InsecureKeyLengthWarning
-_JWT_KEY = JWT_SECRET.encode("utf-8") if len(JWT_SECRET.encode("utf-8")) >= 32 else hashlib.sha256(JWT_SECRET.encode("utf-8")).digest()
+JWT_SECRET = os.getenv("JWT_SECRET", "")
+_JWT_KEY = derive_jwt_key(JWT_SECRET, ADMIN_PASSWORD)
 JWT_ALGORITHM = "HS256"
 JWT_EXP_SECONDS = 7 * 24 * 3600  # 7 days
 
@@ -36,6 +61,8 @@ def _create_admin_token() -> str:
 
 
 def _verify_admin_token(token: str) -> bool:
+    if not ADMIN_PASSWORD:
+        return False
     try:
         payload = jwt.decode(token, _JWT_KEY, algorithms=[JWT_ALGORITHM])
         return payload.get("sub") == "admin"
