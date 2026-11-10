@@ -48,6 +48,7 @@ import {
   MAX_TOP8_MATCHUP_ROWS,
   phasesToApiMatchups,
   swissRoundsForPlayerCount,
+  updateMatchupRowField,
   type MatchupRow,
 } from '../lib/matchups'
 import { reportError, ddMmYyToIso, isoToDdMmYy } from '../utils'
@@ -575,7 +576,7 @@ export default function EventDetail() {
     i: number,
     field: 'opponent_player' | 'result' | 'intentional_draw',
     value: string | boolean
-  ) => setSwissMatchups((prev) => prev.map((m, j) => (j === i ? { ...m, [field]: value } : m)))
+  ) => setSwissMatchups((prev) => prev.map((m, j) => (j === i ? updateMatchupRowField(m, field, value) : m)))
   const removeSwissMatchupRow = (i: number) =>
     setSwissMatchups((prev) => (prev.length <= 1 ? prev : prev.filter((_, j) => j !== i)))
 
@@ -589,7 +590,7 @@ export default function EventDetail() {
     i: number,
     field: 'opponent_player' | 'result' | 'intentional_draw',
     value: string | boolean
-  ) => setTop8Matchups((prev) => prev.map((m, j) => (j === i ? { ...m, [field]: value } : m)))
+  ) => setTop8Matchups((prev) => prev.map((m, j) => (j === i ? updateMatchupRowField(m, field, value) : m)))
   const removeTop8MatchupRow = (i: number) => setTop8Matchups((prev) => prev.filter((_, j) => j !== i))
 
   const handleSaveMatchups = () => {

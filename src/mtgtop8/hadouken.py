@@ -46,6 +46,12 @@ class HadoukenPairing:
 
 
 @dataclass
+class HadoukenBye:
+    round: int
+    player: str
+
+
+@dataclass
 class HadoukenEvent:
     url: str
     name: str
@@ -55,6 +61,7 @@ class HadoukenEvent:
     player_count: int
     standings: list[HadoukenStanding] = field(default_factory=list)
     pairings: list[HadoukenPairing] = field(default_factory=list)
+    byes: list[HadoukenBye] = field(default_factory=list)
 
 
 def is_hadouken_url(url: str) -> bool:
@@ -144,8 +151,10 @@ def _parse_standings(main: Tag) -> list[HadoukenStanding]:
     return out
 
 
-def _parse_pairings(main: Tag) -> list[HadoukenPairing]:
-    out = []
+def _parse_rounds(main: Tag) -> tuple[list[HadoukenPairing], list[HadoukenBye]]:
+    """Every round's pairings, plus byes (shown as a pairing against "(0) bye")."""
+    out: list[HadoukenPairing] = []
+    byes: list[HadoukenBye] = []
     for h3 in main.find_all("h3"):
         title = _text(h3)
         if not title.lower().startswith("ronda"):
@@ -157,16 +166,18 @@ def _parse_pairings(main: Tag) -> list[HadoukenPairing]:
         for li in ul.find_all("li"):
             spans = [s for s in li.find_all("span", recursive=False) if _text(s).lower() != "vs"]
             if len(spans) != 2:
-                continue  # bye or unexpected layout
+                continue  # unexpected layout
             left = _LEFT_RE.match(_text(spans[0]))
             right = _RIGHT_RE.match(_text(spans[1]))
             if not left or not right:
                 continue
             p1, p2 = _clean_name(left.group("name")), _clean_name(right.group("name"))
             if "bye" in (p1.lower(), p2.lower()):
+                if p1.lower() != p2.lower():
+                    byes.append(HadoukenBye(round_no, p2 if p1.lower() == "bye" else p1))
                 continue
             out.append(HadoukenPairing(round_no, p1, p2, int(left.group("games")), int(right.group("games"))))
-    return out
+    return out, byes
 
 
 def parse_hadouken_event(html: str, url: str = "") -> HadoukenEvent:
@@ -183,6 +194,7 @@ def parse_hadouken_event(html: str, url: str = "") -> HadoukenEvent:
     store = location.split("/", 1)[1].strip() if "/" in location else location
 
     standings = _parse_standings(main)
+    pairings, byes = _parse_rounds(main)
     return HadoukenEvent(
         url=url,
         name=_text(h1),
@@ -191,7 +203,8 @@ def parse_hadouken_event(html: str, url: str = "") -> HadoukenEvent:
         store=store,
         player_count=_int(_info_value(main, "Participantes")) or len(standings),
         standings=standings,
-        pairings=_parse_pairings(main),
+        pairings=pairings,
+        byes=byes,
     )
 
 

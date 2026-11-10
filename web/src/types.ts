@@ -267,6 +267,7 @@ export interface HadoukenPreview {
   decks: Array<{ deck_id: number; player: string; rank: string; archetype: string }>
   unmatched_deck_ids: number[]
   pairings: Array<{ round: number; player1: string; player2: string; games1: number; games2: number; result1: string; result2: string }>
+  byes: Array<{ round: number; player: string }>
   conflicts: Array<{ round: number; player1: string; player2: string; existing: string; hadouken: string }>
   existing_matchup_count: number
 }
@@ -276,6 +277,7 @@ export interface HadoukenApplyResult {
   decks_created: number
   decks_matched: number
   matches_imported: number
+  byes_imported: number
   aliases_added: number
   player_count: number
 }

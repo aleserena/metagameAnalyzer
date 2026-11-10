@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from src.mtgtop8.hadouken import (
+    HadoukenBye,
     HadoukenPairing,
     is_hadouken_url,
     pairing_results,
@@ -60,6 +61,30 @@ class TestParseHadoukenEvent:
                 derived[player][idx] += 1
         for s in event.standings:
             assert derived[s.player] == [s.wins, s.losses, s.draws], s.player
+
+    def test_fixture_has_no_byes(self, event):
+        assert event.byes == []
+
+    def test_byes_are_parsed_separately_from_pairings(self):
+        """Hadouken shows a bye as a pairing against "(0) bye" (markup copied from a real page)."""
+        li = (
+            '<li><span class="font-medium">{p1}<!-- --> (<!-- -->{g1}<!-- -->)</span>'
+            '<span class="text-slate-500">vs</span>'
+            '<span class="font-medium">(<!-- -->{g2}<!-- -->) <!-- -->{p2}</span></li>'
+        )
+        html = (
+            "<html><body><main><p>Magic: The Gathering Duel Commander</p><h1>Fecha 8</h1>"
+            "<p>viernes, 23 de octubre de 2026</p>"
+            "<h3>Ronda 1</h3><ul>"
+            + li.format(p1="FRANCO GOLFIERI", g1=2, p2="bye", g2=0)
+            + li.format(p1="ANA PEREZ", g1=2, p2="LUIS GOMEZ", g2=1)
+            + "</ul><h3>Ronda 2</h3><ul>"
+            + li.format(p1="ANA PEREZ", g1=2, p2="bye", g2=0)
+            + "</ul></main></body></html>"
+        )
+        ev = parse_hadouken_event(html)
+        assert ev.pairings == [HadoukenPairing(1, "Ana Perez", "Luis Gomez", 2, 1)]
+        assert ev.byes == [HadoukenBye(1, "Franco Golfieri"), HadoukenBye(2, "Ana Perez")]
 
     def test_rejects_page_without_event(self):
         with pytest.raises(ValueError):
