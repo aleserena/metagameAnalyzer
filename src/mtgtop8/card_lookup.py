@@ -12,6 +12,7 @@ equivalent and it is a periodic admin refresh, not on the per-request path.
 """
 
 import json
+import logging
 import os
 import time
 from pathlib import Path
@@ -19,6 +20,8 @@ from pathlib import Path
 import requests
 
 from .storage import load_json, save_json
+
+logger = logging.getLogger(__name__)
 
 SCRYFALL_COLLECTION = "https://api.scryfall.com/cards/collection"
 SCRYFALL_NAMED = "https://api.scryfall.com/cards/named"
@@ -400,7 +403,8 @@ def lookup_cards(card_names: list[str]) -> dict[str, dict]:
         else:
             missing = list(names)
     except Exception:
-        missing = list(names)
+        logger.exception("Card lookup from the database failed")
+        return result
 
     if missing and SCRYFALL_FALLBACK_ENABLED:
         result.update(_scryfall_lookup_cards(missing))

@@ -259,3 +259,11 @@ def test_sync_job_captures_error(monkeypatch):
     job = mtgjson.get_sync_status()["jobs"]["metadata"]
     assert "download failed" in (job["error"] or "")
     assert mtgjson.get_sync_status()["running"] is None
+
+
+def test_atomic_card_to_row_sets_front_face_name():
+    two = mtgjson.atomic_card_to_row(
+        "Norman Osborn // Green Goblin", [{"faceName": "Norman Osborn"}, {"faceName": "Green Goblin"}]
+    )
+    one = mtgjson.atomic_card_to_row("Sol Ring", [{"name": "Sol Ring"}])
+    assert two["front_face_name"] == "Norman Osborn" and one["front_face_name"] is None

@@ -88,8 +88,11 @@ def atomic_card_to_row(name: str, faces: list[dict]) -> dict:
         for f in faces
     ] or [{"name": name, "side": None}]
 
+    front_face_name = name.split(" // ", 1)[0] if " // " in name else None
+
     return {
         "name": name,
+        "front_face_name": front_face_name,
         "mana_cost": mana_cost,
         "cmc": float(cmc),
         "type_line": type_line,

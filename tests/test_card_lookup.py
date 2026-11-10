@@ -311,3 +311,19 @@ def test_names_beyond_a_short_collection_response_are_not_cached_as_not_found(mo
     cl._scryfall_lookup_cards(["Real Card", "Leftover Card"])
     assert "Leftover Card" not in cache
     assert cache["Real Card"] == {"name": "Real Card"}
+
+
+def test_db_error_does_not_fall_back_to_scryfall_for_everything(monkeypatch):
+    from src.mtgtop8 import card_lookup as cl
+    import api.db as db
+
+    monkeypatch.setattr(db, "is_database_available", lambda: True)
+
+    def boom():
+        raise RuntimeError("connection reset")
+
+    monkeypatch.setattr(db, "session_scope", boom)
+    called = []
+    monkeypatch.setattr(cl, "_scryfall_lookup_cards", lambda names: called.append(names) or {})
+    assert cl.lookup_cards(["Sol Ring", "Island"]) == {}
+    assert called == []

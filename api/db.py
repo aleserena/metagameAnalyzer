@@ -146,6 +146,7 @@ class CardRow(Base):
 
     __tablename__ = "cards"
     name = Column(String(512), primary_key=True)  # canonical MTGJSON name, e.g. "Fire // Ice"
+    front_face_name = Column(String(512), nullable=True, index=True)  # text before " // " for multi-face names, else NULL
     scryfall_id = Column(String(64), nullable=True)  # representative printing's identifiers.scryfallId
     mtgjson_uuid = Column(String(64), nullable=True)  # representative printing UUID (joins AllPricesToday)
     mana_cost = Column(String(128), nullable=False, default="")
@@ -2189,6 +2190,7 @@ def list_matchups_with_deck_and_players(session: Session) -> list[dict]:
 # Columns refreshed by the metadata sync (price columns are deliberately excluded
 # so the separate price sync is not clobbered).
 _CARD_METADATA_COLUMNS = (
+    "front_face_name",
     "scryfall_id",
     "mtgjson_uuid",
     "mana_cost",
@@ -2203,12 +2205,28 @@ _CARD_METADATA_COLUMNS = (
 
 
 def get_cards_by_name(session: Session, names: list[str]) -> dict[str, CardRow]:
-    """Return {name: CardRow} for the given card names (only those present)."""
+    """Return {requested_name: CardRow} for the given card names (only those present).
+
+    Exact ``name`` matches win; names still missing are matched on ``front_face_name``
+    (double-faced cards are stored by front face only in decks). When several rows
+    share a front face, the lowest ``name`` wins.
+    """
     names = [n for n in dict.fromkeys(names) if n]
     if not names:
         return {}
     rows = session.query(CardRow).filter(CardRow.name.in_(names)).all()
-    return {r.name: r for r in rows}
+    found: dict[str, CardRow] = {r.name: r for r in rows}
+    missing = [n for n in names if n not in found]
+    if missing:
+        fallback = (
+            session.query(CardRow)
+            .filter(CardRow.front_face_name.in_(missing))
+            .order_by(CardRow.name)
+            .all()
+        )
+        for r in fallback:
+            found.setdefault(r.front_face_name, r)
+    return found
 
 
 def upsert_cards(session: Session, rows: list[dict], batch_size: int = 1000) -> int:
