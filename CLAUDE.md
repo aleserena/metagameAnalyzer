@@ -25,6 +25,7 @@ Start the API first, then the frontend. Vite proxies `/api` → `http://localhos
 | Python lint | `npm run lint:py` (`ruff check .`) |
 | JS lint | `npm run lint:web` (`cd web && npm run lint`) |
 | Python tests | `python3 -m pytest` |
+| Python tests (DB) | DB tests use `TEST_DATABASE_URL` (never staging/prod); without it they skip. Tests migrate it to head at startup. Get one via Docker (`docker run --name mtg-test-db -e POSTGRES_PASSWORD=test -e POSTGRES_DB=mtg_test -p 55432:5432 -d postgres:16`, URL `postgresql://postgres:test@localhost:55432/mtg_test`) or a local cluster (`initdb -D <dir> -U postgres -A trust`, `pg_ctl -D <dir> -o "-p 55432" start`, `createdb -h localhost -p 55432 -U postgres mtg_test`, URL `postgresql://postgres@localhost:55432/mtg_test`). |
 | Python tests + coverage | `npm run test:py:coverage` |
 | Single Python test | `python3 -m pytest tests/path/to/test.py::test_name` |
 | JS tests | `cd web && npx vitest run` |

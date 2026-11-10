@@ -17,7 +17,10 @@ sys.path.insert(0, str(_project_root))
 _db_env = os.getenv("DB_ENV", "").strip().lower()
 _env_name = f".env.{_db_env}" if _db_env in ("dev", "staging", "prod") else ".env"
 _env_path = _project_root / _env_name
-if _env_path.exists():
+if os.getenv("DATABASE_URL_LOCKED") == "1":
+    # Tests pin DATABASE_URL to the test database; never let .env override it.
+    pass
+elif _env_path.exists():
     try:
         from dotenv import load_dotenv
         load_dotenv(_env_path, override=True)

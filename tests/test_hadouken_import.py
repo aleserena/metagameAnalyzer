@@ -57,29 +57,6 @@ def test_suggest_matches_uses_each_deck_once_and_prefers_stronger_match():
 # --- Integration tests (require DATABASE_URL; rolled back) ---
 
 
-@pytest.fixture
-def db_session_rollback():
-    """Session that rolls back so no data is committed. Skips when DATABASE_URL is unset or DB unreachable."""
-    from sqlalchemy import text
-    from sqlalchemy.exc import OperationalError
-
-    if not _db.is_database_available():
-        pytest.skip("DATABASE_URL not set")
-    factory = _db.get_session_factory_cached()
-    if factory is None:
-        pytest.skip("DATABASE_URL not set")
-    try:
-        session = factory()
-        session.execute(text("SELECT 1"))
-    except OperationalError:
-        pytest.skip("Database unreachable (e.g. no network)")
-    try:
-        yield session
-    finally:
-        session.rollback()
-        session.close()
-
-
 _EID = "test_hado_1"
 # Unlikely to exist in any real database
 _A, _B, _C, _D = "Zqxa Hadotest", "Zqxb Hadotest", "Zqxc Hadotest", "Zqxd Hadotest"

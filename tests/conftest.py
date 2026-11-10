@@ -3,6 +3,17 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from tests._dbguard import apply_test_database_env, ensure_test_schema
+
+# DB-backed tests run only against TEST_DATABASE_URL (never staging/prod): pin DATABASE_URL
+# to it (or to "" so tests skip) before api.config loads .env, then migrate it at import time
+# because test modules import api.main (which queries the DB) during collection.
+_TEST_DATABASE_URL = apply_test_database_env()
+try:
+    ensure_test_schema(_TEST_DATABASE_URL)
+except Exception as exc:  # unreachable/misconfigured test DB: leave DB tests to skip
+    print(f"[conftest] test database schema setup failed, DB tests may skip: {exc}")
+
 # Load .env / .env.$DB_ENV up front. api.db does not import api.config, so without this
 # the DB-backed tests only see DATABASE_URL when another module imported api.main first
 # (alphabetical luck) and silently skip when run on their own.
@@ -123,3 +134,28 @@ def deck_with_split_card():
         "commanders": [],
         "archetype": "Test",
     }
+
+
+@pytest.fixture
+def db_session_rollback():
+    """Session that rolls back so no data is committed. Skips when DATABASE_URL is unset or DB unreachable."""
+    from sqlalchemy import text
+    from sqlalchemy.exc import OperationalError
+
+    from api.db import get_session_factory_cached, is_database_available
+
+    if not is_database_available():
+        pytest.skip("TEST_DATABASE_URL not set")
+    factory = get_session_factory_cached()
+    if factory is None:
+        pytest.skip("TEST_DATABASE_URL not set")
+    try:
+        session = factory()
+        session.execute(text("SELECT 1"))
+    except OperationalError:
+        pytest.skip("Test database unreachable")
+    try:
+        yield session
+    finally:
+        session.rollback()
+        session.close()

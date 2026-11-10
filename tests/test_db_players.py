@@ -3,7 +3,6 @@
 import sys
 from pathlib import Path
 
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -15,32 +14,6 @@ from api.db import (
     resolve_name_to_player_id,
     set_player_alias,
 )
-
-
-@pytest.fixture
-def db_session_rollback():
-    """Session that rolls back so no data is committed. Skips when DATABASE_URL is unset or DB unreachable."""
-    from sqlalchemy.exc import OperationalError
-
-    from api.db import get_session_factory_cached, is_database_available
-
-    if not is_database_available():
-        pytest.skip("DATABASE_URL not set")
-    factory = get_session_factory_cached()
-    if factory is None:
-        pytest.skip("DATABASE_URL not set")
-    try:
-        from sqlalchemy import text
-
-        session = factory()
-        session.execute(text("SELECT 1"))
-    except OperationalError:
-        pytest.skip("Database unreachable (e.g. no network)")
-    try:
-        yield session
-    finally:
-        session.rollback()
-        session.close()
 
 
 def test_get_or_create_player_creates_and_returns_stable_id(db_session_rollback):

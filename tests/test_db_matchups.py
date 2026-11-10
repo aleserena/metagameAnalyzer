@@ -69,33 +69,6 @@ def test_swiss_rounds_for_players():
 # --- Integration tests (require DATABASE_URL; skip otherwise) ---
 
 
-@pytest.fixture
-def db_session_rollback():
-    """Session that rolls back so no data is committed. Skips when DATABASE_URL is unset or DB unreachable."""
-    from sqlalchemy.exc import OperationalError
-
-    from api.db import get_session_factory_cached, is_database_available
-
-    if not is_database_available():
-        pytest.skip("DATABASE_URL not set")
-    factory = get_session_factory_cached()
-    if factory is None:
-        pytest.skip("DATABASE_URL not set")
-    try:
-        from sqlalchemy import text
-
-        session = factory()
-        # Touch the DB to ensure we can connect (e.g. skip in CI when DB is unreachable)
-        session.execute(text("SELECT 1"))
-    except OperationalError:
-        pytest.skip("Database unreachable (e.g. no network)")
-    try:
-        yield session
-    finally:
-        session.rollback()
-        session.close()
-
-
 # Deck IDs and event IDs used only in tests to avoid clashes
 _TEST_EVENT_PREFIX = "test_cm_"
 _TEST_DECK_ID_BASE = 989000
