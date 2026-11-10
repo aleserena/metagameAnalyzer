@@ -2,7 +2,7 @@
 
 from api import db as _db
 from api.state import _resolve_deck_player
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError
 from src.mtgtop8.scraper import parse_event_display
 
 
@@ -57,8 +57,11 @@ def persist_scraped_decks(session, deck_dicts: list[dict], *, refresh_events: bo
                 _db.upsert_deck(session, d, origin=_db.ORIGIN_MTGTOP8)
                 session.flush()
             saved += 1
-        except IntegrityError as e:
+        except DBAPIError as e:
             failed.append(
                 {"deck_id": d.get("deck_id"), "event_id": str(d.get("event_id")), "error": str(e.orig or e)}
             )
+    # The event row is the source of truth: re-scraped decks must agree with it.
+    for ev_id in seen_events:
+        _db.sync_decks_with_event(session, ev_id)
     return {"decks_saved": saved, "events": len(seen_events), "failed": failed}

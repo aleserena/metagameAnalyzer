@@ -106,7 +106,13 @@ def start_job(params: dict, *, scrape_fn=scrape, persist_fn=None, reload_fn=None
         job.thread = threading.Thread(
             target=_run, args=(job, params, scrape_fn, persist_fn, reload_fn), daemon=True
         )
-        job.thread.start()
+        try:
+            job.thread.start()
+        except BaseException as exc:
+            job.status = "error"
+            job.message = f"Could not start the scrape: {exc}" if str(exc) else "Could not start the scrape"
+            job.finished_at = _now()
+            raise
     return job
 
 
@@ -126,7 +132,7 @@ def _run(job: ScrapeJob, params: dict, scrape_fn, persist_fn, reload_fn) -> None
         with _LOCK:
             job.failed_decks.append({"deck_id": deck_id, "event_id": event_id, "error": error})
 
-    status = "done"
+    status = "error"  # only a clean exit below upgrades this
     message = ""
     try:
         decks = scrape_fn(
@@ -163,6 +169,7 @@ def _run(job: ScrapeJob, params: dict, scrape_fn, persist_fn, reload_fn) -> None
             n_failed = len(job.failed_decks)
         n = len(deck_dicts)
         m = len(events_in_run)
+        status = "done"
         message = f"Scraped {n} decks from {m} events"
         if n_failed:
             message += f"; {n_failed} decks failed — re-run with Event IDs: {', '.join(failed_events)}"

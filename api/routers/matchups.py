@@ -14,6 +14,7 @@ try:
 except ImportError:
     _db = None
 from fastapi import APIRouter
+from sqlalchemy.exc import IntegrityError
 
 from api.route_helpers import (
     _date_in_range,
@@ -429,14 +430,17 @@ def get_matchups_players_summary(
 @router.patch("/api/v1/matchups/{matchup_id}", dependencies=[Depends(require_admin), Depends(require_database)])
 def patch_matchup(matchup_id: int, body: PatchMatchupBody):
     """Update a matchup result (admin fix for discrepancies or one-sided reports)."""
-    with _db.session_scope() as session:
-        ok = _db.update_matchup(
-            session,
-            matchup_id,
-            result=body.result,
-            result_note=body.result_note,
-            round=body.round,
-        )
+    try:
+        with _db.session_scope() as session:
+            ok = _db.update_matchup(
+                session,
+                matchup_id,
+                result=body.result,
+                result_note=body.result_note,
+                round=body.round,
+            )
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail="A result already exists for that round")
     if not ok:
         raise HTTPException(status_code=404, detail="Matchup not found")
     return {"ok": True}

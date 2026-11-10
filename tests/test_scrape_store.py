@@ -67,3 +67,33 @@ def test_player_conflict_fails_one_deck_and_saves_the_rest(db_session_rollback):
     session.flush()
     assert [f["deck_id"] for f in out["failed"]] == [D1]
     assert session.query(DeckRow).filter(DeckRow.deck_id == D3).one().name == "Still Saved"
+
+
+def test_rescrape_leaves_every_deck_matching_the_event(db_session_rollback):
+    from api.db import EventRow, update_event
+
+    session = db_session_rollback
+    _seed(session)
+    update_event(session, EID, player_count=40, store="Card Shop", location="Town")
+    session.flush()
+    out = persist_scraped_decks(session, [_deck(D1, "Store A")], refresh_events=True)
+    session.flush()
+    assert out["failed"] == []
+    ev = session.query(EventRow).filter(EventRow.event_id == EID).one()
+    assert ev.player_count == 40
+    decks = session.query(DeckRow).filter(DeckRow.event_id == EID).all()
+    assert len(decks) == 3
+    for d in decks:
+        assert d.player_count == 40
+        assert d.event_name == "Scrape Store Test @ Card Shop (Town)"
+
+
+def test_data_error_fails_one_deck_and_saves_the_rest(db_session_rollback):
+    session = db_session_rollback
+    _seed(session)
+    bad = _deck(D1, "Store A")
+    bad["rank"] = "x" * 100
+    out = persist_scraped_decks(session, [bad, _deck(D3, "Store C", name="Still Saved")], refresh_events=True)
+    session.flush()
+    assert [f["deck_id"] for f in out["failed"]] == [D1]
+    assert session.query(DeckRow).filter(DeckRow.deck_id == D3).one().name == "Still Saved"

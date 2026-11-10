@@ -1397,3 +1397,21 @@ def test_player_analysis_cache_key_uses_decks_version():
     before = _player_analysis_cache_signature()
     state.set_decks(list(state.decks))
     assert _player_analysis_cache_signature() != before
+
+
+def test_patch_matchup_round_conflict_returns_409(client_with_overrides):
+    from contextlib import contextmanager
+    from unittest.mock import MagicMock
+
+    from sqlalchemy.exc import IntegrityError
+
+    @contextmanager
+    def scope():
+        yield MagicMock()
+
+    with patch("api.routers.matchups._db.session_scope", scope), patch(
+        "api.routers.matchups._db.update_matchup", side_effect=IntegrityError("s", {}, Exception("dup"))
+    ):
+        r = client_with_overrides.patch("/api/v1/matchups/1", json={"round": 2})
+    assert r.status_code == 409
+    assert r.json()["detail"] == "A result already exists for that round"

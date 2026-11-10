@@ -57,6 +57,8 @@ def import_event_payload(session, body: EventExportData) -> dict:
 
     # Decks must exist in the DB before matchups reference them.
     session.flush()
+    # Decks carry the event's display name (with store/location), like every other path.
+    _db.sync_decks_with_event(session, new_event_id)
     new_deck_player_ids = {
         r.deck_id: r.player_id
         for r in session.query(DeckRow.deck_id, DeckRow.player_id).filter(DeckRow.event_id == new_event_id)

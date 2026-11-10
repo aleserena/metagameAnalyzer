@@ -26,6 +26,7 @@ export default function Scrape() {
   const wasRunningRef = useRef(false)
   const mountedRef = useRef(true)
   const inFlightRef = useRef(false)
+  const failedPollsRef = useRef(0)
 
   useEffect(() => {
     mountedRef.current = true
@@ -71,6 +72,7 @@ export default function Scrape() {
     try {
       const { job } = await getScrapeStatus(requestedAfter)
       if (!mountedRef.current) return
+      failedPollsRef.current = 0
       if (!job) {
         if (wasRunningRef.current) goIdle('The scrape is no longer running on the server.')
         else setLoading(false)
@@ -86,8 +88,16 @@ export default function Scrape() {
       applySnapshot(job, requestedAfter)
     } catch {
       if (!mountedRef.current) return
-      if (wasRunningRef.current) goIdle('The scrape is no longer running on the server.')
-      else setLoading(false)
+      if (!wasRunningRef.current) {
+        setLoading(false)
+        return
+      }
+      // A single failed poll says nothing about the job; give up only after repeated failures.
+      failedPollsRef.current += 1
+      if (failedPollsRef.current >= 3) {
+        failedPollsRef.current = 0
+        goIdle('Lost contact with the server. Reload the page to check the scrape.')
+      }
     }
   }, [applySnapshot, goIdle])
 

@@ -722,12 +722,15 @@ def update_event(
     return True
 
 
-def sync_decks_with_event(session: Session, event_id: int | str) -> int:
+def sync_decks_with_event(
+    session: Session, event_id: int | str, changes: list | None = None
+) -> int:
     """Copy the event's name, date, format and player count onto its decks.
 
     Each deck stores its own copy of these fields. Empty event values are skipped so a
     partly filled event never blanks a deck's copy, and ``player_count`` is copied only
-    when the event's is above 0. Returns the number of decks changed.
+    when the event's is above 0. Returns the number of decks changed. If ``changes`` is a
+    list, a ``(deck_id, field, old, new)`` tuple is appended for every field changed.
     """
     from src.mtgtop8.scraper import event_display_name
 
@@ -748,7 +751,10 @@ def sync_decks_with_event(session: Session, event_id: int | str) -> int:
     for deck in session.query(DeckRow).filter(DeckRow.event_id == eid).all():
         touched = False
         for attr, value in wanted.items():
-            if getattr(deck, attr) != value:
+            old = getattr(deck, attr)
+            if old != value:
+                if changes is not None:
+                    changes.append((deck.deck_id, attr, old, value))
                 setattr(deck, attr, value)
                 touched = True
         if touched:

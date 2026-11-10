@@ -40,4 +40,17 @@ describe('Scrape page', () => {
     await waitFor(() => expect(api.getScrapeStatus).toHaveBeenCalledWith(0))
     expect(screen.getByRole('button', { name: /^run scrape$/i })).toBeEnabled()
   })
+
+  it('stays in the running state after one failed poll', async () => {
+    vi.mocked(api.getScrapeStatus)
+      .mockResolvedValueOnce({ job: running })
+      .mockRejectedValueOnce(new Error('network'))
+      .mockResolvedValue({
+        job: { ...running, messages: ['still going'], next: 2 },
+      })
+    render(<MemoryRouter><Scrape /></MemoryRouter>)
+    expect(await screen.findByText('[2/5] Fetching decks from Event X...')).toBeInTheDocument()
+    expect(await screen.findByText('still going', {}, { timeout: 6000 })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /stop/i })).toBeInTheDocument()
+  }, 10000)
 })

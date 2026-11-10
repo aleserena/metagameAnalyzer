@@ -257,7 +257,7 @@ def _player_match_stats(deck_ids: list[int]) -> dict:
 def _match_winrate_by_player(deck_ids: list[int] | None) -> dict[int, dict]:
     """Map player_id -> {recorded_matches, match_win_pct} from MatchupRow.
 
-    Aggregated in SQL grouped by player_id. If deck_ids is given (date-filtered
+    Computed by db.match_winrate_by_player (aggregated in Python per player). If deck_ids is given (date-filtered
     view), restrict to those decks so the win% matches the filtered leaderboard;
     pass None to aggregate across all decks.
     """

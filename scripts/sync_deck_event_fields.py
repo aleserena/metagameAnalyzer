@@ -23,6 +23,14 @@ from api import db as _db
 from scripts._env import VALID_DB_ENVS, load_env
 
 
+def format_changes(changes: list, limit: int = 5) -> list[str]:
+    """Render ``(deck_id, field, old, new)`` tuples; at most ``limit`` lines plus a tally."""
+    lines = [f"deck {d} {f}: {o!r} -> {n!r}" for d, f, o, n in changes[:limit]]
+    if len(changes) > limit:
+        lines.append(f"... and {len(changes) - limit} more")
+    return lines
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true")
@@ -52,9 +60,13 @@ def main() -> None:
     try:
         total = 0
         for (event_id,) in session.query(_db.EventRow.event_id).all():
-            count = _db.sync_decks_with_event(session, event_id)
+            changes: list = []
+            count = _db.sync_decks_with_event(session, event_id, changes)
             if count:
                 print(f"{event_id}: {count} decks updated")
+                if args.dry_run:
+                    for line in format_changes(changes):
+                        print(f"  {line}")
             total += count
         print(f"Total: {total} decks updated")
         if args.dry_run:

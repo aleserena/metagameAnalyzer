@@ -149,3 +149,18 @@ def test_reload_failure_keeps_save_failures_and_saved_count():
     assert snap["failed_decks"] == result["failed"]
     assert "reload failed" in snap["message"]
     assert "saved" in snap["message"]
+
+
+def test_thread_start_failure_frees_the_slot(monkeypatch):
+    def boom(self):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(threading.Thread, "start", boom)
+    with pytest.raises(RuntimeError):
+        scrape_job.start_job(PARAMS, scrape_fn=_scrape_ok, persist_fn=lambda d, f: ONE, reload_fn=lambda: None)
+    assert scrape_job.current_job().status == "error"
+    assert scrape_job.current_job().finished_at
+    monkeypatch.undo()
+    job = scrape_job.start_job(PARAMS, scrape_fn=_scrape_ok, persist_fn=lambda d, f: ONE, reload_fn=lambda: None)
+    job.thread.join(5)
+    assert job.status == "done"

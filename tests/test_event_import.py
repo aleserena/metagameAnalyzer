@@ -97,3 +97,20 @@ def test_rows_pointing_outside_the_file(db_session_rollback):
     assert out["matchup_count"] == 1
     row = session.query(MatchupRow).filter(MatchupRow.opponent_player == "Stranger").one()
     assert row.opponent_deck_id is None
+
+
+def test_imported_decks_carry_the_event_display_name(db_session_rollback):
+    from api.db import EventRow
+    from src.mtgtop8.scraper import event_display_name
+
+    session = db_session_rollback
+    payload = _payload([])
+    payload.event.store = "Card Shop"
+    payload.event.location = "Town"
+    out = import_event_payload(session, payload)
+    session.flush()
+    ev = session.query(EventRow).filter(EventRow.event_id == out["event_id"]).one()
+    expected = event_display_name(ev.name, ev.store, ev.location)
+    assert "@" in expected
+    names = {d.event_name for d in session.query(DeckRow).filter(DeckRow.event_id == out["event_id"])}
+    assert names == {expected}
