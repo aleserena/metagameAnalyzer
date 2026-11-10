@@ -131,3 +131,21 @@ def test_stop_marks_job_cancelled():
     assert scrape_job.request_stop() is True
     job.thread.join(5)
     assert scrape_job.snapshot(job)["status"] == "cancelled"
+
+
+def test_reload_failure_keeps_save_failures_and_saved_count():
+    result = {"decks_saved": 3, "events": 1, "failed": [{"deck_id": 5, "event_id": 11, "error": "bad"}]}
+
+    def bad_reload():
+        raise RuntimeError("reload failed")
+
+    job = scrape_job.start_job(
+        PARAMS, scrape_fn=_scrape_ok, persist_fn=lambda d, f: result, reload_fn=bad_reload
+    )
+    job.thread.join(5)
+    snap = scrape_job.snapshot(job)
+    assert snap["status"] == "error"
+    assert snap["decks_saved"] == 3
+    assert snap["failed_decks"] == result["failed"]
+    assert "reload failed" in snap["message"]
+    assert "saved" in snap["message"]

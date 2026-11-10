@@ -148,10 +148,17 @@ def _run(job: ScrapeJob, params: dict, scrape_fn, persist_fn, reload_fn) -> None
                 "Scrape: failed to save deck %s (event %s): %s",
                 f.get("deck_id"), f.get("event_id"), f.get("error"),
             )
-        reload_fn()
+        # Record what was saved before reloading, so a reload failure cannot hide it.
         with _LOCK:
             job.failed_decks.extend(persist_failed)
             job.decks_saved = int(result.get("decks_saved", 0))
+        try:
+            reload_fn()
+        except Exception as exc:
+            raise RuntimeError(
+                f"Decks were saved but reloading them failed: {exc}"
+            ) from exc
+        with _LOCK:
             failed_events = sorted({str(f["event_id"]) for f in job.failed_decks if f.get("event_id") is not None})
             n_failed = len(job.failed_decks)
         n = len(deck_dicts)
