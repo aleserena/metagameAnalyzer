@@ -6,7 +6,7 @@ Route -> handler-function map for the FastAPI app. **Grep for the handler name**
 
 Auth column: `admin` = admin token required, `event-edit` = admin **or** a valid event-edit token, `DB` = database required. Blank = public.
 
-Total endpoints: **96**.
+Total endpoints: **97**.
 
 ## Health / Info / Auth / Feedback
 
@@ -15,6 +15,7 @@ Total endpoints: **96**.
 | POST | `/api/v1/auth/login` | `auth_login` (in `api/routers/auth.py`) |  |
 | GET | `/api/v1/auth/me` | `auth_me` (in `api/routers/auth.py`) |  |
 | POST | `/api/v1/feedback` | `post_feedback` (in `api/routers/feedback.py`) |  |
+| GET | `/api/v1/feedback/captcha` | `get_feedback_captcha` (in `api/routers/feedback.py`) |  |
 | GET | `/api/v1/health` | `health` (in `api/routers/health.py`) |  |
 | GET | `/api/v1/info` | `get_info` |  |
 

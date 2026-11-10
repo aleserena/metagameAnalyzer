@@ -1,6 +1,7 @@
 """API integration tests using FastAPI TestClient."""
 
 import json
+import re
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -1469,3 +1470,64 @@ def test_login_is_throttled_after_five_failures(client):
     auth.LOGIN_LIMITER.reset()
     assert r.status_code == 429
     assert int(r.headers["Retry-After"]) > 0
+
+
+def _feedback_body(client, **extra):
+    c = client.get("/api/v1/feedback/captcha").json()
+    a, b = map(int, re.fullmatch(r"What is (\d+) \+ (\d+)\?", c["question"]).groups())
+    return {
+        "type": "bug",
+        "title": "T",
+        "description": "D",
+        "captcha_token": c["token"],
+        "captcha_answer": a + b,
+        **extra,
+    }
+
+
+@pytest.fixture
+def github_ok():
+    from api.routers import feedback as fb
+
+    fb.FEEDBACK_LIMITER.reset()
+    resp = MagicMock()
+    resp.json.return_value = {"html_url": "https://github.com/o/r/issues/7", "number": 7}
+    with (
+        patch.object(fb, "GITHUB_TOKEN", "t"),
+        patch.object(fb, "GITHUB_REPO", "o/r"),
+        patch.object(fb.requests, "post", return_value=resp) as post,
+        patch.object(fb, "send_alert_email") as mail,
+    ):
+        yield post, mail
+    fb.FEEDBACK_LIMITER.reset()
+
+
+def test_feedback_requires_a_server_captcha(client, github_ok):
+    r = client.post(
+        "/api/v1/feedback",
+        json={"type": "bug", "title": "T", "description": "D", "captcha_answer": 5},
+    )
+    assert r.status_code == 400
+
+
+def test_feedback_contact_email_goes_to_alert_inbox_not_the_issue(client, github_ok):
+    post, mail = github_ok
+    r = client.post("/api/v1/feedback", json=_feedback_body(client, email="reporter@example.com"))
+    assert r.status_code == 200 and r.json()["number"] == 7
+    assert "reporter@example.com" not in post.call_args.kwargs["json"]["body"]
+    subject, body = mail.call_args.args
+    assert "reporter@example.com" in body and "https://github.com/o/r/issues/7" in body
+
+
+def test_feedback_is_limited_to_five_per_hour(client, github_ok):
+    for _ in range(5):
+        assert client.post("/api/v1/feedback", json=_feedback_body(client)).status_code == 200
+    assert client.post("/api/v1/feedback", json=_feedback_body(client)).status_code == 429
+
+
+def test_feedback_alert_failure_still_creates_issue_and_never_logs_address(client, github_ok, caplog):
+    _post, mail = github_ok
+    mail.side_effect = RuntimeError("smtp down")
+    r = client.post("/api/v1/feedback", json=_feedback_body(client, email="reporter@example.com"))
+    assert r.status_code == 200
+    assert "reporter@example.com" not in caplog.text

@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
-import { submitFeedback } from '../api'
+import { getFeedbackCaptcha, submitFeedback } from '../api'
 import { GITHUB_REPO } from '../config'
 import { reportError } from '../utils'
 
@@ -10,21 +10,28 @@ const ISSUE_TYPES = [
   { label: 'Other', value: 'question' },
 ] as const
 
-function randomCaptchaOperands(): [number, number] {
-  const a = Math.floor(Math.random() * 12) + 1
-  const b = Math.floor(Math.random() * 12) + 1
-  return [a, b]
-}
-
 export default function Feedback() {
   const [type, setType] = useState<string>(ISSUE_TYPES[0].value)
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [email, setEmail] = useState('')
   const [website, setWebsite] = useState('') // honeypot: leave empty; bots often fill it
-  const [[captchaA, captchaB], setCaptchaOperands] = useState(() => randomCaptchaOperands())
+  const [captcha, setCaptcha] = useState<{ question: string; token: string } | null>(null)
   const [captchaAnswer, setCaptchaAnswer] = useState('')
   const [submitting, setSubmitting] = useState(false)
+
+  const loadCaptcha = useCallback(async () => {
+    try {
+      setCaptcha(await getFeedbackCaptcha())
+    } catch (e) {
+      setCaptcha(null)
+      toast.error(reportError(e))
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadCaptcha()
+  }, [loadCaptcha])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -35,8 +42,8 @@ export default function Feedback() {
       return
     }
     const answer = parseInt(captchaAnswer.trim(), 10)
-    if (Number.isNaN(answer) || answer !== captchaA + captchaB) {
-      toast.error('Please solve the math question correctly')
+    if (!captcha || Number.isNaN(answer)) {
+      toast.error('Please answer the verification question')
       return
     }
     setSubmitting(true)
@@ -47,8 +54,7 @@ export default function Feedback() {
         description: d,
         email: (email || '').trim() || undefined,
         website: (website || '').trim() || undefined,
-        captcha_a: captchaA,
-        captcha_b: captchaB,
+        captcha_token: captcha.token,
         captcha_answer: answer,
       })
       toast.success(
@@ -67,10 +73,12 @@ export default function Feedback() {
       setDescription('')
       setEmail('')
       setWebsite('')
-      setCaptchaOperands(randomCaptchaOperands())
       setCaptchaAnswer('')
+      void loadCaptcha()
     } catch (e) {
       toast.error(reportError(e))
+      setCaptchaAnswer('')
+      void loadCaptcha()
     } finally {
       setSubmitting(false)
     }
@@ -141,7 +149,7 @@ export default function Feedback() {
         </div>
         <div className="form-group">
           <label htmlFor="feedback-captcha">
-            What is {captchaA} + {captchaB}?
+            {captcha ? captcha.question : 'Loading question...'}
           </label>
           <input
             id="feedback-captcha"

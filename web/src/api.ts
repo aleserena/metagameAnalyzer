@@ -79,14 +79,19 @@ async function fetchApi<T>(path: string, options?: RequestInit & { timeoutMs?: n
   return res.json()
 }
 
+export async function getFeedbackCaptcha(): Promise<{ question: string; token: string }> {
+  const res = await fetchWithTimeout(`${API_BASE}/feedback/captcha`)
+  if (!res.ok) throw new Error('Could not load the verification question')
+  return res.json()
+}
+
 export async function submitFeedback(body: {
   type: string
   title: string
   description: string
   email?: string | null
   website?: string | null
-  captcha_a: number
-  captcha_b: number
+  captcha_token: string
   captcha_answer: number
 }): Promise<{ url: string; number?: number }> {
   const res = await fetchWithTimeout(`${API_BASE}/feedback`, {
