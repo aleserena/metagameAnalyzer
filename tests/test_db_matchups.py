@@ -402,3 +402,24 @@ def test_match_record_counts_intentional_draw_winners(db_session_rollback):
         "match_draws": 1,
         "match_win_pct": 50.0,
     }
+
+
+def test_update_matchup_mirrors_result_and_round(db_session_rollback):
+    from api.db import MatchupRow, update_matchup
+
+    session = db_session_rollback
+    eid = f"{_TEST_EVENT_PREFIX}patch"
+    a, b = _TEST_DECK_ID_BASE + 911, _TEST_DECK_ID_BASE + 912
+    create_event(session, "Patch", "01/01/25", "ST", event_id=eid, player_count=2)
+    upsert_deck(session, _make_deck(a, eid, "Patch A"))
+    upsert_deck(session, _make_deck(b, eid, "Patch B"))
+    session.flush()
+    upsert_matchups_for_deck(
+        session, a, [{"opponent_player": "Patch B", "opponent_deck_id": b, "result": "win", "round": 1}]
+    )
+    session.flush()
+    mine = session.query(MatchupRow).filter(MatchupRow.deck_id == a).one()
+    assert update_matchup(session, mine.id, result="loss", round=2) is True
+    session.flush()
+    theirs = session.query(MatchupRow).filter(MatchupRow.deck_id == b).one()
+    assert (theirs.result, theirs.round) == ("win", 2)

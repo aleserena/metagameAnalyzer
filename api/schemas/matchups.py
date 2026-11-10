@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 MATCHUP_RESULT_VALUES = frozenset({
     "win", "loss", "draw",
@@ -37,8 +37,20 @@ class AdminMatchupsBody(BaseModel):
     matchups: list[MatchupItem] = Field(default_factory=list)
 
 
+PATCH_MATCHUP_RESULT_VALUES = frozenset({
+    "win", "loss", "draw",
+    "intentional_draw", "intentional_draw_win", "intentional_draw_loss",
+})
+
+
 class PatchMatchupBody(BaseModel):
     result: str | None = None
     result_note: str | None = None
     round: int | None = None
 
+    @field_validator("result")
+    @classmethod
+    def result_must_be_known(cls, v):
+        if v is not None and v not in PATCH_MATCHUP_RESULT_VALUES:
+            raise ValueError(f"result must be one of: {sorted(PATCH_MATCHUP_RESULT_VALUES)}")
+        return v

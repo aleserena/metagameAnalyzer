@@ -72,3 +72,16 @@ def test_filter_decks_for_query_dates_when_no_event_ids():
     ]
     filtered = _filter_decks_for_query(decks, None, None, "01/02/26", "28/02/26")
     assert [d["deck_id"] for d in filtered] == [2]
+
+
+def test_discrepancies_are_found_per_round():
+    from api.route_helpers import find_matchup_discrepancies
+
+    rows = [
+        {"deck_id": 1, "opponent_deck_id": 2, "result": "win", "round": 1},
+        {"deck_id": 2, "opponent_deck_id": 1, "result": "loss", "round": 1},
+        {"deck_id": 1, "opponent_deck_id": 2, "result": "win", "round": 5},
+        {"deck_id": 2, "opponent_deck_id": 1, "result": "win", "round": 5},
+    ]
+    found = find_matchup_discrepancies(rows)
+    assert [(a["round"], a["deck_id"], b["deck_id"]) for a, b in found] == [(5, 1, 2)]

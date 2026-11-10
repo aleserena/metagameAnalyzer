@@ -59,8 +59,8 @@ except ImportError:
 from fastapi import APIRouter
 
 from api.route_helpers import (
-    _matchup_result_consistent,
     _upload_link_base_url,
+    find_matchup_discrepancies,
 )
 
 logger = logging.getLogger(__name__)
@@ -127,24 +127,9 @@ def get_event_ids_with_discrepancies():
         if not eid:
             continue
         by_event.setdefault(eid, []).append(r)
-    event_ids_with_discrepancies: list[str] = []
-    for eid, event_rows in by_event.items():
-        by_pair: dict[tuple[int, int], list[dict]] = {}
-        for r in event_rows:
-            key = tuple(sorted([r["deck_id"], r["opponent_deck_id"]]))
-            by_pair.setdefault(key, []).append(r)
-        for (deck_a, deck_b), matchups in by_pair.items():
-            if len(matchups) != 2:
-                continue
-            from_a = next((m for m in matchups if m["deck_id"] == deck_a), None)
-            from_b = next((m for m in matchups if m["deck_id"] == deck_b), None)
-            if from_a is None or from_b is None:
-                continue
-            r1 = from_a.get("result") or ""
-            r2 = from_b.get("result") or ""
-            if not _matchup_result_consistent(r1, r2):
-                event_ids_with_discrepancies.append(eid)
-                break
+    event_ids_with_discrepancies: list[str] = [
+        eid for eid, event_rows in by_event.items() if find_matchup_discrepancies(event_rows)
+    ]
     return {"event_ids": event_ids_with_discrepancies}
 
 
@@ -1172,34 +1157,16 @@ def get_matchup_discrepancies(event_id: str):
         if not ev:
             raise HTTPException(status_code=404, detail="Event not found")
         rows = _db.list_matchups_for_event(session, event_id)
-        by_pair = {}
-        for r in rows:
-            deck_a, deck_b = sorted([r["deck_id"], r["opponent_deck_id"]])
-            rnd = r.get("round")
-            key = (deck_a, deck_b, rnd)
-            if key not in by_pair:
-                by_pair[key] = []
-            by_pair[key].append(r)
         discrepancies = []
-        for (_deck_a, _deck_b, _round), matchups in by_pair.items():
-            if len(matchups) != 2:
-                continue
-            deck_a, deck_b = _deck_a, _deck_b
-            from_a = next((m for m in matchups if m["deck_id"] == deck_a), None)
-            from_b = next((m for m in matchups if m["deck_id"] == deck_b), None)
-            if from_a is None or from_b is None:
-                continue
-            r1 = from_a["result"]
-            r2 = from_b["result"]
-            if not _matchup_result_consistent(r1, r2):
-                discrepancies.append({
-                    "deck_id_a": deck_a,
-                    "deck_id_b": deck_b,
-                    "matchup_a": from_a,
-                    "matchup_b": from_b,
-                    "result_a": r1,
-                    "result_b": r2,
-                })
+        for from_a, from_b in find_matchup_discrepancies(rows):
+            discrepancies.append({
+                "deck_id_a": from_a["deck_id"],
+                "deck_id_b": from_b["deck_id"],
+                "matchup_a": from_a,
+                "matchup_b": from_b,
+                "result_a": from_a["result"],
+                "result_b": from_b["result"],
+            })
         deck_ids = set()
         for d in discrepancies:
             deck_ids.add(d["deck_id_a"])

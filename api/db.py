@@ -1175,12 +1175,29 @@ def update_matchup(
     row = get_matchup(session, matchup_id)
     if not row:
         return False
+    old_round = row.round
+    mirror = None
+    if row.opponent_deck_id is not None:
+        mirror = (
+            session.query(MatchupRow)
+            .filter(
+                MatchupRow.deck_id == row.opponent_deck_id,
+                MatchupRow.opponent_deck_id == row.deck_id,
+                MatchupRow.round.is_(None) if old_round is None else MatchupRow.round == old_round,
+                MatchupRow.id != row.id,
+            )
+            .first()
+        )
     if result is not None:
         row.result = result
+        if mirror is not None:
+            mirror.result = invert_result(result)
     if result_note is not None:
         row.result_note = result_note or None
     if round is not None:
         row.round = round
+        if mirror is not None:
+            mirror.round = round
     return True
 
 

@@ -112,7 +112,12 @@ def get_matchups_summary(
 
     def add_to_agg(arch: str, opp: str, wins: int, losses: int, draws: int, is_intentional_draw: bool, matches: int):
         arch, opp = norm_arch(arch), norm_arch(opp)
-        for (a, o), (aw, al, ad) in [((arch, opp), (wins, losses, draws)), ((opp, arch), (losses, wins, draws))]:
+        if arch.lower() == opp.lower():
+            # Mirror match: one entry, counted once; each decisive match is one win and one loss.
+            directions = [((arch, opp), (wins + losses, wins + losses, draws))]
+        else:
+            directions = [((arch, opp), (wins, losses, draws)), ((opp, arch), (losses, wins, draws))]
+        for (a, o), (aw, al, ad) in directions:
             key = (a.lower(), o.lower())
             if key not in agg:
                 agg[key] = {"wins": 0, "losses": 0, "draws": 0, "intentional_draws": 0, "matches": 0, "archetype": a, "opponent_archetype": o}
@@ -191,6 +196,8 @@ def get_matchups_summary(
         if not _pair_included_in_summary(v["matches"]):
             continue
         wr = (v["wins"] + 0.5 * v["draws"]) / v["matches"] if v["matches"] else 0
+        if _arch_lower == _opp_lower:
+            wr = 0.5
         list_out.append({
             "archetype": v["archetype"],
             "opponent_archetype": v["opponent_archetype"],

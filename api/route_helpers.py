@@ -57,6 +57,32 @@ def _matchup_result_consistent(result_a: str, result_b: str) -> bool:
     return False
 
 
+def find_matchup_discrepancies(rows: list[dict]) -> list[tuple[dict, dict]]:
+    """Find inconsistent match pairs.
+
+    Rows (keys deck_id, opponent_deck_id, result, round) are grouped by (sorted deck pair, round).
+    For every group of exactly two rows whose results disagree, returns
+    (row_from_lower_deck_id, row_from_higher_deck_id).
+    """
+    groups: dict[tuple[int, int, int | None], list[dict]] = {}
+    for r in rows:
+        if r.get("opponent_deck_id") is None:
+            continue
+        lo, hi = sorted([r["deck_id"], r["opponent_deck_id"]])
+        groups.setdefault((lo, hi, r.get("round")), []).append(r)
+    found: list[tuple[dict, dict]] = []
+    for (lo, hi, _rnd), group in groups.items():
+        if len(group) != 2:
+            continue
+        from_lo = next((m for m in group if m["deck_id"] == lo), None)
+        from_hi = next((m for m in group if m["deck_id"] == hi), None)
+        if from_lo is None or from_hi is None:
+            continue
+        if not _matchup_result_consistent(from_lo.get("result") or "", from_hi.get("result") or ""):
+            found.append((from_lo, from_hi))
+    return found
+
+
 def opponent_report_to_prefill(report: dict, normalize_player: Callable[[str], str]) -> dict | None:
     """Invert a matchup an opponent reported against this player into a form prefill row.
 

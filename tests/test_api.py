@@ -1330,3 +1330,34 @@ def test_set_decks_bumps_version():
     v = state.decks_version
     state.set_decks(list(state.decks))
     assert state.decks_version == v + 1
+
+
+def test_matchup_summary_counts_a_mirror_match_once(client_with_overrides):
+    from api.routers import matchups as mr
+
+    base = {
+        "archetype": "Burn",
+        "opponent_archetype": "Burn",
+        "format_id": "EDH",
+        "event_id": "1",
+        "date": "01/01/25",
+        "result_note": "",
+        "round": 1,
+    }
+    rows = [
+        {**base, "deck_id": 1, "opponent_deck_id": 2, "result": "win"},
+        {**base, "deck_id": 2, "opponent_deck_id": 1, "result": "loss"},
+    ]
+    with (
+        patch.object(mr._db, "session_scope"),
+        patch.object(mr._db, "list_matchups_with_deck_info", return_value=rows),
+    ):
+        r = client_with_overrides.get("/api/v1/matchups/summary")
+    (entry,) = r.json()["list"]
+    got = (entry["matches"], entry["wins"], entry["losses"], entry["draws"], entry["win_rate"])
+    assert got == (1, 1, 1, 0, 0.5)
+
+
+def test_patch_matchup_rejects_unknown_result(client_with_overrides):
+    r = client_with_overrides.patch("/api/v1/matchups/1", json={"result": "banana"})
+    assert r.status_code == 422
