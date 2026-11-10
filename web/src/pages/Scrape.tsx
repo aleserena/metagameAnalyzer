@@ -178,7 +178,7 @@ export default function Scrape() {
             Force replace existing events
           </label>
           <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-            Re-scrape and refresh MTGTop8 events; manual decks attached to those events are kept.
+            Re-scrape and refresh MTGTop8 events. Existing decks are updated in place; recorded results and manual decks are kept.
           </span>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
