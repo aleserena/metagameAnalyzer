@@ -11,8 +11,8 @@ from tests._dbguard import apply_test_database_env, ensure_test_schema
 _TEST_DATABASE_URL = apply_test_database_env()
 try:
     ensure_test_schema(_TEST_DATABASE_URL)
-except Exception as exc:  # unreachable/misconfigured test DB: leave DB tests to skip
-    print(f"[conftest] test database schema setup failed, DB tests may skip: {exc}")
+except Exception as exc:  # reachable test DB but migration failed: do not run on a bad schema
+    pytest.exit(f"Test database migration failed: {exc!r}", returncode=2)
 
 # Load .env / .env.$DB_ENV up front. api.db does not import api.config, so without this
 # the DB-backed tests only see DATABASE_URL when another module imported api.main first

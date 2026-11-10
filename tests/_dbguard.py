@@ -65,8 +65,12 @@ def apply_test_database_env() -> str:
     return url
 
 
-def ensure_test_schema(url: str) -> bool:
-    """Run alembic migrations on the test database. Returns False (tests skip) if unreachable."""
+def ensure_test_schema(url: str, migrate=None) -> bool:
+    """Run alembic migrations on the test database.
+
+    Returns False (DB tests skip) if the database is unreachable. Migration failures on a
+    reachable database propagate. ``migrate`` is injectable for tests.
+    """
     if not url:
         return False
     import psycopg2
@@ -75,7 +79,8 @@ def ensure_test_schema(url: str) -> bool:
         psycopg2.connect(url, connect_timeout=5).close()
     except psycopg2.OperationalError:
         return False
-    from api.db import run_migrations
+    if migrate is None:
+        from api.db import run_migrations as migrate
 
-    run_migrations()
+    migrate()
     return True
