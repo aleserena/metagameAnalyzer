@@ -26,8 +26,8 @@ from api.services.scrape_job import (
 )
 from api.state import (
     _invalidate_metagame,
-    _load_from_file,
     _persist_decks_to_db,
+    _read_decks_file,
     state,
 )
 
@@ -57,7 +57,7 @@ async def load_decks(
     if has_upload:
         try:
             content = await _read_upload_json_bytes_async(file)
-            state.decks = _normalize_split_cards(json.loads(content.decode("utf-8")))
+            decks = _normalize_split_cards(json.loads(content.decode("utf-8")))
         except json.JSONDecodeError as e:
             logger.warning("Load decks: invalid JSON from upload: %s", e)
             raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
@@ -83,15 +83,14 @@ async def load_decks(
             if not path.exists():
                 raise HTTPException(status_code=404, detail=f"File not found: {path}")
             try:
-                _load_from_file(str(path))
+                decks = _read_decks_file(str(path))
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning("Load decks from path %s failed: %s", path, e)
                 raise HTTPException(status_code=400, detail=f"Failed to load file: {e}") from e
         elif body.decks is not None:
-            state.decks = _normalize_split_cards(body.decks)
+            decks = _normalize_split_cards(body.decks)
         else:
             raise HTTPException(status_code=400, detail="Provide 'decks' array, 'path', or file upload")
-    _invalidate_metagame()
     if state.database_available():
         if body and (body.event_id is not None or body.new_event is not None):
             event_id = body.event_id
@@ -117,7 +116,7 @@ async def load_decks(
                 next_id = None
                 with _db.session_scope() as session:
                     next_id = _db.next_manual_deck_id(session)
-                for i, d in enumerate(state.decks):
+                for i, d in enumerate(decks):
                     d = dict(d)
                     d["event_id"] = event_id
                     d["event_name"] = event_name or d.get("event_name", "")
@@ -125,9 +124,13 @@ async def load_decks(
                     d["format_id"] = format_id or d.get("format_id", "")
                     if d.get("deck_id") is None or (isinstance(d.get("deck_id"), int) and d["deck_id"] < _db.MANUAL_DECK_ID_START):
                         d["deck_id"] = next_id + i
-                    state.decks[i] = d
-        _persist_decks_to_db(state.decks, origin=_db.ORIGIN_MANUAL if (body and (body.event_id is not None or body.new_event)) else _db.ORIGIN_MTGTOP8)
-    return {"loaded": len(state.decks), "message": f"Loaded {len(state.decks)} decks"}
+                    decks[i] = d
+        origin = _db.ORIGIN_MANUAL if (body and (body.event_id is not None or body.new_event)) else _db.ORIGIN_MTGTOP8
+        try:
+            _persist_decks_to_db(decks, origin=origin)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail="Failed to save decks") from e
+    return {"loaded": len(decks), "message": f"Loaded {len(decks)} decks"}
 
 
 @router.get("/api/v1/export")

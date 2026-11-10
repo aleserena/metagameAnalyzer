@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import Depends, Query
+from fastapi import Depends, HTTPException, Query
 from src.mtgtop8.card_lookup import clear_cache as clear_scryfall_cache
 from src.mtgtop8.card_lookup import refresh_otag_index
 
@@ -17,8 +17,6 @@ from api.services import mtgjson as mtgjson_service
 from api.services import settings as settings_service
 from api.state import (
     _clear_decks_in_db,
-    _invalidate_metagame,
-    state,
 )
 
 try:
@@ -134,9 +132,10 @@ def get_sync_mtgjson_status(_: str = Depends(require_admin)):
 @router.post("/api/v1/settings/clear-decks", dependencies=[Depends(require_database)])
 def post_clear_decks(_: str = Depends(require_admin)):
     """Clear all decks in the database. Admin-only. Requires PostgreSQL."""
-    state.decks = []
-    _invalidate_metagame()
-    _clear_decks_in_db()
+    try:
+        _clear_decks_in_db()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Failed to clear decks") from e
     return {"message": "Decks cleared"}
 
 

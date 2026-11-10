@@ -33,9 +33,17 @@ class AppState:
 
     def __init__(self) -> None:
         self.decks: list[dict] = []
+        self.decks_version: int = 0  # bumped by set_decks so version-keyed caches can detect changes
         self.metagame_cache: dict | None = None
         self.events_cache: list[dict] | None = None  # cached list for GET /api/events
         self.player_aliases: dict[str, str] = {}  # alias -> canonical
+
+    def set_decks(self, decks: list[dict]) -> None:
+        """Replace the in-memory deck list and drop everything derived from it."""
+        self.decks = decks
+        self.decks_version += 1
+        self.metagame_cache = None
+        self.events_cache = None
 
     def database_available(self) -> bool:
         """Whether the DB is configured and reachable.
@@ -145,10 +153,10 @@ def _invalidate_events_cache() -> None:
     state.events_cache = None
 
 
-def _load_from_file(path: str) -> None:
+def _read_decks_file(path: str) -> list[dict]:
+    """Read and normalize a decks JSON file without touching ``state``."""
     data = load_json(path, default=[], suppress_errors=False)
-    state.decks = _normalize_split_cards(data or [])
-    _invalidate_metagame()
+    return _normalize_split_cards(data or [])
 
 
 def _load_decks_from_db(*, strict: bool = False) -> None:
@@ -161,8 +169,7 @@ def _load_decks_from_db(*, strict: bool = False) -> None:
         return
     try:
         with _db.session_scope() as session:
-            state.decks = _db.get_all_decks(session)
-        _invalidate_metagame()
+            state.set_decks(_db.get_all_decks(session))
     except Exception as e:
         logger.exception("Failed to load decks from DB: %s", e)
         if strict:
@@ -209,9 +216,10 @@ def _persist_decks_to_db(decks: list[dict], origin: str = None) -> None:
                 if "player_id" not in d:
                     _resolve_deck_player(session, d)
                 _db.upsert_deck(session, d, origin=origin)
-        _load_decks_from_db()
-    except Exception as e:
-        logger.exception("Failed to persist decks to DB: %s", e)
+    except Exception:
+        logger.exception("Failed to persist decks to DB")
+        raise
+    _load_decks_from_db()
 
 
 def _clear_decks_in_db() -> None:
@@ -221,10 +229,10 @@ def _clear_decks_in_db() -> None:
     try:
         with _db.session_scope() as session:
             session.query(_db.DeckRow).delete()
-        state.decks = []
-        _invalidate_metagame()
-    except Exception as e:
-        logger.exception("Failed to clear decks in DB: %s", e)
+    except Exception:
+        logger.exception("Failed to clear decks in DB")
+        raise
+    state.set_decks([])
 
 
 # Load player aliases and decks on startup (DB only; no JSON fallback for decks).

@@ -21,9 +21,9 @@ from api.state import state
 def patch_decks(sample_decks):
     """Patch the in-memory deck list before each API test."""
     original = state.decks
-    state.decks = list(sample_decks)
+    state.set_decks(list(sample_decks))
     yield
-    state.decks = original
+    state.set_decks(original)
 
 
 @pytest.fixture
@@ -122,7 +122,7 @@ def test_get_decks_filter_player_ignores_accents(client, sample_decks):
     deck_matias["deck_id"] = 999001
     deck_matias["player"] = "Matías"
     deck_matias["player_id"] = 101
-    state.decks = list(sample_decks) + [deck_matias]
+    state.set_decks(list(sample_decks) + [deck_matias])
     r = client.get("/api/v1/decks?player=matias")
     assert r.status_code == 200
     data = r.json()
@@ -136,7 +136,7 @@ def test_get_player_detail_ignores_accents(client, sample_decks):
     deck_matias["deck_id"] = 999002
     deck_matias["player"] = "Matías"
     deck_matias["player_id"] = 102
-    state.decks = list(sample_decks) + [deck_matias]
+    state.set_decks(list(sample_decks) + [deck_matias])
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/players/matias")
     assert r.status_code == 200
@@ -314,7 +314,7 @@ def _trends_decks() -> list[dict]:
 
 def test_archetype_card_trends_events_mode(client):
     """recency_mode=events splits on last N distinct event IDs and flags new/legacy cards."""
-    state.decks = _trends_decks()
+    state.set_decks(_trends_decks())
     r = client.get(
         "/api/v1/archetypes/Trend%20Deck/card-trends",
         params={"recency_mode": "events", "recency_value": 1, "min_recent_play_rate": 50, "max_older_play_rate": 10},
@@ -336,7 +336,7 @@ def test_archetype_card_trends_events_mode(client):
 
 def test_archetype_card_trends_days_mode(client):
     """recency_mode=days splits on date window."""
-    state.decks = _trends_decks()
+    state.set_decks(_trends_decks())
     r = client.get(
         "/api/v1/archetypes/Trend%20Deck/card-trends",
         params={"recency_mode": "days", "recency_value": 30, "min_recent_play_rate": 50, "max_older_play_rate": 10},
@@ -351,7 +351,7 @@ def test_archetype_card_trends_days_mode(client):
 
 def test_archetype_card_trends_ratio_mode(client):
     """recency_mode=ratio splits the chronologically-sorted decks by percentage."""
-    state.decks = _trends_decks()
+    state.set_decks(_trends_decks())
     r = client.get(
         "/api/v1/archetypes/Trend%20Deck/card-trends",
         params={"recency_mode": "ratio", "recency_value": 25, "min_recent_play_rate": 50, "max_older_play_rate": 10},
@@ -365,7 +365,7 @@ def test_archetype_card_trends_ratio_mode(client):
 
 def test_archetype_card_trends_custom_mode(client):
     """recency_mode=custom uses recent_from date."""
-    state.decks = _trends_decks()
+    state.set_decks(_trends_decks())
     r = client.get(
         "/api/v1/archetypes/Trend%20Deck/card-trends",
         params={"recency_mode": "custom", "recent_from": "01/03/26", "min_recent_play_rate": 50, "max_older_play_rate": 10},
@@ -378,7 +378,7 @@ def test_archetype_card_trends_custom_mode(client):
 
 def test_archetype_card_trends_custom_requires_dates(client):
     """recency_mode=custom without recent_from or recent_to returns 400."""
-    state.decks = _trends_decks()
+    state.set_decks(_trends_decks())
     r = client.get(
         "/api/v1/archetypes/Trend%20Deck/card-trends",
         params={"recency_mode": "custom"},
@@ -388,7 +388,7 @@ def test_archetype_card_trends_custom_requires_dates(client):
 
 def test_archetype_card_trends_empty_older_warning(client):
     """When recency covers all events, the response includes a warning and empty legacy list."""
-    state.decks = _trends_decks()
+    state.set_decks(_trends_decks())
     r = client.get(
         "/api/v1/archetypes/Trend%20Deck/card-trends",
         params={"recency_mode": "events", "recency_value": 99},
@@ -411,7 +411,7 @@ def test_archetype_card_trends_unknown_404(client):
 
 def test_archetype_detail_includes_top_players_and_typical_list(client):
     """GET /api/v1/archetypes/{name} now includes top_players and typical_list buckets."""
-    state.decks = _trends_decks()
+    state.set_decks(_trends_decks())
     r = client.get("/api/v1/archetypes/Trend%20Deck")
     assert r.status_code == 200
     data = r.json()
@@ -449,7 +449,7 @@ def test_archetype_detail_mana_pips_by_color(client):
             {"qty": 20, "card": "Mountain"},
         ],
     }]
-    state.decks = decks
+    state.set_decks(decks)
 
     def fake_lookup(names):
         meta = {
@@ -471,7 +471,7 @@ def test_archetype_detail_mana_pips_by_color(client):
 
 def test_archetype_weekly_stats_basic(client):
     """weekly-stats returns one row per ISO week with archetype and global counts."""
-    state.decks = _trends_decks()
+    state.set_decks(_trends_decks())
     r = client.get("/api/v1/archetypes/Trend%20Deck/weekly-stats")
     assert r.status_code == 200
     data = r.json()
@@ -567,7 +567,7 @@ def test_get_date_range(client, sample_decks):
 
 def test_get_date_range_empty(client):
     """GET /api/v1/date-range returns nulls when no decks."""
-    state.decks = []
+    state.set_decks([])
     r = client.get("/api/v1/date-range")
     assert r.status_code == 200
     assert r.json() == {"min_date": None, "max_date": None, "last_event_date": None}
@@ -992,7 +992,7 @@ def test_post_load_inline_decks_attaches_event_id(client_with_overrides, sample_
     deck = dict(sample_deck_dict)
     deck["deck_id"] = None
     with patch.object(state, "database_available", return_value=True):
-        with patch("api.routers.data._persist_decks_to_db"):
+        with patch("api.routers.data._persist_decks_to_db") as persist:
             with patch("api.routers.data._db") as mock_db:
                 mock_db.session_scope = session_scope
                 mock_db.get_event = MagicMock(return_value=ev)
@@ -1005,9 +1005,10 @@ def test_post_load_inline_decks_attaches_event_id(client_with_overrides, sample_
                     json={"decks": [deck], "event_id": "m42"},
                 )
     assert r.status_code == 200
-    assert state.decks[0]["event_id"] == "m42"
-    assert state.decks[0]["event_name"] == "Linked Event"
-    assert state.decks[0]["deck_id"] == 2_000_500
+    saved = persist.call_args.args[0]
+    assert saved[0]["event_id"] == "m42"
+    assert saved[0]["event_name"] == "Linked Event"
+    assert saved[0]["deck_id"] == 2_000_500
 
 
 def test_post_load_new_event_creates_and_attaches(client_with_overrides, sample_deck_dict):
@@ -1020,7 +1021,7 @@ def test_post_load_new_event_creates_and_attaches(client_with_overrides, sample_
     deck = dict(sample_deck_dict)
     deck["deck_id"] = 99
     with patch.object(state, "database_available", return_value=True):
-        with patch("api.routers.data._persist_decks_to_db"):
+        with patch("api.routers.data._persist_decks_to_db") as persist:
             with patch("api.routers.data._db") as mock_db:
                 mock_db.session_scope = session_scope
                 mock_db.create_event = MagicMock(return_value=row)
@@ -1036,9 +1037,10 @@ def test_post_load_new_event_creates_and_attaches(client_with_overrides, sample_
                     },
                 )
     assert r.status_code == 200
-    assert state.decks[0]["event_id"] == "m1"
-    assert state.decks[0]["event_name"] == "Fresh"
-    assert state.decks[0]["deck_id"] == 2_000_600
+    saved = persist.call_args.args[0]
+    assert saved[0]["event_id"] == "m1"
+    assert saved[0]["event_name"] == "Fresh"
+    assert saved[0]["deck_id"] == 2_000_600
 
 
 # ---------- Player analysis endpoint ---------------------------------------
@@ -1079,7 +1081,7 @@ def _analysis_fixture_decks():
 
 
 def test_player_analysis_by_id_shape(client):
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/players/id/9001/analysis")
     assert r.status_code == 200
@@ -1102,7 +1104,7 @@ def test_player_analysis_by_id_shape(client):
 
 
 def test_player_analysis_leaderboard_history_chronological(client):
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/players/id/9001/analysis")
     assert r.status_code == 200
@@ -1117,7 +1119,7 @@ def test_player_analysis_leaderboard_history_chronological(client):
 
 
 def test_player_analysis_archetype_performance(client):
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/players/id/9001/analysis")
     assert r.status_code == 200
@@ -1130,7 +1132,7 @@ def test_player_analysis_archetype_performance(client):
 
 
 def test_player_analysis_highlights_streak_and_field_win(client):
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/players/id/9001/analysis")
     h = r.json()["highlights"]
@@ -1143,7 +1145,7 @@ def test_player_analysis_highlights_streak_and_field_win(client):
 
 
 def test_player_analysis_format_and_color_count(client):
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/players/id/9001/analysis")
     data = r.json()
@@ -1158,7 +1160,7 @@ def test_player_analysis_format_and_color_count(client):
 
 
 def test_player_analysis_by_name(client):
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/players/Target/analysis")
     assert r.status_code == 200
@@ -1166,14 +1168,14 @@ def test_player_analysis_by_name(client):
 
 
 def test_player_analysis_404(client):
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/players/id/99999/analysis")
     assert r.status_code == 404
 
 
 def test_player_analysis_top_cards_excludes_basics(client):
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/players/id/9001/analysis")
     cards = {c["card"] for c in r.json()["top_cards"]}
@@ -1192,7 +1194,7 @@ def test_player_analysis_accepts_string_event_id(client):
         "mainboard": [{"qty": 4, "card": "Lightning Bolt"}],
         "sideboard": [], "commanders": [], "archetype": "Red Aggro",
     }
-    state.decks = decks + [manual_deck]
+    state.set_decks(decks + [manual_deck])
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/players/id/9001/analysis")
     assert r.status_code == 200
@@ -1202,7 +1204,7 @@ def test_player_analysis_accepts_string_event_id(client):
 
 def test_player_detail_by_id_respects_date_range(client):
     """/players/id/{id} stats and decks list are filtered to the date window."""
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     # Narrow to just Feb 2025 (only one of the three decks -> Event B / 15/02/25)
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/players/id/9001?date_from=01/02/25&date_to=28/02/25")
@@ -1219,7 +1221,7 @@ def test_player_detail_by_id_respects_date_range(client):
 
 
 def test_player_detail_by_name_respects_date_range(client):
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/players/Target?date_from=01/03/25&date_to=31/03/25")
     assert r.status_code == 200
@@ -1230,7 +1232,7 @@ def test_player_detail_by_name_respects_date_range(client):
 
 def test_player_detail_existing_player_empty_window_returns_zeros(client):
     """When a known player has no decks in the window, return zero stats (not 404)."""
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/players/id/9001?date_from=01/01/30&date_to=31/12/30")
     assert r.status_code == 200
@@ -1243,7 +1245,7 @@ def test_player_detail_existing_player_empty_window_returns_zeros(client):
 
 def test_player_analysis_respects_date_range(client):
     """Analysis endpoint filters per_event and leaderboard history to the window."""
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     with patch.object(state, "database_available", return_value=False):
         r = client.get(
             "/api/v1/players/id/9001/analysis?date_from=01/02/25&date_to=31/03/25"
@@ -1259,7 +1261,7 @@ def test_player_analysis_respects_date_range(client):
 
 def test_player_analysis_date_range_empty_window(client):
     """Known player with no decks in window still returns a valid (empty) analysis shape."""
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     with patch.object(state, "database_available", return_value=False):
         r = client.get(
             "/api/v1/players/id/9001/analysis?date_from=01/01/30&date_to=31/12/30"
@@ -1272,10 +1274,59 @@ def test_player_analysis_date_range_empty_window(client):
 
 
 def test_player_analysis_by_name_date_range(client):
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     with patch.object(state, "database_available", return_value=False):
         r = client.get(
             "/api/v1/players/Target/analysis?date_from=01/03/25&date_to=31/03/25"
         )
     assert r.status_code == 200
     assert [e["date"] for e in r.json()["per_event"]] == ["20/03/25"]
+
+
+def test_load_keeps_live_decks_when_saving_fails(client_with_overrides):
+    before = list(state.decks)
+    deck = {
+        "deck_id": 5,
+        "event_id": 1,
+        "format_id": "EDH",
+        "name": "X",
+        "player": "Y",
+        "event_name": "E",
+        "date": "01/01/25",
+        "rank": "",
+        "player_count": 0,
+        "mainboard": [],
+        "sideboard": [],
+        "commanders": [],
+    }
+    with (
+        patch.object(state, "database_available", return_value=True),
+        patch("api.routers.data._persist_decks_to_db", side_effect=RuntimeError("db down")),
+    ):
+        r = client_with_overrides.post("/api/v1/load", json={"decks": [deck]})
+    assert r.status_code == 500
+    assert r.json()["detail"] == "Failed to save decks"
+    assert state.decks == before
+
+
+def test_load_reports_number_of_decks_in_the_payload(client_with_overrides):
+    with (
+        patch.object(state, "database_available", return_value=True),
+        patch("api.routers.data._persist_decks_to_db"),
+    ):
+        r = client_with_overrides.post("/api/v1/load", json={"decks": []})
+    assert r.json()["loaded"] == 0
+
+
+def test_clear_decks_keeps_live_decks_when_delete_fails(client_with_overrides):
+    before = list(state.decks)
+    with patch("api.routers.settings._clear_decks_in_db", side_effect=RuntimeError("db down")):
+        r = client_with_overrides.post("/api/v1/settings/clear-decks")
+    assert r.status_code == 500
+    assert state.decks == before
+
+
+def test_set_decks_bumps_version():
+    v = state.decks_version
+    state.set_decks(list(state.decks))
+    assert state.decks_version == v + 1
