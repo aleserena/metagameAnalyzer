@@ -44,6 +44,15 @@ def _get_app_and_deps():
     return _app_ref, _dep_refs
 
 
+@pytest.fixture(autouse=True)
+def _reset_login_limiter():
+    """Keep failed-login throttling from leaking between tests."""
+    yield
+    from api.routers import auth
+
+    auth.LOGIN_LIMITER.reset()
+
+
 @pytest.fixture
 def client_with_overrides():
     """TestClient with require_admin, require_database, and event-edit deps overridden (no-op pass)."""

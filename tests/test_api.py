@@ -1456,3 +1456,16 @@ def test_admin_can_still_move_a_deck(client_with_overrides):
         r = client_with_overrides.put("/api/v1/decks/811597", json={"event_id": "99999"})
     assert r.status_code == 400
     assert r.json()["detail"] == "Event not found"
+
+
+def test_login_is_throttled_after_five_failures(client):
+    from api.routers import auth
+
+    auth.LOGIN_LIMITER.reset()
+    with patch("api.routers.auth.ADMIN_PASSWORD", "secret"), patch("api.dependencies.ADMIN_PASSWORD", "secret"):
+        for _ in range(5):
+            assert client.post("/api/v1/auth/login", json={"password": "wrong"}).status_code == 401
+        r = client.post("/api/v1/auth/login", json={"password": "secret"})
+    auth.LOGIN_LIMITER.reset()
+    assert r.status_code == 429
+    assert int(r.headers["Retry-After"]) > 0

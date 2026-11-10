@@ -51,6 +51,7 @@ except RuntimeError as exc:
     raise
 
 from api.routers import router as api_router
+from api.services.rate_limit import client_ip
 from api.state import (
     log_split_player_identities,
     state,
@@ -152,8 +153,7 @@ async def log_requests(request: Request, call_next):
                 "path": request.url.path,
                 "status_code": status_code,
                 "duration_ms": duration_ms,
-                "client_ip": request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-                or (request.client.host if request.client else None),
+                "client_ip": client_ip(request),
             },
         )
         # On an exception keep the id set: unhandled_exception_handler runs outside this
