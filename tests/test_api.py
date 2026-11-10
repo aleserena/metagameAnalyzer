@@ -1531,3 +1531,13 @@ def test_feedback_alert_failure_still_creates_issue_and_never_logs_address(clien
     r = client.post("/api/v1/feedback", json=_feedback_body(client, email="reporter@example.com"))
     assert r.status_code == 200
     assert "reporter@example.com" not in caplog.text
+
+
+def test_cards_lookup_size_limits(client):
+    with patch("api.routers.cards.lookup_cards", return_value={}):
+        ok = client.post("/api/v1/cards/lookup", json={"names": ["x"] * 1000})
+        assert ok.status_code == 200
+        too_many = client.post("/api/v1/cards/lookup", json={"names": ["x"] * 1001})
+        assert too_many.status_code == 422
+        too_long = client.post("/api/v1/cards/lookup", json={"names": ["y" * 201]})
+        assert too_long.status_code == 422

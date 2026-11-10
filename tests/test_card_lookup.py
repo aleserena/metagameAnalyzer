@@ -147,3 +147,44 @@ def test_lookup_cards_resolves_flavor_name_when_collection_not_found(mock_sleep,
     assert result["Helm's Deep"]["name"] == "Shinko, the Bloodsoaked Keep"
     mock_get.assert_called()
     mock_post.assert_called()
+
+
+def test_not_found_names_are_remembered_for_seven_days(monkeypatch):
+    from src.mtgtop8 import card_lookup as cl
+
+    calls = {"post": 0, "flavor": 0}
+
+    class Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"data": [], "not_found": [{"name": "Nonexistent Card"}]}
+
+    def fake_post(*a, **k):
+        calls["post"] += 1
+        return Resp()
+
+    def fake_flavor(name):
+        calls["flavor"] += 1
+        return None
+
+    now = [1_000_000.0]
+    monkeypatch.setattr(cl, "_card_cache", {})
+    monkeypatch.setattr(cl, "_load_cache", lambda: None)
+    monkeypatch.setattr(cl, "_save_cache", lambda: None)
+    monkeypatch.setattr(cl.requests, "post", fake_post)
+    monkeypatch.setattr(cl, "_search_by_flavor_name", fake_flavor)
+    monkeypatch.setattr(cl.time, "sleep", lambda s: None)
+    monkeypatch.setattr(cl.time, "time", lambda: now[0])
+
+    expected = {"Nonexistent Card": {"error": "not_found"}}
+    assert cl._scryfall_lookup_cards(["Nonexistent Card"]) == expected
+    assert cl._scryfall_lookup_cards(["Nonexistent Card"]) == expected
+    assert calls == {"post": 1, "flavor": 1}
+
+    now[0] += cl.NOT_FOUND_TTL_SECONDS + 1
+    cl._scryfall_lookup_cards(["Nonexistent Card"])
+    assert calls == {"post": 2, "flavor": 2}

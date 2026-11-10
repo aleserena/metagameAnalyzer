@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field
+from typing import Annotated
+
+from pydantic import BaseModel, Field, StringConstraints
 
 
 class LoginBody(BaseModel):
@@ -16,5 +18,5 @@ class SiteFeedbackBody(BaseModel):
 
 
 class CardLookupBody(BaseModel):
-    names: list[str] = Field(default_factory=list)
+    names: list[Annotated[str, StringConstraints(max_length=200)]] = Field(default_factory=list, max_length=1000)
 
