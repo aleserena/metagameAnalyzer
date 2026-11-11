@@ -6,7 +6,7 @@ Route -> handler-function map for the FastAPI app. **Grep for the handler name**
 
 Auth column: `admin` = admin token required, `event-edit` = admin **or** a valid event-edit token, `DB` = database required. Blank = public.
 
-Total endpoints: **95**.
+Total endpoints: **97**.
 
 ## Health / Info / Auth / Feedback
 
@@ -15,6 +15,7 @@ Total endpoints: **95**.
 | POST | `/api/v1/auth/login` | `auth_login` (in `api/routers/auth.py`) |  |
 | GET | `/api/v1/auth/me` | `auth_me` (in `api/routers/auth.py`) |  |
 | POST | `/api/v1/feedback` | `post_feedback` (in `api/routers/feedback.py`) |  |
+| GET | `/api/v1/feedback/captcha` | `get_feedback_captcha` (in `api/routers/feedback.py`) |  |
 | GET | `/api/v1/health` | `health` (in `api/routers/health.py`) |  |
 | GET | `/api/v1/info` | `get_info` |  |
 
@@ -145,10 +146,11 @@ Total endpoints: **95**.
 
 | Method | Path | Handler | Auth |
 |---|---|---|---|
-| POST | `/api/v1/analyze` | `run_analyze` (in `api/routers/data.py`) |  |
+| POST | `/api/v1/analyze` | `run_analyze` (in `api/routers/data.py`) | admin |
 | GET | `/api/v1/export` | `export_decks` (in `api/routers/data.py`) | admin |
 | POST | `/api/v1/load` | `load_decks` (in `api/routers/data.py`) | admin, DB |
 | POST | `/api/v1/scrape` | `run_scrape` (in `api/routers/data.py`) | admin |
+| GET | `/api/v1/scrape/status` | `get_scrape_status` (in `api/routers/data.py`) | admin |
 | POST | `/api/v1/scrape/stop` | `stop_scrape` (in `api/routers/data.py`) | admin |
 
 ## Other

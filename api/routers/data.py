@@ -1,12 +1,8 @@
 import json
 import logging
-import re
-import threading
-import time
 
-from fastapi import Depends, File, HTTPException, Request, UploadFile
-from fastapi.responses import Response, StreamingResponse
-from src.mtgtop8.scraper import parse_event_display, scrape
+from fastapi import Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import JSONResponse, Response
 
 from api.dependencies import (
     require_admin,
@@ -21,12 +17,17 @@ from api.schemas.events import (
     LoadBody,
     ScrapeBody,
 )
+from api.services.scrape_job import (
+    ScrapeAlreadyRunning,
+    current_job,
+    request_stop,
+    snapshot,
+    start_job,
+)
 from api.state import (
     _invalidate_metagame,
-    _load_decks_from_db,
-    _load_from_file,
     _persist_decks_to_db,
-    _resolve_deck_player,
+    _read_decks_file,
     state,
 )
 
@@ -56,7 +57,7 @@ async def load_decks(
     if has_upload:
         try:
             content = await _read_upload_json_bytes_async(file)
-            state.decks = _normalize_split_cards(json.loads(content.decode("utf-8")))
+            decks = _normalize_split_cards(json.loads(content.decode("utf-8")))
         except json.JSONDecodeError as e:
             logger.warning("Load decks: invalid JSON from upload: %s", e)
             raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
@@ -82,15 +83,14 @@ async def load_decks(
             if not path.exists():
                 raise HTTPException(status_code=404, detail=f"File not found: {path}")
             try:
-                _load_from_file(str(path))
+                decks = _read_decks_file(str(path))
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning("Load decks from path %s failed: %s", path, e)
                 raise HTTPException(status_code=400, detail=f"Failed to load file: {e}") from e
         elif body.decks is not None:
-            state.decks = _normalize_split_cards(body.decks)
+            decks = _normalize_split_cards(body.decks)
         else:
             raise HTTPException(status_code=400, detail="Provide 'decks' array, 'path', or file upload")
-    _invalidate_metagame()
     if state.database_available():
         if body and (body.event_id is not None or body.new_event is not None):
             event_id = body.event_id
@@ -113,20 +113,21 @@ async def load_decks(
                         raise HTTPException(status_code=404, detail="Event not found")
                     event_id, event_name, date, format_id = ev.event_id, ev.name, ev.date, ev.format_id
             if event_id is not None and event_name is not None:
-                next_id = None
-                with _db.session_scope() as session:
-                    next_id = _db.next_manual_deck_id(session)
-                for i, d in enumerate(state.decks):
+                for i, d in enumerate(decks):
                     d = dict(d)
                     d["event_id"] = event_id
                     d["event_name"] = event_name or d.get("event_name", "")
                     d["date"] = date or d.get("date", "")
                     d["format_id"] = format_id or d.get("format_id", "")
-                    if d.get("deck_id") is None or (isinstance(d.get("deck_id"), int) and d["deck_id"] < _db.MANUAL_DECK_ID_START):
-                        d["deck_id"] = next_id + i
-                    state.decks[i] = d
-        _persist_decks_to_db(state.decks, origin=_db.ORIGIN_MANUAL if (body and (body.event_id is not None or body.new_event)) else _db.ORIGIN_MTGTOP8)
-    return {"loaded": len(state.decks), "message": f"Loaded {len(state.decks)} decks"}
+                    decks[i] = d
+        for_event = bool(body and (body.event_id is not None or body.new_event))
+        origin = _db.ORIGIN_MANUAL if for_event else _db.ORIGIN_MTGTOP8
+        try:
+            # Manual deck IDs are allocated inside the persisting transaction.
+            _persist_decks_to_db(decks, origin=origin, assign_manual_ids=for_event)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail="Failed to save decks") from e
+    return {"loaded": len(decks), "message": f"Loaded {len(decks)} decks"}
 
 
 @router.get("/api/v1/export")
@@ -143,17 +144,15 @@ def export_decks(_: str = Depends(require_admin)):
 
 
 @router.post("/api/v1/analyze")
-def run_analyze():
+def run_analyze(_: str = Depends(require_admin)):
     """Re-run analysis (no-op, metagame is computed on demand)."""
     _invalidate_metagame()
     return {"message": "Analysis will be recomputed on next /api/metagame request"}
 
 
 @router.post("/api/v1/scrape")
-async def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
-    """Trigger scrape with SSE progress streaming."""
-    import queue
-
+def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
+    """Start a scrape as a server-side job (poll GET /api/v1/scrape/status)."""
     format_id = body.format_id
     period = body.period
     store = body.store
@@ -183,201 +182,35 @@ async def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
                 if eid is not None and str(eid).isdigit()
             }
 
-    state.scrape_cancel_event = threading.Event()
-    start_time = time.time()
     logger.info(
-        "Scrape started: format=%s period=%s store=%s event_ids=%s ignore_existing=%s force_replace=%s db_available=%s skip_count=%s",
+        "Scrape requested: format=%s period=%s store=%s event_ids=%s ignore_existing=%s force_replace=%s db_available=%s skip_count=%s",
         format_id, period, store, scrape_event_ids, body.ignore_existing_events, body.force_replace,
         state.database_available(), len(skip_event_ids) if skip_event_ids else 0,
     )
+    params = {
+        "format_id": format_id,
+        "period": period,
+        "store": store,
+        "event_ids": scrape_event_ids,
+        "skip_event_ids": None if body.force_replace or scrape_event_ids else skip_event_ids,
+        "force_replace": body.force_replace,
+    }
+    try:
+        job = start_job(params)
+    except ScrapeAlreadyRunning:
+        raise HTTPException(status_code=409, detail="A scrape is already running")
+    return JSONResponse(status_code=202, content={"job": snapshot(job)})
 
-    q: queue.Queue[str | None] = queue.Queue()
-    result_holder: list = []
-    error_holder: list = []
 
-    def on_progress(msg: str) -> None:
-        q.put(msg)
-
-    def run_scraper() -> None:
-        try:
-            decks = scrape(
-                format_id=format_id,
-                period=period,
-                store=store,
-                event_ids=scrape_event_ids,
-                on_progress=on_progress,
-                skip_event_ids=None if body.force_replace or scrape_event_ids else skip_event_ids,
-                should_stop=lambda: state.scrape_cancel_event.is_set() if state.scrape_cancel_event else False,
-            )
-            result_holder.append(decks)
-        except Exception as e:
-            logger.exception(
-                "Scrape failed: format=%s period=%s event_ids=%s error=%s",
-                format_id, period, scrape_event_ids, e,
-            )
-            error_holder.append(str(e))
-        finally:
-            q.put(None)
-
-    thread = threading.Thread(target=run_scraper, daemon=True)
-    thread.start()
-
-    def event_stream():
-        total_events = 0
-        current_event = 0
-        total_decks_in_event = 0
-        current_deck_in_event = 0
-        while True:
-            try:
-                msg = q.get(timeout=300)
-            except queue.Empty:
-                yield f"data: {json.dumps({'type': 'error', 'message': 'Timeout'})}\n\n"
-                return
-            if msg is None:
-                break
-
-            pct = 0
-            events_match = re.search(r"Found (\d+) events", msg)
-            if events_match:
-                total_events = int(events_match.group(1))
-
-            event_match = re.match(r"\[(\d+)/(\d+)\]", msg)
-            if event_match:
-                current_event = int(event_match.group(1))
-                total_events = int(event_match.group(2))
-
-            deck_found = re.search(r"Found (\d+) decks", msg)
-            if deck_found:
-                total_decks_in_event = int(deck_found.group(1))
-                current_deck_in_event = 0
-
-            deck_parse = re.search(r"Parsing deck (\d+)/(\d+)", msg)
-            if deck_parse:
-                current_deck_in_event = int(deck_parse.group(1))
-                total_decks_in_event = int(deck_parse.group(2))
-
-            if total_events > 0:
-                event_pct = ((current_event - 1) / total_events) * 100 if current_event > 0 else 0
-                if total_decks_in_event > 0 and current_event > 0:
-                    deck_pct = (current_deck_in_event / total_decks_in_event) * (100 / total_events)
-                    pct = event_pct + deck_pct
-                else:
-                    pct = event_pct
-                pct = min(pct, 99)
-
-            yield f"data: {json.dumps({'type': 'progress', 'message': msg, 'pct': round(pct, 1)})}\n\n"
-
-        if error_holder:
-            duration = time.time() - start_time
-            logger.warning("Scrape failed after %.1fs: %s", duration, error_holder[0])
-            yield f"data: {json.dumps({'type': 'error', 'message': error_holder[0]})}\n\n"
-        elif result_holder:
-            decks = result_holder[0]
-            deck_dicts = [d.to_dict() for d in decks]
-            events_in_run = {str(d.get("event_id")) for d in deck_dicts if d.get("event_id") is not None}
-            if state.database_available():
-                try:
-                    with _db.session_scope() as session:
-                        if body.force_replace:
-                            # Hybrid forced replace: update event metadata, delete MTGTop8 decks per event, then upsert fresh decks
-                            for eid in events_in_run:
-                                sample = next((d for d in deck_dicts if str(d.get("event_id")) == eid), None)
-                                if not sample:
-                                    continue
-                                ev_name_raw = sample.get("event_name", "")
-                                ev_name, ev_store, ev_location = parse_event_display(ev_name_raw)
-                                existing = _db.get_event(session, eid)
-                                if existing is None:
-                                    _db.create_event(
-                                        session,
-                                        event_name=ev_name or ev_name_raw or "Unnamed",
-                                        date=sample.get("date", ""),
-                                        format_id=sample.get("format_id", ""),
-                                        origin=_db.ORIGIN_MTGTOP8,
-                                        event_id=eid,
-                                        player_count=int(sample.get("player_count", 0)),
-                                        store=ev_store,
-                                        location=ev_location,
-                                    )
-                                else:
-                                    _db.update_event(
-                                        session,
-                                        eid,
-                                        event_name=ev_name or ev_name_raw or existing.name,
-                                        date=sample.get("date", existing.date),
-                                        format_id=sample.get("format_id", existing.format_id),
-                                        # Keep the larger count: it may have been completed from another source (e.g. Hadouken)
-                                        player_count=max(int(sample.get("player_count", 0) or 0), existing.player_count or 0),
-                                        store=ev_store or existing.store,
-                                        location=ev_location or existing.location,
-                                    )
-                                session.query(_db.DeckRow).filter(
-                                    _db.DeckRow.event_id == eid,
-                                    _db.DeckRow.origin == _db.ORIGIN_MTGTOP8,
-                                ).delete(synchronize_session=False)
-                            for d in deck_dicts:
-                                _resolve_deck_player(session, d)
-                                _db.upsert_deck(session, d, origin=_db.ORIGIN_MTGTOP8)
-                        else:
-                            # Default: create events only if missing, upsert decks by deck_id
-                            seen_event_ids = set()
-                            for d in deck_dicts:
-                                ev_id = d.get("event_id")
-                                if ev_id is not None and ev_id not in seen_event_ids:
-                                    seen_event_ids.add(ev_id)
-                                    if _db.get_event(session, ev_id) is None:
-                                        ev_name_raw = d.get("event_name", "")
-                                        ev_name, ev_store, ev_location = parse_event_display(ev_name_raw)
-                                        _db.create_event(
-                                            session,
-                                            event_name=ev_name or ev_name_raw or "Unnamed",
-                                            date=d.get("date", ""),
-                                            format_id=d.get("format_id", ""),
-                                            origin=_db.ORIGIN_MTGTOP8,
-                                            event_id=ev_id,
-                                            player_count=int(d.get("player_count", 0)),
-                                            store=ev_store,
-                                            location=ev_location,
-                                        )
-                            for d in deck_dicts:
-                                _resolve_deck_player(session, d)
-                                _db.upsert_deck(session, d, origin=_db.ORIGIN_MTGTOP8)
-                    _load_decks_from_db()
-                    duration = time.time() - start_time
-                    logger.info(
-                        "Scrape completed: decks=%s events=%s duration_sec=%.1f force_replace=%s",
-                        len(decks), len(events_in_run), duration, body.force_replace,
-                    )
-                except Exception as e:
-                    logger.exception("Failed to persist scraped decks to DB: %s", e)
-                    state.decks = deck_dicts
-                    _invalidate_metagame()
-            else:
-                state.decks = deck_dicts
-                _invalidate_metagame()
-                duration = time.time() - start_time
-                logger.info(
-                    "Scrape completed: decks=%s events=%s duration_sec=%.1f (no DB)",
-                    len(decks), len(events_in_run), duration,
-                )
-            loaded = len(state.decks)
-            num_events = len(events_in_run)
-            cancelled = state.scrape_cancel_event is not None and state.scrape_cancel_event.is_set()
-            message = f"Scraped {len(decks)} decks from {num_events} event{'s' if num_events != 1 else ''}"
-            if cancelled:
-                message = f"Stopped. {message}"
-            yield f"data: {json.dumps({'type': 'cancelled' if cancelled else 'done', 'message': message, 'loaded': loaded, 'pct': 100})}\n\n"
-        else:
-            duration = time.time() - start_time
-            logger.warning("Scrape ended with unknown error after %.1fs", duration)
-            yield f"data: {json.dumps({'type': 'error', 'message': 'Unknown error'})}\n\n"
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+@router.get("/api/v1/scrape/status")
+def get_scrape_status(after: int = Query(0, ge=0), _: str = Depends(require_admin)):
+    """Status of the current (or most recent) scrape job; ``job`` is null when the server has none."""
+    job = current_job()
+    return {"job": snapshot(job, after) if job else None}
 
 
 @router.post("/api/v1/scrape/stop")
 def stop_scrape(_: str = Depends(require_admin)):
     """Request the current scrape to stop. Takes effect after the next progress check."""
-    if state.scrape_cancel_event is not None:
-        state.scrape_cancel_event.set()
+    request_stop()
     return {"message": "Stop requested"}

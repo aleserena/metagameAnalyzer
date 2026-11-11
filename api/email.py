@@ -10,6 +10,8 @@ from email.mime.text import MIMEText
 
 logger = logging.getLogger(__name__)
 
+EMAIL_TIMEOUT_SECONDS = 10
+
 
 def is_email_configured() -> bool:
     """True if either Brevo SMTP or Brevo API is fully configured."""
@@ -81,7 +83,7 @@ def _send_via_smtp(
     msg.attach(MIMEText(body_plain, "plain", "utf-8"))
     if body_html:
         msg.attach(MIMEText(body_html, "html", "utf-8"))
-    with smtplib.SMTP(host, port) as server:
+    with smtplib.SMTP(host, port, timeout=EMAIL_TIMEOUT_SECONDS) as server:
         server.starttls()
         server.login(user, password)
         server.sendmail(from_addr, [to], msg.as_string())
@@ -120,7 +122,7 @@ def _send_via_brevo_api(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req):
+        with urllib.request.urlopen(req, timeout=EMAIL_TIMEOUT_SECONDS):
             # 2xx success
             pass
     except urllib.error.HTTPError as e:

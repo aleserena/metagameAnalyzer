@@ -1,6 +1,5 @@
 import json
 import logging
-from datetime import datetime, timezone
 
 from fastapi import Depends, HTTPException
 from fastapi.responses import Response
@@ -32,6 +31,7 @@ from fastapi import APIRouter
 
 from api.route_helpers import (
     _is_intentional_draw_result,
+    opponent_report_to_prefill,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,6 +47,7 @@ def _get_validated_upload_link(
     require_deck: bool = False,
     missing_deck_detail: str = "Feedback link has no deck",
     mark_used: bool = False,
+    lock: bool = False,
 ):
     """Load and validate a one-time upload link and its event.
 
@@ -56,8 +57,11 @@ def _get_validated_upload_link(
     - Optionally require an attached deck_id
     - Not already used and not expired
     - Associated event still exists
+
+    With ``lock=True`` the link row is read ``FOR UPDATE``: concurrent submissions of the same link
+    serialise on it, so the second one sees ``used_at`` set and is rejected.
     """
-    row = _db.get_upload_link(session, token)
+    row = _db.get_upload_link(session, token, for_update=lock)
     if not row:
         raise HTTPException(status_code=404, detail="Link not found or invalid")
 
@@ -81,7 +85,7 @@ def _get_validated_upload_link(
     if row.used_at is not None:
         raise HTTPException(status_code=404, detail="Link already used")
 
-    if row.expires_at is not None and row.expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
+    if row.expires_at is not None and row.expires_at < _db.utcnow_naive():
         raise HTTPException(status_code=404, detail="Link expired")
 
     ev = _db.get_event(session, row.event_id)
@@ -155,26 +159,9 @@ def get_upload_link_info(token: str):
                     )
                     inverted = []
                     for r in reported_against_me:
-                        res = (r.get("result") or "").strip().lower()
-                        if res == "win":
-                            inv_result = "loss"
-                        elif res == "loss":
-                            inv_result = "win"
-                        elif res == "intentional_draw_win":
-                            inv_result = "intentional_draw_loss"
-                        elif res == "intentional_draw_loss":
-                            inv_result = "intentional_draw_win"
-                        else:
-                            inv_result = "draw" if res == "intentional_draw" else "draw"
-                        # Use normalized name so it matches opponent dropdown (event_players / deck list)
-                        reporting_player = _normalize_player((r.get("reporting_player") or "").strip())
-                        if reporting_player and reporting_player != "(unknown)":
-                            inverted.append({
-                                "opponent_player": reporting_player,
-                                "result": inv_result,
-                                "intentional_draw": _is_intentional_draw_result(res),
-                                "round": r.get("round"),
-                            })
+                        prefill = opponent_report_to_prefill(r, _normalize_player)
+                        if prefill:
+                            inverted.append(prefill)
                     deck_out["opponent_reported_matchups"] = inverted
                 out["deck"] = deck_out
             else:
@@ -261,6 +248,7 @@ def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
             session,
             token,
             forbid_event_edit=True,
+            lock=True,
         )
         event_name = event_display_name(ev.name, ev.store or "", ev.location or "")
 
@@ -290,18 +278,21 @@ def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
             _resolve_deck_player(session, deck_list[0])
             _db.upsert_deck(session, deck_list[0], origin=current.get("origin", _db.ORIGIN_MANUAL))
             _db.mark_upload_link_used(session, token)
-            _load_decks_from_db()
-            return {"deck_id": deck_id, "message": "Deck updated successfully"}
+            created = False
         else:
             # Create new deck
             deck_id = _submit_create_with_upload_link(session, row, ev, event_name, body)
             _db.mark_upload_link_used(session, token)
-            _load_decks_from_db()
-            return Response(
-                content=json.dumps({"deck_id": deck_id, "message": "Deck submitted successfully"}),
-                status_code=201,
-                media_type="application/json",
-            )
+            created = True
+    # Reload only after the transaction has committed, so the new deck is visible and the link lock is released.
+    _load_decks_from_db()
+    if not created:
+        return {"deck_id": deck_id, "message": "Deck updated successfully"}
+    return Response(
+        content=json.dumps({"deck_id": deck_id, "message": "Deck submitted successfully"}),
+        status_code=201,
+        media_type="application/json",
+    )
 
 
 @router.post("/api/v1/upload/{token}/feedback", dependencies=[Depends(require_database)])
@@ -318,6 +309,7 @@ def submit_feedback_with_upload_link(token: str, body: EventFeedbackBody):
             expected_link_type=_db.LINK_TYPE_FEEDBACK,
             require_deck=True,
             missing_deck_detail="Feedback link has no deck",
+            lock=True,
         )
         deck_id = row.deck_id
         deck_dict = _get_deck_by_id(deck_id)
@@ -368,34 +360,40 @@ def submit_feedback_with_upload_link(token: str, body: EventFeedbackBody):
 @router.post("/api/v1/upload/{token}/decklist", dependencies=[Depends(require_database)])
 def submit_decklist_with_upload_link(token: str, body: DeckListBody):
     """Update deck list (mainboard/sideboard/commanders) via one-time feedback link. Does not mark the link as used."""
-    with _db.session_scope() as session:
-        row, _ = _get_validated_upload_link(
-            session,
-            token,
-            expected_link_type=_db.LINK_TYPE_FEEDBACK,
-            require_deck=True,
-            missing_deck_detail="No deck linked",
-        )
-        deck_id = row.deck_id
-    deck_dict = _get_deck_by_id(deck_id)
-    if not deck_dict:
-        raise HTTPException(status_code=404, detail="Deck not found")
     mainboard = _build_board(body.mainboard)
     if not mainboard:
         raise HTTPException(status_code=400, detail="mainboard must have at least one card")
     sideboard = _build_board(body.sideboard)
     commanders = _normalize_commanders(body.commanders or [])
-    current = dict(deck_dict)
-    current["mainboard"] = mainboard
-    current["sideboard"] = sideboard
-    current["commanders"] = commanders if commanders else None
-    if (current.get("format_id") or "").upper() == "EDH" and not current.get("commanders") and current.get("mainboard"):
-        current["commanders"] = [current["mainboard"][0]["card"]]
     try:
         with _db.session_scope() as session:
+            row, _ = _get_validated_upload_link(
+                session,
+                token,
+                expected_link_type=_db.LINK_TYPE_FEEDBACK,
+                require_deck=True,
+                missing_deck_detail="No deck linked",
+                lock=True,
+            )
+            deck_id = row.deck_id
+            deck_dict = _get_deck_by_id(deck_id)
+            if not deck_dict:
+                raise HTTPException(status_code=404, detail="Deck not found")
+            current = dict(deck_dict)
+            current["mainboard"] = mainboard
+            current["sideboard"] = sideboard
+            current["commanders"] = commanders if commanders else None
+            if (
+                (current.get("format_id") or "").upper() == "EDH"
+                and not current.get("commanders")
+                and current.get("mainboard")
+            ):
+                current["commanders"] = [current["mainboard"][0]["card"]]
             _db.upsert_deck(session, current, origin=current.get("origin", _db.ORIGIN_MTGTOP8))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Deck list update failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to update deck list")
     _load_decks_from_db()
     return {"deck_id": deck_id, "message": "Deck list updated"}

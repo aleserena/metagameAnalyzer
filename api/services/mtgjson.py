@@ -88,8 +88,11 @@ def atomic_card_to_row(name: str, faces: list[dict]) -> dict:
         for f in faces
     ] or [{"name": name, "side": None}]
 
+    front_face_name = name.split(" // ", 1)[0] if " // " in name else None
+
     return {
         "name": name,
+        "front_face_name": front_face_name,
         "mana_cost": mana_cost,
         "cmc": float(cmc),
         "type_line": type_line,
@@ -265,8 +268,15 @@ def sync_prices() -> dict:
 # The last *successful* completion time is persisted separately (see LAST_SYNC_KEYS)
 # so the UI can show it after a restart. Only one sync runs at a time (same table).
 
-_JOB_NAMES = ("metadata", "prices")
-_JOB_FNS: dict[str, Callable[[], dict]] = {"metadata": sync_metadata, "prices": sync_prices}
+def refresh_otag() -> dict:
+    """Rebuild the Scryfall oracle-tag index (1-5 minutes of search requests)."""
+    from src.mtgtop8.card_lookup import refresh_otag_index  # lazy: keep module import light
+
+    return {"refreshed": refresh_otag_index()}
+
+
+_JOB_NAMES = ("metadata", "prices", "otag")
+_JOB_FNS: dict[str, Callable[[], dict]] = {"metadata": sync_metadata, "prices": sync_prices, "otag": refresh_otag}
 
 _JOB_LOCK = threading.Lock()
 _RUNNING: dict[str, str | None] = {"name": None}
@@ -283,7 +293,11 @@ def _now_iso() -> str:
 # The in-memory registry above is process-local, so a restart loses "when did we last
 # sync?" — which is exactly what the Settings page needs to show. Successful runs are
 # therefore also recorded in the ``settings`` table (key/value, no migration needed).
-LAST_SYNC_KEYS = {"metadata": "mtgjson_last_sync_metadata", "prices": "mtgjson_last_sync_prices"}
+LAST_SYNC_KEYS = {
+    "metadata": "mtgjson_last_sync_metadata",
+    "prices": "mtgjson_last_sync_prices",
+    "otag": "otag_last_refresh",
+}
 
 
 def _record_last_sync(name: str, finished_at: str, result: dict) -> None:
@@ -351,6 +365,9 @@ def _run_job(name: str, fn: Callable[[], dict]) -> None:
         with _JOB_LOCK:
             _JOBS[name].update(status="success", finished_at=finished_at, result=result, error=None)
         _record_last_sync(name, finished_at, result)
+        from api.state import state  # lazy: avoid a circular import at module load
+
+        state.touch()  # card colors/prices feed cached metagame responses
     except Exception as exc:  # noqa: BLE001 - surfaced to the UI via status
         logger.exception("MTGJSON sync job %r failed", name)
         with _JOB_LOCK:
@@ -360,14 +377,15 @@ def _run_job(name: str, fn: Callable[[], dict]) -> None:
             _RUNNING["name"] = None
 
 
-def start_sync_job(name: str) -> dict:
+def start_sync_job(name: str, fn: Callable[[], dict] | None = None) -> dict:
     """Start a sync job in a background thread.
+
+    ``fn`` overrides the registered function for this run only.
 
     Returns ``{started, running, message}``. Refuses (``started=False``) if any
     sync is already running, so the UI can show a friendly message.
     """
-    fn = _JOB_FNS.get(name)
-    if fn is None:
+    if name not in _JOB_FNS:
         raise ValueError(f"Unknown sync job: {name!r}")
     with _JOB_LOCK:
         if _RUNNING["name"] is not None:
@@ -375,6 +393,6 @@ def start_sync_job(name: str) -> dict:
             return {"started": False, "running": running, "message": f"A sync ({running}) is already running."}
         _RUNNING["name"] = name
         _JOBS[name].update(status="running", started_at=_now_iso(), finished_at=None, result=None, error=None)
-    thread = threading.Thread(target=_run_job, args=(name, fn), name=f"mtgjson-sync-{name}", daemon=True)
+    thread = threading.Thread(target=_run_job, args=(name, fn or _JOB_FNS[name]), name=f"mtgjson-sync-{name}", daemon=True)
     thread.start()
     return {"started": True, "running": name, "message": f"{name} sync started."}

@@ -1,6 +1,8 @@
 """API integration tests using FastAPI TestClient."""
 
 import json
+import logging
+import re
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -21,9 +23,9 @@ from api.state import state
 def patch_decks(sample_decks):
     """Patch the in-memory deck list before each API test."""
     original = state.decks
-    state.decks = list(sample_decks)
+    state.set_decks(list(sample_decks))
     yield
-    state.decks = original
+    state.set_decks(original)
 
 
 @pytest.fixture
@@ -122,7 +124,7 @@ def test_get_decks_filter_player_ignores_accents(client, sample_decks):
     deck_matias["deck_id"] = 999001
     deck_matias["player"] = "Matías"
     deck_matias["player_id"] = 101
-    state.decks = list(sample_decks) + [deck_matias]
+    state.set_decks(list(sample_decks) + [deck_matias])
     r = client.get("/api/v1/decks?player=matias")
     assert r.status_code == 200
     data = r.json()
@@ -136,7 +138,7 @@ def test_get_player_detail_ignores_accents(client, sample_decks):
     deck_matias["deck_id"] = 999002
     deck_matias["player"] = "Matías"
     deck_matias["player_id"] = 102
-    state.decks = list(sample_decks) + [deck_matias]
+    state.set_decks(list(sample_decks) + [deck_matias])
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/players/matias")
     assert r.status_code == 200
@@ -314,7 +316,7 @@ def _trends_decks() -> list[dict]:
 
 def test_archetype_card_trends_events_mode(client):
     """recency_mode=events splits on last N distinct event IDs and flags new/legacy cards."""
-    state.decks = _trends_decks()
+    state.set_decks(_trends_decks())
     r = client.get(
         "/api/v1/archetypes/Trend%20Deck/card-trends",
         params={"recency_mode": "events", "recency_value": 1, "min_recent_play_rate": 50, "max_older_play_rate": 10},
@@ -336,7 +338,7 @@ def test_archetype_card_trends_events_mode(client):
 
 def test_archetype_card_trends_days_mode(client):
     """recency_mode=days splits on date window."""
-    state.decks = _trends_decks()
+    state.set_decks(_trends_decks())
     r = client.get(
         "/api/v1/archetypes/Trend%20Deck/card-trends",
         params={"recency_mode": "days", "recency_value": 30, "min_recent_play_rate": 50, "max_older_play_rate": 10},
@@ -351,7 +353,7 @@ def test_archetype_card_trends_days_mode(client):
 
 def test_archetype_card_trends_ratio_mode(client):
     """recency_mode=ratio splits the chronologically-sorted decks by percentage."""
-    state.decks = _trends_decks()
+    state.set_decks(_trends_decks())
     r = client.get(
         "/api/v1/archetypes/Trend%20Deck/card-trends",
         params={"recency_mode": "ratio", "recency_value": 25, "min_recent_play_rate": 50, "max_older_play_rate": 10},
@@ -365,7 +367,7 @@ def test_archetype_card_trends_ratio_mode(client):
 
 def test_archetype_card_trends_custom_mode(client):
     """recency_mode=custom uses recent_from date."""
-    state.decks = _trends_decks()
+    state.set_decks(_trends_decks())
     r = client.get(
         "/api/v1/archetypes/Trend%20Deck/card-trends",
         params={"recency_mode": "custom", "recent_from": "01/03/26", "min_recent_play_rate": 50, "max_older_play_rate": 10},
@@ -378,7 +380,7 @@ def test_archetype_card_trends_custom_mode(client):
 
 def test_archetype_card_trends_custom_requires_dates(client):
     """recency_mode=custom without recent_from or recent_to returns 400."""
-    state.decks = _trends_decks()
+    state.set_decks(_trends_decks())
     r = client.get(
         "/api/v1/archetypes/Trend%20Deck/card-trends",
         params={"recency_mode": "custom"},
@@ -388,7 +390,7 @@ def test_archetype_card_trends_custom_requires_dates(client):
 
 def test_archetype_card_trends_empty_older_warning(client):
     """When recency covers all events, the response includes a warning and empty legacy list."""
-    state.decks = _trends_decks()
+    state.set_decks(_trends_decks())
     r = client.get(
         "/api/v1/archetypes/Trend%20Deck/card-trends",
         params={"recency_mode": "events", "recency_value": 99},
@@ -411,7 +413,7 @@ def test_archetype_card_trends_unknown_404(client):
 
 def test_archetype_detail_includes_top_players_and_typical_list(client):
     """GET /api/v1/archetypes/{name} now includes top_players and typical_list buckets."""
-    state.decks = _trends_decks()
+    state.set_decks(_trends_decks())
     r = client.get("/api/v1/archetypes/Trend%20Deck")
     assert r.status_code == 200
     data = r.json()
@@ -449,7 +451,7 @@ def test_archetype_detail_mana_pips_by_color(client):
             {"qty": 20, "card": "Mountain"},
         ],
     }]
-    state.decks = decks
+    state.set_decks(decks)
 
     def fake_lookup(names):
         meta = {
@@ -471,7 +473,7 @@ def test_archetype_detail_mana_pips_by_color(client):
 
 def test_archetype_weekly_stats_basic(client):
     """weekly-stats returns one row per ISO week with archetype and global counts."""
-    state.decks = _trends_decks()
+    state.set_decks(_trends_decks())
     r = client.get("/api/v1/archetypes/Trend%20Deck/weekly-stats")
     assert r.status_code == 200
     data = r.json()
@@ -567,7 +569,7 @@ def test_get_date_range(client, sample_decks):
 
 def test_get_date_range_empty(client):
     """GET /api/v1/date-range returns nulls when no decks."""
-    state.decks = []
+    state.set_decks([])
     r = client.get("/api/v1/date-range")
     assert r.status_code == 200
     assert r.json() == {"min_date": None, "max_date": None, "last_event_date": None}
@@ -675,10 +677,11 @@ def test_auth_me_401_no_header(client):
 def test_auth_me_200(client):
     """GET /api/v1/auth/me returns user when valid token provided."""
     with patch.dict("os.environ", {"ADMIN_PASSWORD": "secret"}, clear=False):
-        with patch("api.routers.auth.ADMIN_PASSWORD", "secret"):
+        with patch("api.routers.auth.ADMIN_PASSWORD", "secret"), patch("api.dependencies.ADMIN_PASSWORD", "secret"):
             login_r = client.post("/api/v1/auth/login", json={"password": "secret"})
         token = login_r.json()["token"]
-        r = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+        with patch("api.dependencies.ADMIN_PASSWORD", "secret"):
+            r = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
     assert r.json() == {"user": "admin"}
 
@@ -732,7 +735,7 @@ def test_get_settings_sync_mtgjson_status(client_with_overrides):
     assert r.status_code == 200
     data = r.json()
     assert "running" in data
-    assert set(data["jobs"].keys()) == {"metadata", "prices"}
+    assert set(data["jobs"].keys()) == {"metadata", "prices", "otag"}
 
 
 def test_post_settings_sync_mtgjson_starts_background_job(client_with_overrides):
@@ -892,17 +895,17 @@ def test_get_matchups_summary(client_with_overrides):
         mock_db.session_scope = mock_session_scope
         mock_db.list_matchups_with_deck_info.return_value = []
         r = client_with_overrides.get("/api/v1/matchups/summary")
+        r2 = client_with_overrides.get("/api/v1/matchups/summary?min_matches=3")
+        r3 = client_with_overrides.get(
+            "/api/v1/matchups/summary?min_matches=3&include_opponents_below_min=true"
+        )
     assert r.status_code == 200
     data = r.json()
     assert "list" in data and "matrix" in data and "min_matches" in data
     assert data["min_matches"] == 0
     assert data.get("include_opponents_below_min") is False
-    r2 = client_with_overrides.get("/api/v1/matchups/summary?min_matches=3")
     assert r2.status_code == 200
     assert r2.json()["min_matches"] == 3
-    r3 = client_with_overrides.get(
-        "/api/v1/matchups/summary?min_matches=3&include_opponents_below_min=true"
-    )
     assert r3.status_code == 200
     assert r3.json()["include_opponents_below_min"] is True
 
@@ -992,11 +995,10 @@ def test_post_load_inline_decks_attaches_event_id(client_with_overrides, sample_
     deck = dict(sample_deck_dict)
     deck["deck_id"] = None
     with patch.object(state, "database_available", return_value=True):
-        with patch("api.routers.data._persist_decks_to_db"):
+        with patch("api.routers.data._persist_decks_to_db") as persist:
             with patch("api.routers.data._db") as mock_db:
                 mock_db.session_scope = session_scope
                 mock_db.get_event = MagicMock(return_value=ev)
-                mock_db.next_manual_deck_id.return_value = 2_000_500
                 mock_db.ORIGIN_MANUAL = "manual"
                 mock_db.ORIGIN_MTGTOP8 = "mtgtop8"
                 mock_db.MANUAL_DECK_ID_START = 2_000_000
@@ -1005,9 +1007,10 @@ def test_post_load_inline_decks_attaches_event_id(client_with_overrides, sample_
                     json={"decks": [deck], "event_id": "m42"},
                 )
     assert r.status_code == 200
-    assert state.decks[0]["event_id"] == "m42"
-    assert state.decks[0]["event_name"] == "Linked Event"
-    assert state.decks[0]["deck_id"] == 2_000_500
+    saved = persist.call_args.args[0]
+    assert saved[0]["event_id"] == "m42"
+    assert saved[0]["event_name"] == "Linked Event"
+    assert persist.call_args.kwargs["assign_manual_ids"] is True
 
 
 def test_post_load_new_event_creates_and_attaches(client_with_overrides, sample_deck_dict):
@@ -1020,11 +1023,10 @@ def test_post_load_new_event_creates_and_attaches(client_with_overrides, sample_
     deck = dict(sample_deck_dict)
     deck["deck_id"] = 99
     with patch.object(state, "database_available", return_value=True):
-        with patch("api.routers.data._persist_decks_to_db"):
+        with patch("api.routers.data._persist_decks_to_db") as persist:
             with patch("api.routers.data._db") as mock_db:
                 mock_db.session_scope = session_scope
                 mock_db.create_event = MagicMock(return_value=row)
-                mock_db.next_manual_deck_id.return_value = 2_000_600
                 mock_db.ORIGIN_MANUAL = "manual"
                 mock_db.ORIGIN_MTGTOP8 = "mtgtop8"
                 mock_db.MANUAL_DECK_ID_START = 2_000_000
@@ -1036,9 +1038,10 @@ def test_post_load_new_event_creates_and_attaches(client_with_overrides, sample_
                     },
                 )
     assert r.status_code == 200
-    assert state.decks[0]["event_id"] == "m1"
-    assert state.decks[0]["event_name"] == "Fresh"
-    assert state.decks[0]["deck_id"] == 2_000_600
+    saved = persist.call_args.args[0]
+    assert saved[0]["event_id"] == "m1"
+    assert saved[0]["event_name"] == "Fresh"
+    assert persist.call_args.kwargs["assign_manual_ids"] is True
 
 
 # ---------- Player analysis endpoint ---------------------------------------
@@ -1079,7 +1082,7 @@ def _analysis_fixture_decks():
 
 
 def test_player_analysis_by_id_shape(client):
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/players/id/9001/analysis")
     assert r.status_code == 200
@@ -1102,7 +1105,7 @@ def test_player_analysis_by_id_shape(client):
 
 
 def test_player_analysis_leaderboard_history_chronological(client):
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/players/id/9001/analysis")
     assert r.status_code == 200
@@ -1117,7 +1120,7 @@ def test_player_analysis_leaderboard_history_chronological(client):
 
 
 def test_player_analysis_archetype_performance(client):
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/players/id/9001/analysis")
     assert r.status_code == 200
@@ -1130,7 +1133,7 @@ def test_player_analysis_archetype_performance(client):
 
 
 def test_player_analysis_highlights_streak_and_field_win(client):
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/players/id/9001/analysis")
     h = r.json()["highlights"]
@@ -1143,7 +1146,7 @@ def test_player_analysis_highlights_streak_and_field_win(client):
 
 
 def test_player_analysis_format_and_color_count(client):
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/players/id/9001/analysis")
     data = r.json()
@@ -1158,7 +1161,7 @@ def test_player_analysis_format_and_color_count(client):
 
 
 def test_player_analysis_by_name(client):
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/players/Target/analysis")
     assert r.status_code == 200
@@ -1166,14 +1169,14 @@ def test_player_analysis_by_name(client):
 
 
 def test_player_analysis_404(client):
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/players/id/99999/analysis")
     assert r.status_code == 404
 
 
 def test_player_analysis_top_cards_excludes_basics(client):
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/players/id/9001/analysis")
     cards = {c["card"] for c in r.json()["top_cards"]}
@@ -1192,7 +1195,7 @@ def test_player_analysis_accepts_string_event_id(client):
         "mainboard": [{"qty": 4, "card": "Lightning Bolt"}],
         "sideboard": [], "commanders": [], "archetype": "Red Aggro",
     }
-    state.decks = decks + [manual_deck]
+    state.set_decks(decks + [manual_deck])
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/players/id/9001/analysis")
     assert r.status_code == 200
@@ -1202,7 +1205,7 @@ def test_player_analysis_accepts_string_event_id(client):
 
 def test_player_detail_by_id_respects_date_range(client):
     """/players/id/{id} stats and decks list are filtered to the date window."""
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     # Narrow to just Feb 2025 (only one of the three decks -> Event B / 15/02/25)
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/players/id/9001?date_from=01/02/25&date_to=28/02/25")
@@ -1219,7 +1222,7 @@ def test_player_detail_by_id_respects_date_range(client):
 
 
 def test_player_detail_by_name_respects_date_range(client):
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/players/Target?date_from=01/03/25&date_to=31/03/25")
     assert r.status_code == 200
@@ -1230,7 +1233,7 @@ def test_player_detail_by_name_respects_date_range(client):
 
 def test_player_detail_existing_player_empty_window_returns_zeros(client):
     """When a known player has no decks in the window, return zero stats (not 404)."""
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     with patch.object(state, "database_available", return_value=False):
         r = client.get("/api/v1/players/id/9001?date_from=01/01/30&date_to=31/12/30")
     assert r.status_code == 200
@@ -1243,7 +1246,7 @@ def test_player_detail_existing_player_empty_window_returns_zeros(client):
 
 def test_player_analysis_respects_date_range(client):
     """Analysis endpoint filters per_event and leaderboard history to the window."""
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     with patch.object(state, "database_available", return_value=False):
         r = client.get(
             "/api/v1/players/id/9001/analysis?date_from=01/02/25&date_to=31/03/25"
@@ -1259,7 +1262,7 @@ def test_player_analysis_respects_date_range(client):
 
 def test_player_analysis_date_range_empty_window(client):
     """Known player with no decks in window still returns a valid (empty) analysis shape."""
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     with patch.object(state, "database_available", return_value=False):
         r = client.get(
             "/api/v1/players/id/9001/analysis?date_from=01/01/30&date_to=31/12/30"
@@ -1272,10 +1275,638 @@ def test_player_analysis_date_range_empty_window(client):
 
 
 def test_player_analysis_by_name_date_range(client):
-    state.decks = _analysis_fixture_decks()
+    state.set_decks(_analysis_fixture_decks())
     with patch.object(state, "database_available", return_value=False):
         r = client.get(
             "/api/v1/players/Target/analysis?date_from=01/03/25&date_to=31/03/25"
         )
     assert r.status_code == 200
     assert [e["date"] for e in r.json()["per_event"]] == ["20/03/25"]
+
+
+def test_load_keeps_live_decks_when_saving_fails(client_with_overrides):
+    before = list(state.decks)
+    deck = {
+        "deck_id": 5,
+        "event_id": 1,
+        "format_id": "EDH",
+        "name": "X",
+        "player": "Y",
+        "event_name": "E",
+        "date": "01/01/25",
+        "rank": "",
+        "player_count": 0,
+        "mainboard": [],
+        "sideboard": [],
+        "commanders": [],
+    }
+    with (
+        patch.object(state, "database_available", return_value=True),
+        patch("api.routers.data._persist_decks_to_db", side_effect=RuntimeError("db down")),
+    ):
+        r = client_with_overrides.post("/api/v1/load", json={"decks": [deck]})
+    assert r.status_code == 500
+    assert r.json()["detail"] == "Failed to save decks"
+    assert state.decks == before
+
+
+def test_load_reports_number_of_decks_in_the_payload(client_with_overrides):
+    with (
+        patch.object(state, "database_available", return_value=True),
+        patch("api.routers.data._persist_decks_to_db"),
+    ):
+        r = client_with_overrides.post("/api/v1/load", json={"decks": []})
+    assert r.json()["loaded"] == 0
+
+
+def test_clear_decks_keeps_live_decks_when_delete_fails(client_with_overrides):
+    before = list(state.decks)
+    with patch("api.routers.settings._clear_decks_in_db", side_effect=RuntimeError("db down")):
+        r = client_with_overrides.post("/api/v1/settings/clear-decks")
+    assert r.status_code == 500
+    assert state.decks == before
+
+
+def test_set_decks_bumps_version():
+    v = state.decks_version
+    state.set_decks(list(state.decks))
+    assert state.decks_version == v + 1
+
+
+def test_matchup_summary_counts_a_mirror_match_once(client_with_overrides):
+    from api.routers import matchups as mr
+
+    base = {
+        "archetype": "Burn",
+        "opponent_archetype": "Burn",
+        "format_id": "EDH",
+        "event_id": "1",
+        "date": "01/01/25",
+        "result_note": "",
+        "round": 1,
+    }
+    rows = [
+        {**base, "deck_id": 1, "opponent_deck_id": 2, "result": "win"},
+        {**base, "deck_id": 2, "opponent_deck_id": 1, "result": "loss"},
+    ]
+    with (
+        patch.object(mr._db, "session_scope"),
+        patch.object(mr._db, "list_matchups_with_deck_info", return_value=rows),
+    ):
+        r = client_with_overrides.get("/api/v1/matchups/summary")
+    (entry,) = r.json()["list"]
+    got = (entry["matches"], entry["wins"], entry["losses"], entry["draws"], entry["win_rate"])
+    assert got == (1, 1, 1, 0, 0.5)
+
+
+def test_patch_matchup_rejects_unknown_result(client_with_overrides):
+    r = client_with_overrides.patch("/api/v1/matchups/1", json={"result": "banana"})
+    assert r.status_code == 422
+
+
+def test_commander_tech_cards_include_rank_3_4_decks(client):
+    def deck(i, rank, extra):
+        main = [{"qty": 1, "card": "Sol Ring"}]
+        if extra:
+            main.append({"qty": 1, "card": "Tech Card"})
+        return {
+            "deck_id": 700 + i,
+            "event_id": 70,
+            "format_id": "EDH",
+            "name": "D",
+            "player": f"P{i}",
+            "player_id": 700 + i,
+            "event_name": "E",
+            "date": "01/01/25",
+            "rank": rank,
+            "player_count": 16,
+            "sideboard": [],
+            "commanders": ["Tymna the Weaver"],
+            "archetype": "Tymna",
+            "mainboard": main,
+        }
+
+    state.set_decks([deck(i, "3-4", True) for i in range(3)] + [deck(i, "9-16", False) for i in range(3, 9)])
+    with patch("api.routers.metagame.lookup_cards", return_value={}):
+        r = client.get("/api/v1/commanders/Tymna%20the%20Weaver/synergies")
+    assert "Tech Card" in [c["card"] for c in r.json()["tech_cards"]]
+
+
+def test_player_analysis_cache_key_uses_decks_version():
+    from api.routers.players import _player_analysis_cache_signature
+
+    before = _player_analysis_cache_signature()
+    state.set_decks(list(state.decks))
+    assert _player_analysis_cache_signature() != before
+
+
+def test_patch_matchup_round_conflict_returns_409(client_with_overrides):
+    from contextlib import contextmanager
+    from unittest.mock import MagicMock
+
+    from sqlalchemy.exc import IntegrityError
+
+    @contextmanager
+    def scope():
+        yield MagicMock()
+
+    with patch("api.routers.matchups._db.session_scope", scope), patch(
+        "api.routers.matchups._db.update_matchup", side_effect=IntegrityError("s", {}, Exception("dup"))
+    ):
+        r = client_with_overrides.patch("/api/v1/matchups/1", json={"round": 2})
+    assert r.status_code == 409
+    assert r.json()["detail"] == "A result already exists for that round"
+
+
+@pytest.fixture
+def client_as_event_editor():
+    from api.dependencies import (
+        require_admin_or_event_edit,
+        require_admin_or_event_edit_deck,
+        require_database,
+    )
+
+    app.dependency_overrides[require_admin_or_event_edit_deck] = lambda deck_id: "event_edit"
+    app.dependency_overrides[require_admin_or_event_edit] = lambda event_id: "event_edit"
+    app.dependency_overrides[require_database] = lambda: None
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_event_editor_cannot_move_deck_to_another_event(client_as_event_editor):
+    r = client_as_event_editor.put("/api/v1/decks/811597", json={"event_id": "99999"})
+    assert r.status_code == 403
+    assert r.json()["detail"] == "Only an admin can move a deck to another event"
+
+
+def test_event_editor_may_resend_the_current_event_id(client_as_event_editor):
+    from api.routers import decks as dr
+
+    with patch.object(dr._db, "session_scope"), patch.object(dr._db, "get_event", return_value=None):
+        r = client_as_event_editor.put("/api/v1/decks/811597", json={"event_id": "80455"})
+    assert r.status_code == 400
+
+
+def _fake_export(session, event_id, include_emails=False):
+    from api.schemas.events import EventExportData, EventResponse
+
+    return EventExportData(
+        schema_version=1,
+        event=EventResponse(event_id="80455", event_name="E", date="01/01/25", format_id="EDH"),
+        decks=[],
+        player_emails={"Ann": "p@example.com"} if include_emails else {},
+    )
+
+
+def test_event_editor_export_omits_player_emails(client_as_event_editor):
+    from api.routers import events as er
+
+    with (
+        patch.object(er.state, "database_available", return_value=True),
+        patch.object(er._db, "session_scope"),
+        patch.object(er, "build_event_export", side_effect=_fake_export),
+    ):
+        r = client_as_event_editor.get("/api/v1/events/80455/export")
+    assert r.status_code == 200
+    assert r.json()["player_emails"] == {}
+
+
+def test_admin_export_includes_player_emails(client_with_overrides):
+    from api.routers import events as er
+
+    with (
+        patch.object(er.state, "database_available", return_value=True),
+        patch.object(er._db, "session_scope"),
+        patch.object(er, "build_event_export", side_effect=_fake_export),
+    ):
+        r = client_with_overrides.get("/api/v1/events/80455/export")
+    assert r.status_code == 200
+    assert r.json()["player_emails"] == {"Ann": "p@example.com"}
+
+
+def test_site_feedback_email_is_length_limited(client):
+    from api.schemas.auth_feedback import SiteFeedbackBody
+
+    SiteFeedbackBody(email="a" * 254)
+    r = client.post("/api/v1/feedback", json={"title": "T", "email": "a" * 255})
+    assert r.status_code == 422
+
+
+def test_admin_can_still_move_a_deck(client_with_overrides):
+    from api.routers import decks as dr
+
+    with patch.object(dr._db, "session_scope"), patch.object(dr._db, "get_event", return_value=None):
+        r = client_with_overrides.put("/api/v1/decks/811597", json={"event_id": "99999"})
+    assert r.status_code == 400
+    assert r.json()["detail"] == "Event not found"
+
+
+def test_login_is_throttled_after_five_failures(client):
+    from api.routers import auth
+
+    auth.LOGIN_LIMITER.reset()
+    with patch("api.routers.auth.ADMIN_PASSWORD", "secret"), patch("api.dependencies.ADMIN_PASSWORD", "secret"):
+        for _ in range(5):
+            assert client.post("/api/v1/auth/login", json={"password": "wrong"}).status_code == 401
+        r = client.post("/api/v1/auth/login", json={"password": "secret"})
+    auth.LOGIN_LIMITER.reset()
+    assert r.status_code == 429
+    assert int(r.headers["Retry-After"]) > 0
+
+
+def _feedback_body(client, **extra):
+    c = client.get("/api/v1/feedback/captcha").json()
+    a, b = map(int, re.fullmatch(r"What is (\d+) \+ (\d+)\?", c["question"]).groups())
+    return {
+        "type": "bug",
+        "title": "T",
+        "description": "D",
+        "captcha_token": c["token"],
+        "captcha_answer": a + b,
+        **extra,
+    }
+
+
+@pytest.fixture
+def github_ok():
+    from api.routers import feedback as fb
+
+    fb.FEEDBACK_LIMITER.reset()
+    resp = MagicMock()
+    resp.json.return_value = {"html_url": "https://github.com/o/r/issues/7", "number": 7}
+    with (
+        patch.object(fb, "GITHUB_TOKEN", "t"),
+        patch.object(fb, "GITHUB_REPO", "o/r"),
+        patch.object(fb.requests, "post", return_value=resp) as post,
+        patch.object(fb, "send_alert_email") as mail,
+    ):
+        yield post, mail
+    fb.FEEDBACK_LIMITER.reset()
+
+
+def test_feedback_requires_a_server_captcha(client, github_ok):
+    r = client.post(
+        "/api/v1/feedback",
+        json={"type": "bug", "title": "T", "description": "D", "captcha_answer": 5},
+    )
+    assert r.status_code == 400
+
+
+def test_feedback_contact_email_goes_to_alert_inbox_not_the_issue(client, github_ok):
+    post, mail = github_ok
+    r = client.post("/api/v1/feedback", json=_feedback_body(client, email="reporter@example.com"))
+    assert r.status_code == 200 and r.json()["number"] == 7
+    assert "reporter@example.com" not in post.call_args.kwargs["json"]["body"]
+    subject, body = mail.call_args.args
+    assert "reporter@example.com" in body and "https://github.com/o/r/issues/7" in body
+
+
+def test_feedback_is_limited_to_five_per_hour(client, github_ok):
+    for _ in range(5):
+        assert client.post("/api/v1/feedback", json=_feedback_body(client)).status_code == 200
+    assert client.post("/api/v1/feedback", json=_feedback_body(client)).status_code == 429
+
+
+def test_feedback_alert_failure_still_creates_issue_and_never_logs_address(client, github_ok, caplog):
+    caplog.set_level(logging.INFO)
+    _post, mail = github_ok
+    mail.side_effect = RuntimeError("smtp down")
+    r = client.post("/api/v1/feedback", json=_feedback_body(client, email="reporter@example.com"))
+    assert r.status_code == 200
+    assert "Could not forward feedback contact address" in caplog.text
+    assert "reporter@example.com" not in caplog.text
+
+
+def test_cards_lookup_size_limits(client):
+    with patch("api.routers.cards.lookup_cards", return_value={}):
+        ok = client.post("/api/v1/cards/lookup", json={"names": ["x"] * 1000})
+        assert ok.status_code == 200
+        too_many = client.post("/api/v1/cards/lookup", json={"names": ["x"] * 1001})
+        assert too_many.status_code == 422
+        too_long = client.post("/api/v1/cards/lookup", json={"names": ["y" * 201]})
+        assert too_long.status_code == 422
+
+
+def test_analyze_requires_admin(client):
+    assert client.post("/api/v1/analyze").status_code == 401
+
+
+def test_internal_errors_do_not_leak_details(client_with_overrides):
+    from api.routers import decks as dr
+
+    with patch.object(dr._db, "session_scope", side_effect=RuntimeError("postgresql://user:hunter2@host/db")):
+        r = client_with_overrides.delete("/api/v1/decks/811597")
+    assert r.status_code == 500
+    assert r.json()["detail"] == "Failed to delete deck"
+    assert "hunter2" not in r.text
+
+
+def test_metagame_is_computed_once_per_data_version(client):
+    from api.routers import metagame as mg
+
+    with patch.object(mg, "analyze", wraps=mg.analyze) as spy, patch.object(mg, "lookup_cards", return_value={}):
+        a = client.get("/api/v1/metagame").json()
+        b = client.get("/api/v1/metagame").json()
+        assert a == b and spy.call_count == 1
+        client.get("/api/v1/metagame?top8_only=true")
+        assert spy.call_count == 2
+        state.set_decks(list(state.decks))
+        client.get("/api/v1/metagame")
+        assert spy.call_count == 3
+
+
+def test_metagame_cache_follows_settings_changes(client, tmp_path, monkeypatch):
+    import api.services.settings as ss
+    from api.routers import metagame as mg
+
+    monkeypatch.setattr(ss, "_DATA_DIR", tmp_path)
+    monkeypatch.setattr(ss, "_db_available", lambda: False)
+    with patch.object(mg, "analyze", wraps=mg.analyze) as spy, patch.object(mg, "lookup_cards", return_value={}):
+        client.get("/api/v1/metagame")
+        ss.set_rank_weights({"1": 99.0})
+        client.get("/api/v1/metagame")
+        assert spy.call_count == 2
+
+
+def test_metagame_cache_key_includes_effective_settings(client, monkeypatch):
+    """A degraded settings read (defaults, version unchanged) must not poison the cache for the real values."""
+    import api.services.settings as ss
+    from api.routers import metagame as mg
+
+    monkeypatch.setattr(ss, "get_rank_weights", lambda: {"1": 10.0})
+    with patch.object(mg, "analyze", wraps=mg.analyze) as spy, patch.object(mg, "lookup_cards", return_value={}):
+        client.get("/api/v1/metagame")
+        monkeypatch.setattr(ss, "get_rank_weights", lambda: {"1": 99.0})
+        client.get("/api/v1/metagame")
+        monkeypatch.setattr(ss, "get_ignore_lands_cards", lambda: ["Island"])
+        client.get("/api/v1/metagame?ignore_lands=true")
+        monkeypatch.setattr(ss, "get_ignore_lands_cards", lambda: ["Forest"])
+        client.get("/api/v1/metagame?ignore_lands=true")
+        assert spy.call_count == 4
+
+
+def test_list_decks_color_filter_and_no_shared_mutation(client, sample_decks):
+    from api.services import deck_index
+
+    meta = {
+        "Spider-Man 2099": {"color_identity": ["U", "R"]},
+        "Terra, Magical Adept": {"color_identity": ["G"]},
+    }
+    with patch.object(deck_index, "lookup_cards", return_value=meta):
+        r = client.get("/api/v1/decks?colors=U,R")
+    assert [d["deck_id"] for d in r.json()["decks"]] == [811597]
+    assert r.json()["decks"][0]["color_identity"] == ["U", "R"]
+    assert all("color_identity" not in d for d in state.decks)
+
+
+def _break_card_db(monkeypatch):
+    import api.db as db
+
+    def boom():
+        raise RuntimeError("connection reset")
+
+    monkeypatch.setattr(db, "is_database_available", lambda: True)
+    monkeypatch.setattr(db, "session_scope", boom)
+
+
+def test_list_decks_color_filter_skipped_when_lookup_fails(client, sample_decks, monkeypatch):
+    _break_card_db(monkeypatch)
+    r = client.get("/api/v1/decks?colors=U,R")
+    decks = r.json()["decks"]
+    assert len(decks) == len(state.decks)
+    assert all("color_identity" not in d for d in decks)
+
+
+def test_degraded_metagame_response_is_not_cached(client, sample_decks, monkeypatch):
+    import api.db as db
+    from api.routers import metagame as mg
+
+    real_scope = db.session_scope
+    real_avail = db.is_database_available
+    _break_card_db(monkeypatch)
+    first = client.get("/api/v1/metagame")
+    assert first.status_code == 200
+    assert state.metagame_cache == {}
+    monkeypatch.setattr(db, "session_scope", real_scope)
+    monkeypatch.setattr(db, "is_database_available", real_avail)
+    meta = {"Spider-Man 2099": {"color_identity": ["U", "R"]}, "Terra, Magical Adept": {"color_identity": ["G"]}}
+    with patch.object(mg, "lookup_cards", return_value=meta):
+        second = client.get("/api/v1/metagame")
+    assert second.status_code == 200
+    assert len(state.metagame_cache) == 1
+
+
+def test_refresh_otag_index_returns_immediately(client_with_overrides):
+    from api.routers import settings as sr
+
+    started = {"started": True, "running": "otag", "message": "otag sync started."}
+    with patch.object(sr.mtgjson_service, "start_sync_job", return_value=started) as start:
+        r = client_with_overrides.post("/api/v1/settings/refresh-otag-index", json=["ramp"])
+    assert r.status_code == 200 and r.json() == started
+    assert start.call_args.args[0] == "otag"
+
+
+def test_submitting_through_a_link_locks_it(client_with_overrides):
+    from api.routers import upload as ur
+
+    body = {"player": "P", "name": "N", "mainboard": [{"qty": 1, "card": "Sol Ring"}]}
+    with patch.object(ur._db, "session_scope"), patch.object(ur._db, "get_upload_link", return_value=None) as get:
+        r = client_with_overrides.post("/api/v1/upload/some-token", json=body)
+    assert r.status_code == 404
+    assert get.call_args.kwargs == {"for_update": True}
+
+
+def test_submit_reloads_decks_after_the_transaction_commits(client_with_overrides):
+    from api.routers import upload as ur
+
+    events = []
+
+    class _Scope:
+        def __enter__(self):
+            events.append("open")
+            return MagicMock()
+
+        def __exit__(self, *exc):
+            events.append("closed")
+            return False
+
+    link = SimpleNamespace(event_id="m1", deck_id=None, link_type="deck_upload", used_at=None, expires_at=None)
+    ev = SimpleNamespace(name="E", store="", location="", format_id="Modern", date="01/01/25")
+    body = {"player": "P", "name": "N", "mainboard": [{"qty": 1, "card": "Sol Ring"}]}
+    with (
+        patch.object(ur._db, "session_scope", lambda: _Scope()),
+        patch.object(ur._db, "get_upload_link", return_value=link),
+        patch.object(ur._db, "get_event", return_value=ev),
+        patch.object(ur._db, "mark_upload_link_used"),
+        patch.object(ur, "_submit_create_with_upload_link", return_value=2_000_001),
+        patch.object(ur, "_load_decks_from_db", side_effect=lambda: events.append("reload")),
+    ):
+        r = client_with_overrides.post("/api/v1/upload/tok", json=body)
+    assert r.status_code == 201
+    assert events == ["open", "closed", "reload"]
+
+
+# --- Link emails are sent after the transaction commits ---
+
+
+def _fake_db_scope(tracker):
+    @contextmanager
+    def scope():
+        tracker["open"] = True
+        try:
+            yield MagicMock()
+        finally:
+            tracker["open"] = False
+
+    return scope
+
+
+def test_feedback_link_email_is_sent_after_commit(client_with_overrides):
+    from api.routers import events as er
+
+    tracker = {"open": False, "sent_while_open": None}
+    fake_db = MagicMock()
+    fake_db.session_scope = _fake_db_scope(tracker)
+    fake_db.get_player_email.return_value = "p@example.com"
+
+    def send(to, subject, body):
+        tracker["sent_while_open"] = tracker["open"]
+
+    with (
+        patch.object(er, "_db", fake_db),
+        patch("api.email.is_email_configured", return_value=True),
+        patch("api.email.send_email", side_effect=send),
+    ):
+        r = client_with_overrides.post(
+            "/api/v1/events/80455/send-feedback-link-to-player", json={"player": "Jeremy Lb"}
+        )
+    assert r.status_code == 200
+    assert tracker["sent_while_open"] is False
+
+
+def test_single_feedback_link_send_failure_is_500_but_link_is_created(client_with_overrides):
+    from api.routers import events as er
+
+    fake_db = MagicMock()
+    fake_db.session_scope = _fake_db_scope({})
+    fake_db.get_player_email.return_value = "p@example.com"
+    with (
+        patch.object(er, "_db", fake_db),
+        patch("api.email.is_email_configured", return_value=True),
+        patch("api.email.send_email", side_effect=RuntimeError("provider down")),
+    ):
+        r = client_with_overrides.post(
+            "/api/v1/events/80455/send-feedback-link-to-player", json={"player": "Jeremy Lb"}
+        )
+    assert r.status_code == 500
+    assert r.json()["detail"] == "Failed to send email"
+    assert fake_db.create_upload_link.call_count == 1
+
+
+def test_bulk_feedback_links_report_failed_players(client_with_overrides):
+    from api.routers import events as er
+
+    fake_db = MagicMock()
+    fake_db.session_scope = _fake_db_scope({})
+    decks = [
+        SimpleNamespace(deck_id=1, player_id=1, player="Ann"),
+        SimpleNamespace(deck_id=2, player_id=2, player="Bob"),
+    ]
+    fake_db.get_emails_for_player_ids.return_value = {1: "ann@example.com", 2: "bob@example.com"}
+
+    def send(to, subject, body):
+        if to == "bob@example.com":
+            raise RuntimeError("provider down")
+
+    with (
+        patch.object(er, "_db", fake_db),
+        patch.object(er, "_event_decks_for_mail", return_value=decks),
+        patch("api.email.is_email_configured", return_value=True),
+        patch("api.email.send_email", side_effect=send),
+    ):
+        r = client_with_overrides.post("/api/v1/events/80455/send-feedback-links")
+    assert r.json() == {"sent": 1, "failed": ["Bob"]}
+    assert fake_db.create_upload_link.call_count == 2
+
+
+def test_bulk_missing_deck_links_email_sent_after_commit(client_with_overrides):
+    from api.routers import events as er
+
+    tracker = {"open": False, "sent_while_open": []}
+    fake_db = MagicMock()
+    fake_db.session_scope = _fake_db_scope(tracker)
+    decks = [SimpleNamespace(deck_id=1, player_id=1, player="Ann", mainboard=[])]
+    fake_db.get_emails_for_player_ids.return_value = {1: "ann@example.com"}
+
+    def send(to, subject, body):
+        tracker["sent_while_open"].append(tracker["open"])
+
+    with (
+        patch.object(er, "_db", fake_db),
+        patch.object(er, "_event_decks_for_mail", return_value=decks),
+        patch("api.email.is_email_configured", return_value=True),
+        patch("api.email.send_email", side_effect=send),
+    ):
+        r = client_with_overrides.post("/api/v1/events/80455/send-missing-deck-links")
+    assert r.json() == {"sent": 1, "failed": []}
+    assert tracker["sent_while_open"] == [False]
+
+
+def test_player_missing_deck_links_email_sent_after_commit(client_with_overrides):
+    from api.routers import players as pr
+
+    tracker = {"open": False, "sent_while_open": None}
+    deck = SimpleNamespace(deck_id=5, event_id="e1", player="Ann", mainboard=[])
+    session = MagicMock()
+    session.query.return_value.filter.return_value.all.return_value = [deck]
+
+    @contextmanager
+    def scope():
+        tracker["open"] = True
+        try:
+            yield session
+        finally:
+            tracker["open"] = False
+
+    fake_db = MagicMock()
+    fake_db.session_scope = scope
+    fake_db.get_player_email.return_value = "p@example.com"
+    fake_db.get_event.return_value = SimpleNamespace(name="E", store="", location="")
+
+    def send(to, subject, body):
+        tracker["sent_while_open"] = tracker["open"]
+
+    with (
+        patch.object(pr, "_db", fake_db),
+        patch("api.email.is_email_configured", return_value=True),
+        patch("api.email.send_email", side_effect=send),
+    ):
+        r = client_with_overrides.post("/api/v1/players/Ann/send-missing-deck-links")
+    assert r.status_code == 200
+    assert tracker["sent_while_open"] is False
+
+
+def test_archetype_names_are_decoded_only_once(client, sample_decks):
+    decks = [dict(d, archetype="Mono %41 Red") for d in sample_decks]
+    state.set_decks(decks)
+    # Starlette's TestClient decodes the path once more than a real server, so %252541 here
+    # reaches the handler as the literal "%41" that a real request for %2541 would.
+    with patch("api.routers.metagame.lookup_cards", return_value={}):
+        r = client.get("/api/v1/archetypes/Mono%20%252541%20Red")
+    assert r.status_code == 200
+    assert r.json()["archetype"] == "Mono %41 Red"
+
+
+def test_card_category_order():
+    from api.routers.metagame import _card_category
+
+    types = (
+        "Artifact Creature — Golem",
+        "Land Creature — Forest Dryad",
+        "Instant",
+        "Tribal Enchantment",
+        "",
+    )
+    assert [_card_category(t) for t in types] == ["Creature", "Land", "Spell", "Enchantment", "Other"]

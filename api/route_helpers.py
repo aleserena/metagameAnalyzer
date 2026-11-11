@@ -1,8 +1,12 @@
 """Helper functions shared by more than one router (pure; no app state)."""
 
 import os
+from collections.abc import Callable
 
 from fastapi import Request
+
+from api.dates import in_range as _date_in_range  # noqa: F401  (re-exported for routers)
+from api.results import invert_result
 
 
 def _upload_link_base_url(request: Request) -> str:
@@ -54,51 +58,47 @@ def _matchup_result_consistent(result_a: str, result_b: str) -> bool:
     return False
 
 
-def _parse_deck_date(s: str) -> tuple[int, int, int] | None:
-    """Parse DD/MM/YY or DD/MM/YYYY to (year, month, day) for comparison. Returns None if invalid."""
-    if not s or not s.strip():
-        return None
-    parts = s.strip().split("/")
-    if len(parts) != 3:
-        return None
-    try:
-        day, month, year = int(parts[0]), int(parts[1]), int(parts[2])
-        if year < 100:
-            year += 2000 if year < 50 else 1900
-        if 1 <= month <= 12 and 1 <= day <= 31:
-            return (year, month, day)
-    except (ValueError, IndexError):
-        pass
-    return None
+def find_matchup_discrepancies(rows: list[dict]) -> list[tuple[dict, dict]]:
+    """Find inconsistent match pairs.
+
+    Rows (keys deck_id, opponent_deck_id, result, round) are grouped by (sorted deck pair, round).
+    For every group of exactly two rows whose results disagree, returns
+    (row_from_lower_deck_id, row_from_higher_deck_id).
+    """
+    groups: dict[tuple[int, int, int | None], list[dict]] = {}
+    for r in rows:
+        if r.get("opponent_deck_id") is None:
+            continue
+        lo, hi = sorted([r["deck_id"], r["opponent_deck_id"]])
+        groups.setdefault((lo, hi, r.get("round")), []).append(r)
+    found: list[tuple[dict, dict]] = []
+    for (lo, hi, _rnd), group in groups.items():
+        if len(group) != 2:
+            continue
+        from_lo = next((m for m in group if m["deck_id"] == lo), None)
+        from_hi = next((m for m in group if m["deck_id"] == hi), None)
+        if from_lo is None or from_hi is None:
+            continue
+        if not _matchup_result_consistent(from_lo.get("result") or "", from_hi.get("result") or ""):
+            found.append((from_lo, from_hi))
+    return found
 
 
-def _date_in_range(deck_date_str: str, from_date: str | None, to_date: str | None) -> bool:
-    if not from_date and not to_date:
-        return True
-    parsed = _parse_deck_date(deck_date_str)
-    if not parsed:
-        return True
-    y, m, d = parsed
-    if from_date:
-        f = _parse_deck_date(from_date)
-        if not f:
-            try:
-                from datetime import datetime as _dt
-                _d = _dt.fromisoformat(from_date.replace("Z", "+00:00")[:10])
-                f = (_d.year, _d.month, _d.day)
-            except Exception:
-                f = None
-        if f and (y, m, d) < f:
-            return False
-    if to_date:
-        t = _parse_deck_date(to_date)
-        if not t:
-            try:
-                from datetime import datetime as _dt
-                _d = _dt.fromisoformat(to_date.replace("Z", "+00:00")[:10])
-                t = (_d.year, _d.month, _d.day)
-            except Exception:
-                t = None
-        if t and (y, m, d) > t:
-            return False
-    return True
+def opponent_report_to_prefill(report: dict, normalize_player: Callable[[str], str]) -> dict | None:
+    """Invert a matchup an opponent reported against this player into a form prefill row.
+
+    Returns None when the reporting player is missing/unknown.
+    """
+    res = (report.get("result") or "").strip().lower()
+    inv_result = invert_result(res)
+    if inv_result not in ("win", "loss", "intentional_draw_win", "intentional_draw_loss"):
+        inv_result = "draw"
+    reporting_player = normalize_player((report.get("reporting_player") or "").strip())
+    if not reporting_player or reporting_player == "(unknown)":
+        return None
+    return {
+        "opponent_player": reporting_player,
+        "result": inv_result,
+        "intentional_draw": _is_intentional_draw_result(res),
+        "round": report.get("round"),
+    }

@@ -34,10 +34,23 @@ class AppState:
 
     def __init__(self) -> None:
         self.decks: list[dict] = []
-        self.metagame_cache: dict | None = None
+        self.decks_version: int = 0  # bumped by set_decks so version-keyed caches can detect changes
+        self.metagame_cache: dict[tuple, dict] = {}  # finished /metagame responses keyed by version + query
         self.events_cache: list[dict] | None = None  # cached list for GET /api/events
         self.player_aliases: dict[str, str] = {}  # alias -> canonical
-        self.scrape_cancel_event: threading.Event | None = None
+        self._version_lock = threading.Lock()
+
+    def set_decks(self, decks: list[dict]) -> None:
+        """Replace the in-memory deck list and drop everything derived from it."""
+        self.decks = decks
+        self.touch()
+
+    def touch(self) -> None:
+        """Drop everything derived from the decks (e.g. after card data changes) without replacing them."""
+        with self._version_lock:
+            self.decks_version += 1
+        self.metagame_cache = {}
+        self.events_cache = None
 
     def database_available(self) -> bool:
         """Whether the DB is configured and reachable.
@@ -138,8 +151,7 @@ def _get_event_by_id_from_decks(event_id: str) -> dict | None:
 
 
 def _invalidate_metagame() -> None:
-    state.metagame_cache = None
-    state.events_cache = None
+    state.touch()
 
 
 def _invalidate_events_cache() -> None:
@@ -147,22 +159,27 @@ def _invalidate_events_cache() -> None:
     state.events_cache = None
 
 
-def _load_from_file(path: str) -> None:
+def _read_decks_file(path: str) -> list[dict]:
+    """Read and normalize a decks JSON file without touching ``state``."""
     data = load_json(path, default=[], suppress_errors=False)
-    state.decks = _normalize_split_cards(data or [])
-    _invalidate_metagame()
+    return _normalize_split_cards(data or [])
 
 
-def _load_decks_from_db() -> None:
-    """Load all decks from DB into state.decks. No-op if DB not available."""
+def _load_decks_from_db(*, strict: bool = False) -> None:
+    """Load all decks from DB into state.decks. No-op if DB not available.
+
+    state.decks is only replaced after the query succeeds. With ``strict`` a failure is
+    re-raised (so a caller can report it) instead of being logged and swallowed.
+    """
     if not _database_available():
         return
     try:
         with _db.session_scope() as session:
-            state.decks = _db.get_all_decks(session)
-        _invalidate_metagame()
+            state.set_decks(_db.get_all_decks(session))
     except Exception as e:
         logger.exception("Failed to load decks from DB: %s", e)
+        if strict:
+            raise
 
 
 def log_split_player_identities() -> None:
@@ -193,21 +210,41 @@ def log_split_player_identities() -> None:
     )
 
 
-def _persist_decks_to_db(decks: list[dict], origin: str = None) -> None:
-    """Write decks to DB (upsert each). Resolve player name to player_id before each upsert. Then reload state.decks from DB."""
+def _persist_decks_to_db(decks: list[dict], origin: str = None, *, assign_manual_ids: bool = False) -> None:
+    """Write decks to DB (upsert each). Resolve player name to player_id before each upsert. Then reload state.decks from DB.
+
+    With ``assign_manual_ids``, decks whose deck_id is missing or below MANUAL_DECK_ID_START get consecutive
+    manual IDs, allocated in the persisting transaction (advisory lock held until the decks are committed).
+    """
     if not _database_available() or _db is None:
         return
     if origin is None:
         origin = _db.ORIGIN_MTGTOP8
     try:
         with _db.session_scope() as session:
+            if assign_manual_ids:
+                needs_id = [
+                    d
+                    for d in decks
+                    if d.get("deck_id") is None
+                    or (isinstance(d.get("deck_id"), int) and d["deck_id"] < _db.MANUAL_DECK_ID_START)
+                ]
+                if needs_id:
+                    next_id = _db.next_manual_deck_id(session)
+                    explicit = [d["deck_id"] for d in decks if isinstance(d.get("deck_id"), int) and d not in needs_id]
+                    if explicit:
+                        next_id = max(next_id, max(explicit) + 1)
+                    for d in needs_id:
+                        d["deck_id"] = next_id
+                        next_id += 1
             for d in decks:
                 if "player_id" not in d:
                     _resolve_deck_player(session, d)
                 _db.upsert_deck(session, d, origin=origin)
-        _load_decks_from_db()
-    except Exception as e:
-        logger.exception("Failed to persist decks to DB: %s", e)
+    except Exception:
+        logger.exception("Failed to persist decks to DB")
+        raise
+    _load_decks_from_db()
 
 
 def _clear_decks_in_db() -> None:
@@ -217,10 +254,10 @@ def _clear_decks_in_db() -> None:
     try:
         with _db.session_scope() as session:
             session.query(_db.DeckRow).delete()
-        state.decks = []
-        _invalidate_metagame()
-    except Exception as e:
-        logger.exception("Failed to clear decks in DB: %s", e)
+    except Exception:
+        logger.exception("Failed to clear decks in DB")
+        raise
+    state.set_decks([])
 
 
 # Load player aliases and decks on startup (DB only; no JSON fallback for decks).

@@ -21,6 +21,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY api/ ./api/
 COPY src/ ./src/
+COPY alembic/ ./alembic/
+COPY alembic.ini ./
 COPY main.py ./
 
 # Copy built frontend into static dir (FastAPI serves from ./static)

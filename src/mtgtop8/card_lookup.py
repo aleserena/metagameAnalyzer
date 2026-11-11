@@ -12,6 +12,7 @@ equivalent and it is a periodic admin refresh, not on the per-request path.
 """
 
 import json
+import logging
 import os
 import time
 from pathlib import Path
@@ -19,6 +20,8 @@ from pathlib import Path
 import requests
 
 from .storage import load_json, save_json
+
+logger = logging.getLogger(__name__)
 
 SCRYFALL_COLLECTION = "https://api.scryfall.com/cards/collection"
 SCRYFALL_NAMED = "https://api.scryfall.com/cards/named"
@@ -250,8 +253,16 @@ def _fetch_paper_printing(card_name: str) -> dict | None:
     return None
 
 
+class _TransientLookupError(Exception):
+    """A Scryfall request failed in a way that says nothing about whether the card exists."""
+
+
 def _search_by_flavor_name(typed_name: str) -> dict | None:
-    """Search Scryfall for a card whose flavor_name matches typed_name. Returns card object or None."""
+    """Search Scryfall for a card whose flavor_name matches typed_name.
+
+    Returns the card, or None for a definitive miss (including Scryfall's 404 "no matches").
+    Raises _TransientLookupError on timeouts, connection errors, 429/5xx and bad payloads.
+    """
     if not typed_name or not typed_name.strip():
         return None
     time.sleep(REQUEST_DELAY)
@@ -264,6 +275,8 @@ def _search_by_flavor_name(typed_name: str) -> dict | None:
             headers=SCRYFALL_HEADERS,
             timeout=15,
         )
+        if r.status_code == 404:
+            return None
         r.raise_for_status()
         data = r.json()
         cards = data.get("data", []) or []
@@ -272,8 +285,8 @@ def _search_by_flavor_name(typed_name: str) -> dict | None:
             fn = card.get("flavor_name") or ""
             if fn.strip().lower() == normalized.lower():
                 return card
-    except (requests.RequestException, json.JSONDecodeError):
-        pass
+    except (requests.RequestException, json.JSONDecodeError) as exc:
+        raise _TransientLookupError(str(exc)) from exc
     return None
 
 
@@ -365,11 +378,14 @@ def _row_to_entry(row) -> dict:
     }
 
 
-def lookup_cards(card_names: list[str]) -> dict[str, dict]:
+def lookup_cards(card_names: list[str], *, strict: bool = False) -> dict[str, dict]:
     """Look up cards by name. Returns {card_name: {image_uris, mana_cost, cmc, type_line, ...}}.
 
     Reads from the MTGJSON-backed ``cards`` table; names not found there fall back to
     the Scryfall API (unless disabled). Returns the same entry shape from both paths.
+
+    A database error is logged and what was found so far is returned; with ``strict`` it is
+    re-raised instead, so callers that cache derived data can avoid caching a degraded result.
     """
     names = list(dict.fromkeys(card_names))
     result: dict[str, dict] = {}
@@ -390,11 +406,27 @@ def lookup_cards(card_names: list[str]) -> dict[str, dict]:
         else:
             missing = list(names)
     except Exception:
-        missing = list(names)
+        logger.exception("Card lookup from the database failed")
+        if strict:
+            raise
+        return result
 
     if missing and SCRYFALL_FALLBACK_ENABLED:
         result.update(_scryfall_lookup_cards(missing))
     return result
+
+
+NOT_FOUND_TTL_SECONDS = 7 * 24 * 3600
+
+
+def _is_fresh_not_found(entry: dict | None) -> bool:
+    """True for a not-found cache entry younger than the TTL (old entries lack checked_at)."""
+    if not entry or entry.get("error") != "not_found":
+        return False
+    checked_at = entry.get("checked_at")
+    if not isinstance(checked_at, (int, float)):
+        return False
+    return time.time() - checked_at < NOT_FOUND_TTL_SECONDS
 
 
 def _scryfall_lookup_cards(card_names: list[str]) -> dict[str, dict]:
@@ -403,10 +435,15 @@ def _scryfall_lookup_cards(card_names: list[str]) -> dict[str, dict]:
     names = list(dict.fromkeys(card_names))
     result: dict[str, dict] = {}
     to_fetch: list[str] = []
+    skip_flavor: set[str] = set()
+    checked: set[str] = set()
 
     for name in names:
         cached = _card_cache.get(name)
-        if cached and "error" not in cached and "card_faces" in cached and "oracle_text" in cached:
+        if _is_fresh_not_found(cached):
+            result[name] = {"error": "not_found"}
+            skip_flavor.add(name)
+        elif cached and "error" not in cached and "card_faces" in cached and "oracle_text" in cached:
             result[name] = cached
         else:
             to_fetch.append(name)
@@ -444,13 +481,14 @@ def _scryfall_lookup_cards(card_names: list[str]) -> dict[str, dict]:
         for idx in range(len(chunk)):
             lookup_name = _name_for_scryfall(chunk[idx])
             if lookup_name in not_found_lookup_names:
-                _card_cache[chunk[idx]] = {"error": "not_found"}
+                checked.add(chunk[idx])  # Scryfall explicitly reported it missing
                 continue
             if data_idx >= len(data_list):
-                break
+                break  # short response: leftovers are unresolved, not "not found"
             card = data_list[data_idx]
             data_idx += 1
             orig_name = chunk[idx]
+            checked.add(orig_name)
 
             if not _card_is_paper(card):
                 paper_card = _fetch_paper_printing(card.get("name", ""))
@@ -469,9 +507,14 @@ def _scryfall_lookup_cards(card_names: list[str]) -> dict[str, dict]:
             _card_cache[card.get("name", "")] = entry
 
     # Second pass: for names still not found, search by flavor_name (e.g. Universes Within names)
-    still_missing = [n for n in names if n not in result or result.get(n, {}).get("error")]
+    still_missing = [n for n in names if n not in skip_flavor and (n not in result or result[n].get("error"))]
+    flavor_errored: set[str] = set()
     for orig_name in still_missing:
-        card = _search_by_flavor_name(orig_name)
+        try:
+            card = _search_by_flavor_name(orig_name)
+        except _TransientLookupError:
+            flavor_errored.add(orig_name)
+            continue
         if not card:
             continue
         if not _card_is_paper(card):
@@ -486,6 +529,16 @@ def _scryfall_lookup_cards(card_names: list[str]) -> dict[str, dict]:
         result[orig_name] = entry
         _card_cache[orig_name] = entry
         _card_cache[card.get("name", "")] = entry
+
+    # Remember names Scryfall could not resolve so they are not re-fetched on every request.
+    now = time.time()
+    for name in names:
+        if name in result and not result[name].get("error"):
+            continue
+        result[name] = {"error": "not_found"}
+        # Only a definitive miss is remembered; transient failures are retried next request.
+        if name in checked and name not in flavor_errored:
+            _card_cache[name] = {"error": "not_found", "checked_at": now}
 
     _save_cache()
     return result

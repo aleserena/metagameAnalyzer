@@ -208,7 +208,7 @@ def test_get_last_sync_times_without_database(monkeypatch):
     from api import db as _db
 
     monkeypatch.setattr(_db, "is_database_available", lambda: False)
-    assert mtgjson.get_last_sync_times() == {"metadata": None, "prices": None}
+    assert mtgjson.get_last_sync_times() == {"metadata": None, "prices": None, "otag": None}
 
 
 def test_successful_job_records_last_sync_time(monkeypatch):
@@ -259,3 +259,40 @@ def test_sync_job_captures_error(monkeypatch):
     job = mtgjson.get_sync_status()["jobs"]["metadata"]
     assert "download failed" in (job["error"] or "")
     assert mtgjson.get_sync_status()["running"] is None
+
+
+def test_atomic_card_to_row_sets_front_face_name():
+    two = mtgjson.atomic_card_to_row(
+        "Norman Osborn // Green Goblin", [{"faceName": "Norman Osborn"}, {"faceName": "Green Goblin"}]
+    )
+    one = mtgjson.atomic_card_to_row("Sol Ring", [{"name": "Sol Ring"}])
+    assert two["front_face_name"] == "Norman Osborn" and one["front_face_name"] is None
+
+
+def test_successful_job_drops_derived_caches(monkeypatch):
+    from api.state import state
+
+    monkeypatch.setattr(mtgjson, "_record_last_sync", lambda *a, **k: None)
+    before = state.decks_version
+    mtgjson._RUNNING["name"] = "metadata"
+    mtgjson._run_job("metadata", lambda: {"cards": 0})
+    assert state.decks_version == before + 1 and mtgjson._RUNNING["name"] is None
+
+
+def test_otag_job_runs_with_an_overriding_function(monkeypatch):
+    monkeypatch.setattr(mtgjson, "_record_last_sync", lambda *a, **k: None)
+    done = threading.Event()
+
+    def fn():
+        done.set()
+        return {"refreshed": {"ramp": 3}}
+
+    with mtgjson._JOB_LOCK:
+        mtgjson._RUNNING["name"] = None
+    assert mtgjson.start_sync_job("otag", fn)["started"] is True
+    assert done.wait(5)
+    for _ in range(50):
+        if mtgjson.get_sync_status()["jobs"]["otag"]["status"] == "success":
+            break
+        time.sleep(0.05)
+    assert mtgjson.get_sync_status()["jobs"]["otag"]["result"] == {"refreshed": {"ramp": 3}}

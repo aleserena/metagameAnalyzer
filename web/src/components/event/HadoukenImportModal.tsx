@@ -133,7 +133,7 @@ export default function HadoukenImportModal({ eventId, onClose, onImported }: Pr
     applyHadoukenImport(eventId, preview.hadouken.url, playerMap, standingsEdits)
       .then((res) => {
         toast.success(
-          `Imported ${res.matches_imported} matches. ${res.decks_created} new deck(s), ${res.decks_matched} matched.`
+          `Imported ${res.matches_imported} matches${res.byes_imported ? ` + ${res.byes_imported} bye(s)` : ''}. ${res.decks_created} new deck(s), ${res.decks_matched} matched.`
         )
         onImported()
         onClose()
@@ -169,7 +169,7 @@ export default function HadoukenImportModal({ eventId, onClose, onImported }: Pr
         <>
           <p style={{ margin: '0 0 0.75rem' }}>
             <strong>{preview.hadouken.name}</strong> — {preview.hadouken.date} · {preview.hadouken.player_count} players ·{' '}
-            {preview.pairings.length} matches
+            {preview.pairings.length} matches{preview.byes.length > 0 && ` + ${preview.byes.length} bye(s)`}
           </p>
           {preview.warnings.map((w) => (
             <p key={w} style={{ margin: '0 0 0.5rem', color: 'var(--danger, #c00)', fontSize: '0.9rem' }}>⚠ {w}</p>
@@ -292,7 +292,7 @@ export default function HadoukenImportModal({ eventId, onClose, onImported }: Pr
               onClick={handleApply}
               disabled={busy || duplicateDeckIds.size > 0 || standingsBlocked}
             >
-              {applying ? 'Importing…' : `Import ${preview.pairings.length} matches${newDeckCount ? ` + ${newDeckCount} new deck(s)` : ''}`}
+              {applying ? 'Importing…' : `Import ${preview.pairings.length} matches${preview.byes.length ? ` + ${preview.byes.length} bye(s)` : ''}${newDeckCount ? ` + ${newDeckCount} new deck(s)` : ''}`}
             </button>
             <button type="button" className="btn" onClick={onClose} disabled={busy}>
               Cancel

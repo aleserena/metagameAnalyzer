@@ -2,7 +2,7 @@ import json
 import logging
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 import requests
 from fastapi import Depends, File, HTTPException, Query, Request, UploadFile
@@ -18,6 +18,7 @@ from api.dependencies import (
     require_admin_or_event_edit,
     require_database,
 )
+from api.formats import is_commander_format
 from api.helpers import (
     _normalize_split_cards,
     _read_upload_json_bytes_async,
@@ -41,6 +42,8 @@ from api.schemas.settings import (
 )
 from api.schemas.upload import CreateUploadLinksBody
 from api.services import hadouken as _hadouken
+from api.services.event_export import build_event_export
+from api.services.event_import import import_event_payload
 from api.state import (
     _events_from_decks,
     _get_event_by_id_from_decks,
@@ -58,8 +61,8 @@ except ImportError:
 from fastapi import APIRouter
 
 from api.route_helpers import (
-    _matchup_result_consistent,
     _upload_link_base_url,
+    find_matchup_discrepancies,
 )
 
 logger = logging.getLogger(__name__)
@@ -126,24 +129,9 @@ def get_event_ids_with_discrepancies():
         if not eid:
             continue
         by_event.setdefault(eid, []).append(r)
-    event_ids_with_discrepancies: list[str] = []
-    for eid, event_rows in by_event.items():
-        by_pair: dict[tuple[int, int], list[dict]] = {}
-        for r in event_rows:
-            key = tuple(sorted([r["deck_id"], r["opponent_deck_id"]]))
-            by_pair.setdefault(key, []).append(r)
-        for (deck_a, deck_b), matchups in by_pair.items():
-            if len(matchups) != 2:
-                continue
-            from_a = next((m for m in matchups if m["deck_id"] == deck_a), None)
-            from_b = next((m for m in matchups if m["deck_id"] == deck_b), None)
-            if from_a is None or from_b is None:
-                continue
-            r1 = from_a.get("result") or ""
-            r2 = from_b.get("result") or ""
-            if not _matchup_result_consistent(r1, r2):
-                event_ids_with_discrepancies.append(eid)
-                break
+    event_ids_with_discrepancies: list[str] = [
+        eid for eid, event_rows in by_event.items() if find_matchup_discrepancies(event_rows)
+    ]
     return {"event_ids": event_ids_with_discrepancies}
 
 
@@ -212,10 +200,8 @@ def _deck_merge_conflicts(deck_keep: dict, deck_remove: dict) -> list[MergeConfl
     """Compare two deck dicts on DECK_MERGE_FIELDS. Only add conflict when both have data and values differ (prefer non-empty).
     For EDH, commanders and archetype are a single combined field."""
     conflicts = []
-    format_keep = (deck_keep.get("format_id") or "").strip().upper()
-    format_remove = (deck_remove.get("format_id") or "").strip().upper()
-    is_edh_keep = format_keep in ("EDH", "COMMANDER", "CEDH")
-    is_edh_remove = format_remove in ("EDH", "COMMANDER", "CEDH")
+    is_edh_keep = is_commander_format(deck_keep.get("format_id"))
+    is_edh_remove = is_commander_format(deck_remove.get("format_id"))
     is_edh_both = is_edh_keep and is_edh_remove
 
     for field in DECK_MERGE_FIELDS:
@@ -454,85 +440,34 @@ def get_event_by_id(event_id: str):
     raise HTTPException(status_code=404, detail="Event not found")
 
 
-@router.get(
-    "/api/v1/events/{event_id}/export",
-    dependencies=[Depends(require_admin_or_event_edit)],
-)
-def export_event(event_id: str):
-    """Export an event and all related data (decks, matchups, player emails) as JSON."""
-    event_dict: dict | None = None
-    decks: list[dict] = []
-    matchups: list[dict] = []
-    player_emails: dict[str, str] = {}
-    players_list: list[dict] = []
+@router.get("/api/v1/events/{event_id}/export")
+def export_event(event_id: str, role: str = Depends(require_admin_or_event_edit)):
+    """Export an event and all related data as JSON. Player emails are admin-only."""
+    payload: EventExportData | None = None
 
     if state.database_available():
         try:
             with _db.session_scope() as session:
-                row = _db.get_event(session, event_id)
-                if not row:
-                    raise HTTPException(status_code=404, detail="Event not found")
-                event_dict = _db.event_row_to_dict(row)
-                decks = _db.get_decks_by_event(session, event_id)
-
-                # Collect matchups for all decks in this event (single batched query).
-                deck_ids = [d.get("deck_id") for d in decks if d.get("deck_id") is not None]
-                matchups.extend(_db.list_matchups_by_decks(session, deck_ids))
-
-                # Collect player emails only for players in this event. Batch by
-                # player_id (resolving by display name does a per-name full-table scan).
-                pid_to_name = {
-                    d.get("player_id"): (d.get("player") or "").strip()
-                    for d in decks
-                    if d.get("player_id") is not None and (d.get("player") or "").strip()
-                }
-                if pid_to_name:
-                    email_by_id = _db.get_emails_for_player_ids(session, list(pid_to_name))
-                    player_emails = {
-                        pid_to_name[pid]: email
-                        for pid, email in email_by_id.items()
-                        if pid in pid_to_name
-                    }
-
-                # Collect distinct player_ids from decks and matchups for optional players array
-                player_ids: set[int] = set()
-                for d in decks:
-                    pid = d.get("player_id")
-                    if pid is not None:
-                        player_ids.add(pid)
-                for m in matchups:
-                    pid = m.get("opponent_player_id")
-                    if pid is not None:
-                        player_ids.add(pid)
-                players_list.clear()
-                player_rows = _db.get_players_by_ids(session, list(player_ids))
-                for pid in sorted(player_ids):
-                    row = player_rows.get(pid)
-                    if row:
-                        players_list.append({"id": row.id, "display_name": row.display_name or ""})
-        except HTTPException:
-            raise
+                payload = build_event_export(session, event_id, include_emails=(role == "admin"))
         except Exception as e:
             logger.exception("Failed to export event from database: %s", e)
             raise HTTPException(status_code=500, detail="Failed to export event")
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Event not found")
     else:
         ev = _get_event_by_id_from_decks(event_id)
         if not ev:
             raise HTTPException(status_code=404, detail="Event not found")
-        event_dict = ev
-        decks = [d for d in state.decks if str(d.get("event_id")) == str(event_id)]
-        matchups = []
-        player_emails = {}
+        payload = EventExportData(
+            schema_version=1,
+            event=EventResponse(**ev),
+            decks=[d for d in state.decks if str(d.get("event_id")) == str(event_id)],
+            matchups=[],
+            player_emails={},
+            players=[],
+        )
 
-    payload = EventExportData(
-        schema_version=1,
-        event=EventResponse(**event_dict),
-        decks=decks,
-        matchups=matchups,
-        player_emails=player_emails,
-        players=players_list,
-    )
-    filename = f"event-{event_dict['event_id']}.json"
+    filename = f"event-{payload.event.event_id}.json"
     return JSONResponse(
         content=payload.model_dump(),
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
@@ -562,7 +497,7 @@ def update_event_endpoint(
         raise
     except Exception as e:
         logger.exception("Update event failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to update event")
 
 
 @router.delete("/api/v1/events/{event_id}", dependencies=[Depends(require_admin), Depends(require_database)])
@@ -580,7 +515,7 @@ def delete_event_endpoint(event_id: str):
         raise
     except Exception as e:
         logger.exception("Delete event failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to delete event")
 
 
 @router.post(
@@ -596,96 +531,56 @@ def import_event(body: EventExportData):
 
     try:
         with _db.session_scope() as session:
-            # Create new manual event with a fresh ID
-            new_event_id = _db.next_manual_event_id(session)
-            ev = body.event
-            row = _db.create_event(
-                session,
-                event_name=(ev.event_name or "").strip() or "Unnamed",
-                date=(ev.date or "").strip(),
-                format_id=(ev.format_id or "").strip() or "EDH",
-                origin=_db.ORIGIN_MANUAL,
-                event_id=new_event_id,
-                player_count=ev.player_count or 0,
-                store=(ev.store or "").strip(),
-                location=(ev.location or "").strip(),
-            )
-            event_dict = _db.event_row_to_dict(row)
-
-            # Map old deck_ids -> new manual deck_ids
-            decks_data = body.decks or []
-            deck_id_map: dict[int, int] = {}
-            next_deck_id = _db.next_manual_deck_id(session)
-            for deck_dict_raw in decks_data:
-                if "deck_id" not in deck_dict_raw:
-                    raise HTTPException(status_code=400, detail="Each deck must include a 'deck_id' field")
-                try:
-                    old_deck_id = int(deck_dict_raw.get("deck_id"))
-                except Exception:
-                    raise HTTPException(status_code=400, detail="Each deck 'deck_id' must be an integer")
-                new_deck_id = next_deck_id
-                next_deck_id += 1
-                deck_id_map[old_deck_id] = new_deck_id
-
-                deck_data = dict(deck_dict_raw)
-                deck_data["deck_id"] = new_deck_id
-                deck_data["event_id"] = new_event_id
-                deck_data["event_name"] = event_dict.get("event_name") or deck_data.get("event_name") or ""
-                deck_data["date"] = event_dict.get("date") or deck_data.get("date") or ""
-                if not deck_data.get("format_id"):
-                    deck_data["format_id"] = event_dict.get("format_id", "") or "EDH"
-
-                _resolve_deck_player(session, deck_data)
-                deck_row = _db.dict_to_deck_row(deck_data, origin=_db.ORIGIN_MANUAL)
-                session.add(deck_row)
-
-            # Insert matchups, remapping deck IDs
-            matchups_data = body.matchups or []
-            per_deck_matchups: dict[int, list[dict]] = {}
-            for m_raw in matchups_data:
-                if "deck_id" not in m_raw:
-                    continue
-                try:
-                    old_deck_id = int(m_raw.get("deck_id"))
-                except Exception:
-                    continue
-                new_deck_id = deck_id_map.get(old_deck_id)
-                if new_deck_id is None:
-                    continue
-
-                opp_old = m_raw.get("opponent_deck_id")
-                new_opp_id = None
-                if opp_old is not None:
-                    try:
-                        new_opp_id = deck_id_map.get(int(opp_old))
-                    except Exception:
-                        new_opp_id = None
-
-                item = {
-                    "opponent_player": (m_raw.get("opponent_player") or "").strip(),
-                    "opponent_deck_id": new_opp_id,
-                    "opponent_archetype": m_raw.get("opponent_archetype"),
-                    "result": (m_raw.get("result") or "loss").strip() or "loss",
-                    "result_note": (m_raw.get("result_note") or None),
-                    "round": m_raw.get("round"),
-                }
-                per_deck_matchups.setdefault(new_deck_id, []).append(item)
-
-            for deck_id, items in per_deck_matchups.items():
-                _db.upsert_matchups_for_deck(session, deck_id, items)
-
-            # Restore player emails for players in this event
-            for player, email in (body.player_emails or {}).items():
-                _db.set_player_email(session, player, email)
+            try:
+                result = import_event_payload(session, body)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
 
         _load_decks_from_db()
         _invalidate_events_cache()
-        return {"event_id": event_dict["event_id"], "message": "imported", "deck_count": len(decks_data)}
+        return {"event_id": result["event_id"], "message": "imported", "deck_count": result["deck_count"]}
     except HTTPException:
         raise
     except Exception as e:
         logger.exception("Import event failed: %s", e)
         raise HTTPException(status_code=500, detail="Failed to import event")
+
+
+def _resolve_merge_pairs(decks_keep: list[dict], decks_remove: list[dict], player_merges: list) -> list[tuple[int, int]]:
+    """Pair decks for an event merge: same player first, then manual pairs.
+
+    Raises ValueError naming the deck when a manual pair references a deck outside
+    its event or reuses a deck already paired.
+    """
+    keep_by_player_id = {d["player_id"]: d for d in decks_keep if d.get("player_id") is not None}
+    keep_ids = {d["deck_id"] for d in decks_keep}
+    remove_ids = {d["deck_id"] for d in decks_remove}
+    pairs: list[tuple[int, int]] = []
+    used_keep: set[int] = set()
+    used_remove: set[int] = set()
+    for d in decks_remove:
+        pid = d.get("player_id")
+        if pid is not None and pid in keep_by_player_id:
+            k = keep_by_player_id[pid]
+            pairs.append((k["deck_id"], d["deck_id"]))
+            used_keep.add(k["deck_id"])
+            used_remove.add(d["deck_id"])
+    auto_remove = set(used_remove)
+    for pm in player_merges:
+        if pm.deck_id_remove in auto_remove:
+            continue
+        if pm.deck_id_keep not in keep_ids:
+            raise ValueError(f"Deck {pm.deck_id_keep} to keep is not in the kept event")
+        if pm.deck_id_remove not in remove_ids:
+            raise ValueError(f"Deck {pm.deck_id_remove} to remove is not in the removed event")
+        if pm.deck_id_keep in used_keep:
+            raise ValueError(f"Deck {pm.deck_id_keep} to keep is paired more than once")
+        if pm.deck_id_remove in used_remove:
+            raise ValueError(f"Deck {pm.deck_id_remove} to remove is paired more than once")
+        pairs.append((pm.deck_id_keep, pm.deck_id_remove))
+        used_keep.add(pm.deck_id_keep)
+        used_remove.add(pm.deck_id_remove)
+    return pairs
 
 
 @router.post(
@@ -734,23 +629,11 @@ def merge_events(body: MergeEventsBody):
         with _db.session_scope() as session:
             decks_keep = _db.get_decks_by_event(session, keep_row.event_id)
             decks_remove = _db.get_decks_by_event(session, remove_row.event_id)
-        keep_by_player_id = {}
-        for d in decks_keep:
-            pid = d.get("player_id")
-            if pid is not None:
-                keep_by_player_id[pid] = d
-        auto_pairs: list[tuple[dict, dict]] = []
-        paired_remove_ids: set[int] = set()
-        for d in decks_remove:
-            pid = d.get("player_id")
-            if pid is not None and pid in keep_by_player_id:
-                auto_pairs.append((keep_by_player_id[pid], d))
-                paired_remove_ids.add(d["deck_id"])
-        all_pairs: list[tuple[int, int]] = [(k["deck_id"], r["deck_id"]) for k, r in auto_pairs]
-        for pm in body.player_merges:
-            if pm.deck_id_remove not in paired_remove_ids:
-                all_pairs.append((pm.deck_id_keep, pm.deck_id_remove))
-                paired_remove_ids.add(pm.deck_id_remove)
+        try:
+            all_pairs = _resolve_merge_pairs(decks_keep, decks_remove, body.player_merges)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        paired_remove_ids = {r for _, r in all_pairs}
         deck_keep_by_id = {d["deck_id"]: d for d in decks_keep}
         deck_remove_by_id = {d["deck_id"]: d for d in decks_remove}
 
@@ -829,6 +712,8 @@ def merge_events(body: MergeEventsBody):
             "decks_merged": decks_merged,
             "decks_moved": decks_moved,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Merge events failed: %s", e)
         raise HTTPException(status_code=500, detail="Failed to merge events.")
@@ -860,19 +745,21 @@ async def upload_decks_to_event(
         raise HTTPException(status_code=400, detail="Provide JSON body with 'decks' or file upload")
     decks = _normalize_split_cards(decks)
     try:
-        with _db.session_scope() as session:
-            next_id = _db.next_manual_deck_id(session)
         out = []
-        for i, d in enumerate(decks):
-            d = dict(d)
-            d["event_id"] = event_id
-            d["event_name"] = event_name
-            d["date"] = date
-            d["format_id"] = format_id
-            if "deck_id" not in d or d.get("deck_id") is None:
-                d["deck_id"] = next_id + i
-            out.append(d)
         with _db.session_scope() as session:
+            # Allocate IDs in the inserting transaction (advisory lock held until commit); consecutive
+            # because sessions do not autoflush between allocations.
+            next_id = _db.next_manual_deck_id(session)
+            for d in decks:
+                d = dict(d)
+                d["event_id"] = event_id
+                d["event_name"] = event_name
+                d["date"] = date
+                d["format_id"] = format_id
+                if "deck_id" not in d or d.get("deck_id") is None:
+                    d["deck_id"] = next_id
+                    next_id += 1
+                out.append(d)
             for d in out:
                 _resolve_deck_player(session, d)
                 _db.upsert_deck(session, d, origin=_db.ORIGIN_MANUAL)
@@ -880,7 +767,7 @@ async def upload_decks_to_event(
         return {"event_id": event_id, "loaded": len(out), "message": f"Uploaded {len(out)} decks"}
     except Exception as e:
         logger.exception("Upload decks to event failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to upload decks")
 
 
 @router.post("/api/v1/events/{event_id}/decks/add", dependencies=[Depends(require_admin_or_event_edit), Depends(require_database)])
@@ -985,9 +872,9 @@ def apply_hadouken_import(event_id: str, body: HadoukenApplyBody):
 def create_upload_links(event_id: str, request: Request, body: CreateUploadLinksBody | None = None):
     """Create one or more one-time upload links for an event (admin-only). Pass deck_id to create a link that updates that deck."""
     body = body or CreateUploadLinksBody()
-    expires_at = None
+    expires_at = None  # None -> db.create_upload_link applies DEFAULT_LINK_EXPIRY_DAYS
     if body.expires_in_days is not None and body.expires_in_days > 0:
-        expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=body.expires_in_days)
+        expires_at = _db.utcnow_naive() + timedelta(days=body.expires_in_days)
     with _db.session_scope() as session:
         ev = _db.get_event(session, event_id)
         if not ev:
@@ -998,13 +885,13 @@ def create_upload_links(event_id: str, request: Request, body: CreateUploadLinks
             # One-time link to edit event and decks (no delete event, no new links)
             _db.invalidate_upload_links_for_slot(session, event_id, _db.LINK_TYPE_EVENT_EDIT)
             token = secrets.token_urlsafe(32)
-            _db.create_upload_link(
+            row = _db.create_upload_link(
                 session, token, event_id, expires_at=expires_at, link_type=_db.LINK_TYPE_EVENT_EDIT
             )
             links.append({
                 "token": token,
                 "url": f"{base_url}/events/{event_id}?token={token}",
-                "expires_at": expires_at.isoformat() if expires_at else None,
+                "expires_at": _db.iso_utc(row.expires_at),
             })
         elif body.type == "feedback" and body.deck_id is not None:
             # One-time feedback link for this deck (Event page). Form submits to POST /api/upload/{token}/feedback
@@ -1016,13 +903,13 @@ def create_upload_links(event_id: str, request: Request, body: CreateUploadLinks
                 raise HTTPException(status_code=404, detail="Deck not found in this event")
             _db.invalidate_upload_links_for_slot(session, event_id, _db.LINK_TYPE_FEEDBACK, deck_id=body.deck_id)
             token = secrets.token_urlsafe(32)
-            _db.create_upload_link(
+            row = _db.create_upload_link(
                 session, token, event_id, expires_at=expires_at, deck_id=body.deck_id, link_type=_db.LINK_TYPE_FEEDBACK
             )
             links.append({
                 "token": token,
                 "url": f"{base_url}/upload/{token}",
-                "expires_at": expires_at.isoformat() if expires_at else None,
+                "expires_at": _db.iso_utc(row.expires_at),
                 "deck_id": body.deck_id,
             })
         elif body.deck_id is not None:
@@ -1035,24 +922,47 @@ def create_upload_links(event_id: str, request: Request, body: CreateUploadLinks
                 raise HTTPException(status_code=404, detail="Deck not found in this event")
             _db.invalidate_upload_links_for_slot(session, event_id, _db.LINK_TYPE_DECK_UPDATE, deck_id=body.deck_id)
             token = secrets.token_urlsafe(32)
-            _db.create_upload_link(session, token, event_id, expires_at=expires_at, deck_id=body.deck_id)
+            row = _db.create_upload_link(session, token, event_id, expires_at=expires_at, deck_id=body.deck_id)
             links.append({
                 "token": token,
                 "url": f"{base_url}/upload/{token}",
-                "expires_at": expires_at.isoformat() if expires_at else None,
+                "expires_at": _db.iso_utc(row.expires_at),
                 "deck_id": body.deck_id,
             })
         else:
             count = max(1, min(body.count, 50))
             for _ in range(count):
                 token = secrets.token_urlsafe(32)
-                _db.create_upload_link(session, token, event_id, expires_at=expires_at)
+                row = _db.create_upload_link(session, token, event_id, expires_at=expires_at)
                 links.append({
                     "token": token,
                     "url": f"{base_url}/upload/{token}",
-                    "expires_at": expires_at.isoformat() if expires_at else None,
+                    "expires_at": _db.iso_utc(row.expires_at),
                 })
         return {"links": links}
+
+
+def _event_decks_for_mail(session, event_id: str) -> list:
+    """All deck rows of an event (used by the bulk link-email endpoints)."""
+    return session.query(_db.DeckRow).filter(_db.DeckRow.event_id == _db._event_id_str(event_id)).all()
+
+
+def _send_queued_emails(queued: list[tuple[str, str, str, str]], send_email, log_label: str) -> tuple[int, list[str]]:
+    """Send (player_name, address, subject, body) emails; return (sent count, failed player names).
+
+    Called after the link-creating transaction has committed, so a provider failure
+    never rolls back links that may already have been emailed.
+    """
+    sent = 0
+    failed: list[str] = []
+    for player_name, addr, subject, body in queued:
+        try:
+            send_email(addr, subject, body)
+            sent += 1
+        except Exception:
+            logger.exception("%s failed for %s", log_label, player_name)
+            failed.append(player_name)
+    return sent, failed
 
 
 @router.post("/api/v1/events/{event_id}/send-missing-deck-links", dependencies=[Depends(require_admin), Depends(require_database)])
@@ -1072,7 +982,7 @@ def send_missing_deck_links(event_id: str, request: Request):
         ev = _db.get_event(session, event_id)
         if not ev:
             raise HTTPException(status_code=404, detail="Event not found")
-        decks = session.query(_db.DeckRow).filter(_db.DeckRow.event_id == _db._event_id_str(event_id)).all()
+        decks = _event_decks_for_mail(session, event_id)
         # Group decks missing a list by player_id so emails can be batched in one
         # query (resolving by display name does a per-name full-table scan).
         missing_by_pid: dict[int, list] = {}
@@ -1086,8 +996,7 @@ def send_missing_deck_links(event_id: str, request: Request):
         if not missing_by_pid:
             return {"sent": 0, "failed": []}
         email_map = _db.get_emails_for_player_ids(session, list(missing_by_pid))
-        sent = 0
-        failed = []
+        queued: list[tuple[str, str, str, str]] = []
         for pid, addr in email_map.items():
             deck_list = missing_by_pid.get(pid, [])
             if not deck_list or not addr:
@@ -1104,13 +1013,9 @@ def send_missing_deck_links(event_id: str, request: Request):
             event_name = event_display_name(ev.name or "", getattr(ev, "store", "") or "", getattr(ev, "location", "") or "")
             subject = f"Deck upload link: {event_name}"
             body = f"Please submit your deck list for {event_name}.\n\nUse this link (one-time):\n\n" + "\n".join(links_for_player)
-            try:
-                _email.send_email(addr, subject, body)
-                sent += 1
-            except Exception:
-                logger.exception("Send missing-deck email failed for %s", player_name)
-                failed.append(player_name)
-        return {"sent": sent, "failed": failed}
+            queued.append((player_name, addr, subject, body))
+    sent, failed = _send_queued_emails(queued, _email.send_email, "Send missing-deck email")
+    return {"sent": sent, "failed": failed}
 
 
 @router.post("/api/v1/events/{event_id}/send-feedback-links", dependencies=[Depends(require_admin), Depends(require_database)])
@@ -1130,13 +1035,13 @@ def send_feedback_links(event_id: str, request: Request):
         ev = _db.get_event(session, event_id)
         if not ev:
             raise HTTPException(status_code=404, detail="Event not found")
-        decks = session.query(_db.DeckRow).filter(_db.DeckRow.event_id == _db._event_id_str(event_id)).all()
+        decks = _event_decks_for_mail(session, event_id)
         if not decks:
-            return {"sent": 0}
+            return {"sent": 0, "failed": []}
         # Batch email lookup by player_id (name resolution does a per-name full-table scan).
         player_ids = list({getattr(d, "player_id", None) for d in decks} - {None})
         email_map = _db.get_emails_for_player_ids(session, player_ids)
-        sent = 0
+        queued: list[tuple[str, str, str, str]] = []
         for deck_row in decks:
             pid = getattr(deck_row, "player_id", None)
             addr = email_map.get(pid) if pid is not None else None
@@ -1150,12 +1055,10 @@ def send_feedback_links(event_id: str, request: Request):
             event_name = event_display_name(ev.name or "", getattr(ev, "store", "") or "", getattr(ev, "location", "") or "")
             subject = f"Event feedback: {event_name}"
             body = f"Please submit your match results for {event_name}.\n\nLink (one-time): {base_url}/upload/{token}"
-            try:
-                _email.send_email(addr, subject, body)
-                sent += 1
-            except Exception:
-                logger.exception("Send feedback email failed for %s", (deck_row.player or "").strip() or pid)
-        return {"sent": sent}
+            player_name = (deck_row.player or "").strip() or str(pid)
+            queued.append((player_name, addr, subject, body))
+    sent, failed = _send_queued_emails(queued, _email.send_email, "Send feedback email")
+    return {"sent": sent, "failed": failed}
 
 
 @router.post("/api/v1/events/{event_id}/send-feedback-link-to-player", dependencies=[Depends(require_admin), Depends(require_database)])
@@ -1193,11 +1096,11 @@ def send_feedback_link_to_player(event_id: str, request: Request, body: SendFeed
         event_name = event_display_name(ev.name or "", getattr(ev, "store", "") or "", getattr(ev, "location", "") or "")
         subject = f"Event feedback: {event_name}"
         body_text = f"Please submit your match results for {event_name}.\n\nLink (one-time): {base_url}/upload/{token}"
-        try:
-            _email.send_email(addr, subject, body_text)
-        except Exception as e:
-            logger.exception("Send feedback email failed for %s", canonical)
-            raise HTTPException(status_code=500, detail="Failed to send email") from e
+    try:
+        _email.send_email(addr, subject, body_text)
+    except Exception as e:
+        logger.exception("Send feedback email failed for %s", canonical)
+        raise HTTPException(status_code=500, detail="Failed to send email") from e
     return {"sent": 1}
 
 
@@ -1221,34 +1124,16 @@ def get_matchup_discrepancies(event_id: str):
         if not ev:
             raise HTTPException(status_code=404, detail="Event not found")
         rows = _db.list_matchups_for_event(session, event_id)
-        by_pair = {}
-        for r in rows:
-            deck_a, deck_b = sorted([r["deck_id"], r["opponent_deck_id"]])
-            rnd = r.get("round")
-            key = (deck_a, deck_b, rnd)
-            if key not in by_pair:
-                by_pair[key] = []
-            by_pair[key].append(r)
         discrepancies = []
-        for (_deck_a, _deck_b, _round), matchups in by_pair.items():
-            if len(matchups) != 2:
-                continue
-            deck_a, deck_b = _deck_a, _deck_b
-            from_a = next((m for m in matchups if m["deck_id"] == deck_a), None)
-            from_b = next((m for m in matchups if m["deck_id"] == deck_b), None)
-            if from_a is None or from_b is None:
-                continue
-            r1 = from_a["result"]
-            r2 = from_b["result"]
-            if not _matchup_result_consistent(r1, r2):
-                discrepancies.append({
-                    "deck_id_a": deck_a,
-                    "deck_id_b": deck_b,
-                    "matchup_a": from_a,
-                    "matchup_b": from_b,
-                    "result_a": r1,
-                    "result_b": r2,
-                })
+        for from_a, from_b in find_matchup_discrepancies(rows):
+            discrepancies.append({
+                "deck_id_a": from_a["deck_id"],
+                "deck_id_b": from_b["deck_id"],
+                "matchup_a": from_a,
+                "matchup_b": from_b,
+                "result_a": from_a["result"],
+                "result_b": from_b["result"],
+            })
         deck_ids = set()
         for d in discrepancies:
             deck_ids.add(d["deck_id_a"])

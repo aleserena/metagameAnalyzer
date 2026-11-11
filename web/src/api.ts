@@ -1,4 +1,4 @@
-import type { Deck, MetagameReport, Event, PlayerStats, SimilarDeck, ArchetypeDetail, ArchetypeWeeklyStats, CardHeatmap, ChurnReport, HealthReport, H2HSummary, H2HDetail, CommanderSynergy, HadoukenPreview, HadoukenApplyResult } from './types'
+import type { Deck, MetagameReport, Event, PlayerStats, SimilarDeck, ArchetypeDetail, ArchetypeWeeklyStats, CardHeatmap, ChurnReport, HealthReport, H2HSummary, H2HDetail, CommanderSynergy, HadoukenPreview, HadoukenApplyResult, ScrapeJobSnapshot } from './types'
 import { getToken } from './contexts/AuthContext'
 import { fetchWithTimeout } from './utils'
 
@@ -79,14 +79,19 @@ async function fetchApi<T>(path: string, options?: RequestInit & { timeoutMs?: n
   return res.json()
 }
 
+export async function getFeedbackCaptcha(): Promise<{ question: string; token: string }> {
+  const res = await fetchWithTimeout(`${API_BASE}/feedback/captcha`)
+  if (!res.ok) throw new Error('Could not load the verification question')
+  return res.json()
+}
+
 export async function submitFeedback(body: {
   type: string
   title: string
   description: string
   email?: string | null
   website?: string | null
-  captcha_a: number
-  captcha_b: number
+  captcha_token: string
   captcha_answer: number
 }): Promise<{ url: string; number?: number }> {
   const res = await fetchWithTimeout(`${API_BASE}/feedback`, {
@@ -444,7 +449,7 @@ export async function sendPlayerMissingDeckLinks(playerName: string): Promise<{ 
   return fetchApi(`/players/${encodeURIComponent(playerName)}/send-missing-deck-links`, { method: 'POST' })
 }
 
-export async function sendFeedbackLinks(eventId: string): Promise<{ sent: number }> {
+export async function sendFeedbackLinks(eventId: string): Promise<{ sent: number; failed?: string[] }> {
   return fetchApi(`/events/${encodeURIComponent(eventId)}/send-feedback-links`, { method: 'POST' })
 }
 
@@ -1130,7 +1135,7 @@ export type MtgjsonSyncJob = {
 
 export type MtgjsonSyncStatus = {
   running: string | null
-  jobs: { metadata: MtgjsonSyncJob; prices: MtgjsonSyncJob }
+  jobs: { metadata: MtgjsonSyncJob; prices: MtgjsonSyncJob; otag: MtgjsonSyncJob }
 }
 
 export async function syncMtgjson(): Promise<MtgjsonSyncStart> {
@@ -1196,16 +1201,21 @@ export async function loadDecksFromPath(path: string): Promise<{ loaded: number;
   })
 }
 
-export async function runScrape(params: {
+export async function startScrape(body: {
   format?: string
   period?: string
   store?: string
   event_ids?: string
-}): Promise<{ loaded: number; message: string; progress: string[] }> {
+  force_replace?: boolean
+}): Promise<{ job: ScrapeJobSnapshot }> {
   return fetchApi('/scrape', {
     method: 'POST',
-    body: JSON.stringify(params),
+    body: JSON.stringify(body),
   })
+}
+
+export async function getScrapeStatus(after: number): Promise<{ job: ScrapeJobSnapshot | null }> {
+  return fetchApi(`/scrape/status?after=${after}`)
 }
 
 export async function stopScrape(): Promise<{ message: string }> {

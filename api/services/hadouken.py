@@ -213,6 +213,7 @@ def build_preview(session, event_id: str, hev: HadoukenEvent) -> dict:
         ],
         "unmatched_deck_ids": sorted(set(deck_by_id) - {d for d, _ in suggestions.values() if d is not None}),
         "pairings": pairings,
+        "byes": [{"round": b.round, "player": b.player} for b in hev.byes],
         "conflicts": conflicts,
         "existing_matchup_count": len(existing),
     }
@@ -338,6 +339,22 @@ def apply_import(
                     round=p.round,
                 )
             )
+    byes_imported = 0
+    for b in hev.byes:
+        if b.player not in name_to_deck:
+            continue
+        rows.append(
+            _db.MatchupRow(
+                deck_id=name_to_deck[b.player],
+                opponent_player_id=None,
+                opponent_player="Bye",
+                opponent_deck_id=None,
+                opponent_archetype=None,
+                result="bye",
+                round=b.round,
+            )
+        )
+        byes_imported += 1
     session.add_all(rows)
 
     # Matched decks without a rank get their Hadouken place (MTGTop8 ranks are kept).
@@ -356,6 +373,7 @@ def apply_import(
         "decks_created": created,
         "decks_matched": len(chosen),
         "matches_imported": len(hev.pairings),
+        "byes_imported": byes_imported,
         "aliases_added": aliases_added,
         "player_count": player_count,
     }

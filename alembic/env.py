@@ -17,7 +17,10 @@ sys.path.insert(0, str(_project_root))
 _db_env = os.getenv("DB_ENV", "").strip().lower()
 _env_name = f".env.{_db_env}" if _db_env in ("dev", "staging", "prod") else ".env"
 _env_path = _project_root / _env_name
-if _env_path.exists():
+if os.getenv("DATABASE_URL_LOCKED") == "1":
+    # Tests pin DATABASE_URL to the test database; never let .env override it.
+    pass
+elif _env_path.exists():
     try:
         from dotenv import load_dotenv
         load_dotenv(_env_path, override=True)
@@ -42,6 +45,8 @@ if config.config_file_name is not None:
         config.set_main_option("sqlalchemy.url", url)
 
 target_metadata = Base.metadata
+
+LOCK_TIMEOUT = "10s"
 
 
 def run_migrations_offline() -> None:
@@ -84,6 +89,10 @@ def run_migrations_online() -> None:
             target_metadata=target_metadata,
         )
         with context.begin_transaction():
+            # ALTER/CREATE INDEX queue behind any long-running transaction and every later query then queues
+            # behind the ALTER while the previous release is still serving. Fail fast (blocking the deploy)
+            # instead of hanging the site. SET LOCAL scopes this to the migration transaction.
+            connection.exec_driver_sql(f"SET LOCAL lock_timeout = '{LOCK_TIMEOUT}'")
             context.run_migrations()
 
 

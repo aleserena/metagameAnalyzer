@@ -5,8 +5,10 @@ Scrapes deck lists from [mtgtop8.com](https://www.mtgtop8.com) filtered by forma
 ## Installation
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
+
+`requirements.txt` (pinned runtime only) is what the Docker image installs; `requirements-dev.txt` adds test/lint tools. To change dependencies, edit `requirements.in` / `requirements-dev.in` and run `npm run deps:compile` (uses `uv`; falls back to pip-tools in Docker).
 
 ## Testing
 
@@ -21,6 +23,8 @@ pytest tests/ -v
 # With coverage:
 pytest tests/ --cov=src --cov=api
 ```
+
+Database tests need a throwaway Postgres: set `TEST_DATABASE_URL` (never a staging/prod URL; tests migrate it to head). Without it they skip. CI (`.github/workflows/ci.yml`) provides one and sets `REQUIRE_DB_TESTS=1` so they cannot silently skip. See `CLAUDE.md` for setup commands.
 
 **Frontend (Vitest + React Testing Library):**
 
@@ -61,7 +65,7 @@ The API loads decks from the PostgreSQL database on startup. You can load data v
 
 ### Admin authentication
 
-Scrape and Settings are available only to an admin user. Set the environment variable **`ADMIN_PASSWORD`** (required for admin features). Optional **`JWT_SECRET`** (defaults to `ADMIN_PASSWORD` if set) is used to sign login tokens.
+Scrape and Settings are available only to an admin user. Set **`ADMIN_PASSWORD`** and **`JWT_SECRET`** (signs login tokens). On Railway both are required: the app refuses to start without them. Locally they are optional (without `ADMIN_PASSWORD`, admin login is disabled). Note: a local `.env` that contains `RAILWAY_ENVIRONMENT_NAME` makes the app think it is deployed, which blocks local startup and test collection unless both secrets are set. One-time upload/edit links expire after 7 days by default.
 
 - **Login**: Open `/login` and enter the admin password. A signed token is stored in the browser and sent with requests to protected endpoints.
 - **Scrape tab**: Load/upload data, download export, and run scrapes (admin only).
@@ -89,10 +93,12 @@ If `ADMIN_PASSWORD` is not set, admin login is disabled and those tabs are hidde
 3. **Install dependencies and run migrations**  
    From the project root:
    ```bash
-   pip install -r requirements.txt
+   pip install -r requirements-dev.txt
    python3 -m alembic upgrade head
    ```
    The app and Alembic load `.env` automatically, so `DATABASE_URL` is read from that file.
+
+   **On Railway, migrations run automatically on every deploy** (`deploy.preDeployCommand` in `railway.json` runs `alembic upgrade head`; a failing migration blocks the deploy). `npm run db:migrate:staging` / `db:migrate:prod` remain for manual use. Because the migration runs before traffic switches and the old release stays live if the deploy fails, every migration must leave the previous release working: add nullable columns and indexes only; dropping or retyping happens in a later release.
 
 4. **Start the API**  
    As usual: `python3 -m uvicorn api.main:app --reload --port 8000`. The API will connect to the database and load decks/aliases from it.
@@ -144,7 +150,7 @@ You can also set `DB_ENV=dev` (or `staging` / `prod`) and run `alembic` or `uvic
 
 ### Player aliases (merge duplicate names)
 
-If the same player appears under different names (e.g. "Tomas Pesci" and "Pablo Tomas Pesci"), an admin can merge them in **Settings → Player aliases**: add mappings (alias → canonical). On the Player detail page, similar names are suggested with a "Merge into X" button (merge requires admin login). Aliases are stored in the database (with `player_aliases.json` in `DATA_DIR` as a fallback when the DB is unavailable). Merged players share stats and deck lists.
+If the same player appears under different names (e.g. "Tomas Pesci" and "Pablo Tomas Pesci"), an admin can merge them in **Settings → Player aliases**: add mappings (alias → canonical). On the Player detail page, similar names are suggested with a "Merge into X" button (merge requires admin login). Aliases are stored in the database. Merged players share stats and deck lists.
 
 ## CLI Usage
 

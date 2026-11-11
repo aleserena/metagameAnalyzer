@@ -205,6 +205,18 @@ def _detect_section(text: str) -> str | None:
     return None
 
 
+_RANK_BANDS = ("1", "2", "3-4", "5-8", "9-16", "17-32", "33-64", "65-128")
+
+
+def _parse_rank_text(text: str) -> str | None:
+    """Return the rank text if it is a known band or an integer 1-128, else None."""
+    if text in _RANK_BANDS:
+        return text
+    if text.isdigit() and 1 <= int(text) <= 128:
+        return text
+    return None
+
+
 def scrape_deck_robust(
     event_id: int,
     deck_id: int,
@@ -253,16 +265,10 @@ def scrape_deck_robust(
     chosen = soup.find("div", class_="chosen_tr")
     if chosen:
         for div in chosen.find_all("div", class_="S14"):
-            text = div.get_text(strip=True)
-            if text in ("1", "2", "3-4", "5-8", "9-16", "17-32"):
-                rank = text
+            parsed = _parse_rank_text(div.get_text(strip=True))
+            if parsed is not None:
+                rank = parsed
                 break
-            # Some events show single numbers (3, 4, 5, ... 32); accept them
-            if text.isdigit():
-                n = int(text)
-                if 1 <= n <= 32:
-                    rank = text
-                    break
 
     archetype_link = soup.find("a", href=re.compile(r"archetype\?a="))
     if archetype_link:
@@ -338,6 +344,7 @@ def scrape(
     on_progress: Callable[[str], None] | None = None,
     skip_event_ids: set[int] | None = None,
     should_stop: Callable[[], bool] | None = None,
+    on_deck_error: Callable[[int, int, str], None] | None = None,
 ) -> list[Deck]:
     """
     Scrape decks from MTGTop8.
@@ -351,6 +358,8 @@ def scrape(
         on_progress: Optional callback for progress messages
         skip_event_ids: If set, events whose event_id is in this set are not scraped at all.
         should_stop: Optional callable; if it returns True, scraping stops and current decks are returned.
+        on_deck_error: Optional callback(event_id, deck_id, message) for a deck that failed to fetch;
+            a failed deck never aborts the run.
     """
     session = requests.Session()
     session.trust_env = False
@@ -419,6 +428,12 @@ def scrape(
         worker_session.headers.update({"User-Agent": "MTGTop8Scraper/1.0"})
         return scrape_deck_robust(eid, did, fmt, worker_session)
 
+    def _report_deck_failure(eid: int, did: int, exc: Exception) -> None:
+        if on_deck_error:
+            on_deck_error(eid, did, str(exc))
+        if on_progress:
+            on_progress(f"  Deck {did} failed: {exc}")
+
     decks: list[Deck] = []
     for i, ev in enumerate(events, 1):
         if should_stop and should_stop():
@@ -435,7 +450,11 @@ def scrape(
                     break
                 if on_progress:
                     on_progress(f"  Parsing deck {j}/{len(deck_ids)} (id={did})...")
-                deck = scrape_deck_robust(ev.event_id, did, format_id, session)
+                try:
+                    deck = scrape_deck_robust(ev.event_id, did, format_id, session)
+                except Exception as exc:
+                    _report_deck_failure(ev.event_id, did, exc)
+                    continue
                 if deck:
                     if not ev.name and (deck.event_name and deck.event_name != "Unknown"):
                         ev.name, ev.store, ev.location = parse_event_display(deck.event_name)
@@ -453,8 +472,9 @@ def scrape(
                         on_progress(f"  Parsing deck {j}/{len(deck_ids)} (id={did})...")
                     try:
                         deck = future.result()
-                    except Exception:
-                        deck = None
+                    except Exception as exc:
+                        _report_deck_failure(ev.event_id, did, exc)
+                        continue
                     if deck:
                         if not ev.name and (
                             deck.event_name and deck.event_name != "Unknown"

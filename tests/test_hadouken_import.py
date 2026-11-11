@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.mtgtop8.hadouken import HadoukenEvent, HadoukenPairing, HadoukenStanding
+from src.mtgtop8.hadouken import HadoukenBye, HadoukenEvent, HadoukenPairing, HadoukenStanding
 
 from api import db as _db
 from api.services.hadouken import (
@@ -55,29 +55,6 @@ def test_suggest_matches_uses_each_deck_once_and_prefers_stronger_match():
 
 
 # --- Integration tests (require DATABASE_URL; rolled back) ---
-
-
-@pytest.fixture
-def db_session_rollback():
-    """Session that rolls back so no data is committed. Skips when DATABASE_URL is unset or DB unreachable."""
-    from sqlalchemy import text
-    from sqlalchemy.exc import OperationalError
-
-    if not _db.is_database_available():
-        pytest.skip("DATABASE_URL not set")
-    factory = _db.get_session_factory_cached()
-    if factory is None:
-        pytest.skip("DATABASE_URL not set")
-    try:
-        session = factory()
-        session.execute(text("SELECT 1"))
-    except OperationalError:
-        pytest.skip("Database unreachable (e.g. no network)")
-    try:
-        yield session
-    finally:
-        session.rollback()
-        session.close()
 
 
 _EID = "test_hado_1"
@@ -284,3 +261,26 @@ def test_apply_rejects_new_deck_for_player_already_in_event(db_session_rollback)
     _setup_mtgtop8_event(session)
     with pytest.raises(ValueError):
         apply_import(session, _EID, _hadouken_event(), {_A: None})
+
+
+def test_apply_imports_byes(db_session_rollback):
+    session = db_session_rollback
+    ids = _setup_mtgtop8_event(session)
+    hev = _hadouken_event()
+    hev.byes = [HadoukenBye(3, _A), HadoukenBye(3, "Not In Standings")]
+
+    preview = build_preview(session, _EID, hev)
+    assert preview["byes"] == [{"round": 3, "player": _A}, {"round": 3, "player": "Not In Standings"}]
+
+    player_map = {_A: ids[_A], "Hadotest Zqxb": ids[_B]}
+    for _ in range(2):  # re-import replaces the bye instead of duplicating it
+        result = apply_import(session, _EID, hev, player_map)
+        session.flush()
+        player_map = {p["name"]: p["deck_id"] for p in build_preview(session, _EID, hev)["players"]}
+        assert result["byes_imported"] == 1
+        byes = session.query(_db.MatchupRow).filter(
+            _db.MatchupRow.deck_id == ids[_A], _db.MatchupRow.result == "bye"
+        ).all()
+        assert [(b.round, b.opponent_player, b.opponent_player_id, b.opponent_deck_id) for b in byes] == [
+            (3, "Bye", None, None)
+        ]

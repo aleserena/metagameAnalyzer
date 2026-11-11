@@ -41,7 +41,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           localStorage.removeItem(STORAGE_KEY)
         }
       })
-      .catch(() => localStorage.removeItem(STORAGE_KEY))
+      .catch(() => {
+        // Network error: keep the token and the session; only a server rejection logs out.
+        setUser('admin')
+      })
       .finally(() => setLoading(false))
   }, [])
 

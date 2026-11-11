@@ -69,33 +69,6 @@ def test_swiss_rounds_for_players():
 # --- Integration tests (require DATABASE_URL; skip otherwise) ---
 
 
-@pytest.fixture
-def db_session_rollback():
-    """Session that rolls back so no data is committed. Skips when DATABASE_URL is unset or DB unreachable."""
-    from sqlalchemy.exc import OperationalError
-
-    from api.db import get_session_factory_cached, is_database_available
-
-    if not is_database_available():
-        pytest.skip("DATABASE_URL not set")
-    factory = get_session_factory_cached()
-    if factory is None:
-        pytest.skip("DATABASE_URL not set")
-    try:
-        from sqlalchemy import text
-
-        session = factory()
-        # Touch the DB to ensure we can connect (e.g. skip in CI when DB is unreachable)
-        session.execute(text("SELECT 1"))
-    except OperationalError:
-        pytest.skip("Database unreachable (e.g. no network)")
-    try:
-        yield session
-    finally:
-        session.rollback()
-        session.close()
-
-
 # Deck IDs and event IDs used only in tests to avoid clashes
 _TEST_EVENT_PREFIX = "test_cm_"
 _TEST_DECK_ID_BASE = 989000
@@ -400,3 +373,111 @@ def test_upsert_same_opponent_different_rounds(db_session_rollback):
     assert len(bob_rows) == 2
     rounds = sorted(r["round"] for r in bob_rows)
     assert rounds == [1, 4]
+
+
+def test_match_record_counts_intentional_draw_winners(db_session_rollback):
+    from api.db import match_record_for_decks
+
+    session = db_session_rollback
+    eid = f"{_TEST_EVENT_PREFIX}record"
+    create_event(session, "Rec", "01/01/25", "ST", event_id=eid, player_count=4)
+    upsert_deck(session, _make_deck(_TEST_DECK_ID_BASE + 901, eid, "Rec Player"))
+    session.flush()
+    upsert_matchups_for_deck(
+        session,
+        _TEST_DECK_ID_BASE + 901,
+        [
+            {"opponent_player": "Rec Opp 1", "result": "win", "round": 1},
+            {"opponent_player": "Rec Opp 2", "result": "intentional_draw_win", "round": 2},
+            {"opponent_player": "Rec Opp 3", "result": "intentional_draw_loss", "round": 3},
+            {"opponent_player": "Rec Opp 4", "result": "draw", "round": 4},
+            {"opponent_player": "Bye", "result": "bye", "round": 5},
+        ],
+    )
+    session.flush()
+    assert match_record_for_decks(session, [_TEST_DECK_ID_BASE + 901]) == {
+        "recorded_matches": 4,
+        "match_wins": 2,
+        "match_losses": 1,
+        "match_draws": 1,
+        "match_win_pct": 50.0,
+    }
+
+
+def test_update_matchup_mirrors_result_and_round(db_session_rollback):
+    from api.db import MatchupRow, update_matchup
+
+    session = db_session_rollback
+    eid = f"{_TEST_EVENT_PREFIX}patch"
+    a, b = _TEST_DECK_ID_BASE + 911, _TEST_DECK_ID_BASE + 912
+    create_event(session, "Patch", "01/01/25", "ST", event_id=eid, player_count=2)
+    upsert_deck(session, _make_deck(a, eid, "Patch A"))
+    upsert_deck(session, _make_deck(b, eid, "Patch B"))
+    session.flush()
+    upsert_matchups_for_deck(
+        session, a, [{"opponent_player": "Patch B", "opponent_deck_id": b, "result": "win", "round": 1}]
+    )
+    session.flush()
+    mine = session.query(MatchupRow).filter(MatchupRow.deck_id == a).one()
+    assert update_matchup(session, mine.id, result="loss", round=2) is True
+    session.flush()
+    theirs = session.query(MatchupRow).filter(MatchupRow.deck_id == b).one()
+    assert (theirs.result, theirs.round) == ("win", 2)
+
+
+def test_matchup_listings_do_not_select_decklists(db_session_rollback, sql_log):
+    from api.db import list_matchups_with_deck_and_players, list_matchups_with_deck_info
+
+    session = db_session_rollback
+    eid = f"{_TEST_EVENT_PREFIX}slim"
+    a, b = _TEST_DECK_ID_BASE + 921, _TEST_DECK_ID_BASE + 922
+    create_event(session, "Slim", "01/01/25", "ST", event_id=eid, player_count=2)
+    upsert_deck(session, _make_deck(a, eid, "Slim A"))
+    upsert_deck(session, _make_deck(b, eid, "Slim B"))
+    session.flush()
+    upsert_matchups_for_deck(
+        session, a, [{"opponent_player": "Slim B", "opponent_deck_id": b, "result": "win", "round": 1}]
+    )
+    session.flush()
+    sql_log.clear()
+    info = [r for r in list_matchups_with_deck_info(session) if r["event_id"] == eid]
+    players = [r for r in list_matchups_with_deck_and_players(session) if r["event_id"] == eid]
+    against = list_matchups_reported_against_player_id(session, eid, players[0]["opponent_player_id"])
+    assert against
+    assert not any("mainboard" in s or "sideboard" in s for s in sql_log)
+    assert set(info[0]) == {
+        "deck_id",
+        "opponent_deck_id",
+        "archetype",
+        "format_id",
+        "event_id",
+        "date",
+        "opponent_archetype",
+        "result",
+        "result_note",
+        "round",
+    }
+    assert set(players[0]) == set(info[0]) | {"player_id", "opponent_player_id", "player", "opponent_player"}
+    assert sorted((r["player"], r["opponent_player"], r["result"]) for r in players) == [
+        ("Slim A", "Slim B", "win"),
+        ("Slim B", "Slim A", "loss"),
+    ]
+
+
+def test_byes_count_in_the_bulk_completeness_check(db_session_rollback):
+    session = db_session_rollback
+    eid = f"{_TEST_EVENT_PREFIX}byes"
+    a, b, c = (_TEST_DECK_ID_BASE + n for n in (931, 932, 933))
+    create_event(session, "Byes", "01/01/25", "ST", event_id=eid, player_count=3)
+    for did, name in ((a, "Bye A"), (b, "Bye B"), (c, "Bye C")):
+        upsert_deck(session, _make_deck(did, eid, name))
+    session.flush()
+    upsert_matchups_for_deck(session, b, [{"opponent_player": "Bye", "result": "bye", "round": 2}])
+    upsert_matchups_for_deck(session, c, [{"opponent_player": "Bye", "result": "bye", "round": 1}])
+    session.flush()
+    upsert_matchups_for_deck(session, a, [
+        {"opponent_player": "Bye B", "opponent_deck_id": b, "result": "win", "round": 1},
+        {"opponent_player": "Bye C", "opponent_deck_id": c, "result": "win", "round": 2}])
+    session.flush()
+    assert list_missing_matchups_for_event(session, eid) == []
+    assert eid in list_event_ids_with_complete_matchups(session)

@@ -10,6 +10,7 @@
     "lint": "npm run lint:py && npm run lint:web",
     "lint:py": "ruff check .",
     "lint:web": "cd web && npm run lint",
+    "deps:compile": "python3 scripts/compile_requirements.py",
     "gen:routes": "python3 scripts/gen_api_routes.py",
     "gen:routes:check": "python3 scripts/gen_api_routes.py --check",
     "prepare": "husky",

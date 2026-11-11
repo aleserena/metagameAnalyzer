@@ -79,6 +79,32 @@ export interface MatchupRow {
   phase?: MatchupPhase
 }
 
+/** Opponent option paired with each special result: picking one side selects the other. */
+const SPECIAL_OPPONENT_BY_RESULT: Record<string, string> = { bye: 'Bye', drop: '(drop)' }
+const SPECIAL_RESULT_BY_OPPONENT: Record<string, string> = { Bye: 'bye', '(drop)': 'drop' }
+
+/**
+ * Apply an edit to a matchup row, keeping Bye/drop in sync: choosing opponent "Bye" sets result "bye"
+ * (and vice versa); moving away from one side clears the now-mismatched other side.
+ */
+export function updateMatchupRowField(
+  row: MatchupRow,
+  field: 'opponent_player' | 'result' | 'intentional_draw',
+  value: string | boolean
+): MatchupRow {
+  const next = { ...row, [field]: value }
+  if (field === 'opponent_player') {
+    const special = SPECIAL_RESULT_BY_OPPONENT[String(value)]
+    if (special) next.result = special
+    else if (SPECIAL_OPPONENT_BY_RESULT[row.result]) next.result = 'draw'
+  } else if (field === 'result') {
+    const special = SPECIAL_OPPONENT_BY_RESULT[String(value)]
+    if (special) next.opponent_player = special
+    else if (SPECIAL_RESULT_BY_OPPONENT[row.opponent_player]) next.opponent_player = ''
+  }
+  return next
+}
+
 export interface ApiMatchupItem {
   opponent_player?: string
   result?: string

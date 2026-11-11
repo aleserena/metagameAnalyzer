@@ -6,6 +6,7 @@ from api.dependencies import (
     require_admin,
     require_database,
 )
+from api.results import effective_wld
 from api.schemas.matchups import PatchMatchupBody
 
 try:
@@ -13,6 +14,7 @@ try:
 except ImportError:
     _db = None
 from fastapi import APIRouter
+from sqlalchemy.exc import IntegrityError
 
 from api.route_helpers import (
     _date_in_range,
@@ -22,22 +24,6 @@ from api.route_helpers import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-
-def _to_effective_wld(result: str) -> tuple[int, int, int]:
-    raw = (result or "loss").strip().lower()
-    if raw == "intentional_draw":
-        return (0, 0, 1)
-    if raw == "intentional_draw_win":
-        return (1, 0, 0)
-    if raw == "intentional_draw_loss":
-        return (0, 1, 0)
-    canonical = _matchup_result_to_canonical(result or "loss")
-    if canonical == "win":
-        return (1, 0, 0)
-    if canonical == "loss":
-        return (0, 1, 0)
-    return (0, 0, 1)
 
 
 def _front_face_name(name: str) -> str:
@@ -120,14 +106,19 @@ def get_matchups_summary(
                 canonical_archetype.setdefault(raw.lower(), raw)
 
     def to_effective_wld(row):
-        return _to_effective_wld(row.get("result") or "loss")
+        return effective_wld(row.get("result") or "loss") or (0, 0, 1)
 
     def norm_arch(name: str) -> str:
         return canonical_archetype.get((name or "").lower(), name or "(unknown)")
 
     def add_to_agg(arch: str, opp: str, wins: int, losses: int, draws: int, is_intentional_draw: bool, matches: int):
         arch, opp = norm_arch(arch), norm_arch(opp)
-        for (a, o), (aw, al, ad) in [((arch, opp), (wins, losses, draws)), ((opp, arch), (losses, wins, draws))]:
+        if arch.lower() == opp.lower():
+            # Mirror match: one entry, counted once; each decisive match is one win and one loss.
+            directions = [((arch, opp), (wins + losses, wins + losses, draws))]
+        else:
+            directions = [((arch, opp), (wins, losses, draws)), ((opp, arch), (losses, wins, draws))]
+        for (a, o), (aw, al, ad) in directions:
             key = (a.lower(), o.lower())
             if key not in agg:
                 agg[key] = {"wins": 0, "losses": 0, "draws": 0, "intentional_draws": 0, "matches": 0, "archetype": a, "opponent_archetype": o}
@@ -206,6 +197,8 @@ def get_matchups_summary(
         if not _pair_included_in_summary(v["matches"]):
             continue
         wr = (v["wins"] + 0.5 * v["draws"]) / v["matches"] if v["matches"] else 0
+        if _arch_lower == _opp_lower:
+            wr = 0.5
         list_out.append({
             "archetype": v["archetype"],
             "opponent_archetype": v["opponent_archetype"],
@@ -278,19 +271,7 @@ def get_matchups_players_summary(
         filtered.append(r)
 
     def to_effective_wld(row):
-        raw = (row.get("result") or "loss").strip().lower()
-        if raw == "intentional_draw":
-            return (0, 0, 1)
-        if raw == "intentional_draw_win":
-            return (1, 0, 0)
-        if raw == "intentional_draw_loss":
-            return (0, 1, 0)
-        canonical = _matchup_result_to_canonical(row.get("result") or "loss")
-        if canonical == "win":
-            return (1, 0, 0)
-        if canonical == "loss":
-            return (0, 1, 0)
-        return (0, 0, 1)
+        return effective_wld(row.get("result") or "loss") or (0, 0, 1)
 
     # Aggregate by (player, opponent_player). Use front-face name so "Norman Osborn" and
     # "Norman Osborn // Green Goblin" are one row (dual-faced names unified across the app).
@@ -449,14 +430,17 @@ def get_matchups_players_summary(
 @router.patch("/api/v1/matchups/{matchup_id}", dependencies=[Depends(require_admin), Depends(require_database)])
 def patch_matchup(matchup_id: int, body: PatchMatchupBody):
     """Update a matchup result (admin fix for discrepancies or one-sided reports)."""
-    with _db.session_scope() as session:
-        ok = _db.update_matchup(
-            session,
-            matchup_id,
-            result=body.result,
-            result_note=body.result_note,
-            round=body.round,
-        )
+    try:
+        with _db.session_scope() as session:
+            ok = _db.update_matchup(
+                session,
+                matchup_id,
+                result=body.result,
+                result_note=body.result_note,
+                round=body.round,
+            )
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail="A result already exists for that round")
     if not ok:
         raise HTTPException(status_code=404, detail="Matchup not found")
     return {"ok": True}

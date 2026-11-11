@@ -12,16 +12,19 @@ import os
 import re
 import unicodedata
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import (
     Column,
+    Date,
     DateTime,
     Float,
+    ForeignKey,
     Integer,
     String,
     Text,
+    UniqueConstraint,
     bindparam,
     create_engine,
     func,
@@ -30,7 +33,10 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.orm import Session, aliased, declarative_base, sessionmaker
+from sqlalchemy.orm import Session, aliased, declarative_base, sessionmaker, validates
+
+from api.dates import parse_ddmmyy
+from api.results import COUNTED_RESULTS, effective_wld, invert_result
 
 logger = logging.getLogger(__name__)
 
@@ -54,26 +60,41 @@ class EventRow(Base):
     store = Column(String(512), nullable=False, default="")
     location = Column(String(512), nullable=False, default="")
     date = Column(String(32), nullable=False, default="")  # DD/MM/YY
+    event_date = Column(Date, nullable=True, index=True)  # parsed from `date` (see _sync_event_date)
     player_count = Column(Integer, nullable=False, default=0)  # number of players in the event
+
+    @validates("date")
+    def _sync_event_date(self, _key, value):
+        self.event_date = parse_ddmmyy(value)
+        return value
 
 
 class PlayerRow(Base):
     __tablename__ = "players"
     id = Column(Integer, primary_key=True, autoincrement=True)
     display_name = Column(Text, nullable=False, unique=True)
+    # Accent-insensitive lowercase form of display_name (see _normalize_name_for_lookup); indexed for lookups.
+    name_key = Column(Text, nullable=True, index=True)
+
+    @validates("display_name")
+    def _sync_name_key(self, _key, value):
+        self.name_key = _normalize_name_for_lookup(value or "")
+        return value
 
 
 class DeckRow(Base):
     __tablename__ = "decks"
+    __table_args__ = (UniqueConstraint("event_id", "player_id", name="uq_decks_event_id_player_id"),)
     deck_id = Column(Integer, primary_key=True)
     event_id = Column(String(32), nullable=False)  # matches events.event_id (string)
     origin = Column(String(32), nullable=False, default=ORIGIN_MTGTOP8)
     format_id = Column(String(32), nullable=False, default="")
     name = Column(String(512), nullable=False, default="")
-    player_id = Column(Integer, nullable=False)  # FK to players.id
+    player_id = Column(Integer, ForeignKey("players.id", name="fk_decks_player_id"), nullable=False)
     player = Column(String(512), nullable=False, default="")  # denormalized display name
     event_name = Column(String(512), nullable=False, default="")
     date = Column(String(32), nullable=False, default="")
+    event_date = Column(Date, nullable=True, index=True)  # parsed from `date` (see _sync_event_date)
     rank = Column(String(32), nullable=False, default="")
     player_count = Column(Integer, nullable=False, default=0)
     commanders = Column(JSONB, nullable=False)  # list of strings
@@ -82,11 +103,16 @@ class DeckRow(Base):
     sideboard = Column(JSONB, nullable=False)
     # deck_id is globally unique: MTGTop8 use site IDs; manual use MANUAL_DECK_ID_START+
 
+    @validates("date")
+    def _sync_event_date(self, _key, value):
+        self.event_date = parse_ddmmyy(value)
+        return value
+
 
 class PlayerAliasRow(Base):
     __tablename__ = "player_aliases"
     alias = Column(Text, primary_key=True)
-    player_id = Column(Integer, nullable=False)  # FK to players.id
+    player_id = Column(Integer, ForeignKey("players.id", name="fk_player_aliases_new_player_id"), nullable=False)
 
 
 class SettingsRow(Base):
@@ -95,6 +121,7 @@ class SettingsRow(Base):
     value = Column(JSONB, nullable=False)
 
 
+DEFAULT_LINK_EXPIRY_DAYS = 7
 LINK_TYPE_DECK_UPLOAD = "deck_upload"
 LINK_TYPE_DECK_UPDATE = "deck_update"
 LINK_TYPE_EVENT_EDIT = "event_edit"
@@ -103,19 +130,24 @@ LINK_TYPE_FEEDBACK = "feedback"
 
 class PlayerEmailRow(Base):
     __tablename__ = "player_emails"
-    player_id = Column(Integer, primary_key=True)  # FK to players.id
+    player_id = Column(Integer, ForeignKey("players.id", name="fk_player_emails_new_player_id"), primary_key=True)
     email = Column(Text, nullable=False)
 
 
 class MatchupRow(Base):
     __tablename__ = "matchups"
+    __table_args__ = (
+        UniqueConstraint("deck_id", "round", "opponent_player", name="uq_matchups_deck_id_round_opponent_player"),
+    )
     id = Column(Integer, primary_key=True, autoincrement=True)
-    deck_id = Column(Integer, nullable=False)
-    opponent_player_id = Column(Integer, nullable=True)  # FK to players.id; NULL for Bye/drop
+    deck_id = Column(Integer, ForeignKey("decks.deck_id", ondelete="CASCADE"), nullable=False, index=True)
+    opponent_player_id = Column(
+        Integer, ForeignKey("players.id", name="fk_matchups_opponent_player_id"), nullable=True
+    )  # NULL for Bye/drop
     opponent_player = Column(String(512), nullable=False)  # display name or "Bye"/"(drop)"
-    opponent_deck_id = Column(Integer, nullable=True)
+    opponent_deck_id = Column(Integer, ForeignKey("decks.deck_id", ondelete="SET NULL"), nullable=True)
     opponent_archetype = Column(String(512), nullable=True)
-    result = Column(String(32), nullable=False)  # win | loss | draw | intentional_draw
+    result = Column(String(32), nullable=False)  # win | loss | draw | intentional_draw | intentional_draw_win | intentional_draw_loss (+ bye | drop | 2-1 | 1-2 | 1-0 | 0-1 | 1-1 | 0-0); see api/results.py
     result_note = Column(String(512), nullable=True)
     round = Column(Integer, nullable=True)
 
@@ -143,8 +175,9 @@ class CardRow(Base):
 
     __tablename__ = "cards"
     name = Column(String(512), primary_key=True)  # canonical MTGJSON name, e.g. "Fire // Ice"
+    front_face_name = Column(String(512), nullable=True, index=True)  # text before " // " for multi-face names, else NULL
     scryfall_id = Column(String(64), nullable=True)  # representative printing's identifiers.scryfallId
-    mtgjson_uuid = Column(String(64), nullable=True)  # representative printing UUID (joins AllPricesToday)
+    mtgjson_uuid = Column(String(64), nullable=True, index=True)  # representative printing UUID (joins AllPricesToday)
     mana_cost = Column(String(128), nullable=False, default="")
     cmc = Column(Float, nullable=False, default=0)  # MTGJSON manaValue
     type_line = Column(String(512), nullable=False, default="")
@@ -457,13 +490,27 @@ def update_deck_event(
     return True
 
 
+MANUAL_ID_LOCK_KEY = 815001
+
+
+def _lock_manual_ids(session: Session) -> None:
+    """Serialise manual ID allocation: a transaction-scoped advisory lock, released at commit/rollback.
+
+    Allocate in the same session that inserts the rows, so the lock is held until they are committed.
+    """
+    session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": MANUAL_ID_LOCK_KEY})
+
+
 def next_manual_deck_id(session: Session) -> int:
     """Return next deck_id for manual uploads (>= MANUAL_DECK_ID_START).
 
     Must be strictly greater than every existing deck_id (MTGTop8 and manual) to avoid PK collisions.
+    Takes the manual-ID advisory lock. Sessions do not autoflush, so allocating several IDs in one
+    transaction means taking the first from here and counting up, or flushing in between.
     """
     from sqlalchemy import func
 
+    _lock_manual_ids(session)
     r = session.query(func.max(DeckRow.deck_id)).scalar()
     next_after_max = (r or 0) + 1
     return max(MANUAL_DECK_ID_START, next_after_max)
@@ -500,7 +547,7 @@ def _normalize_boards(d: dict) -> tuple[list[dict], list[dict]]:
 
 
 def get_all_events(session: Session) -> list[dict]:
-    rows = session.query(EventRow).order_by(EventRow.date.desc(), EventRow.event_id).all()
+    rows = session.query(EventRow).order_by(EventRow.event_date.desc().nulls_last(), EventRow.event_id).all()
     return [event_row_to_dict(r) for r in rows]
 
 
@@ -542,15 +589,13 @@ def list_event_ids_with_complete_matchups(session: Session) -> list[str]:
         .filter(DeckRow.event_id.in_(event_ids))
         .all()
     )
-    # event_id -> [(deck_id, player_id, player)], event_id -> set(deck_id), and event_id -> player_id -> [deck_id]
+    # event_id -> [(deck_id, player_id, player)] and event_id -> set(deck_id)
     decks_by_event: dict[str, list[tuple[int, int, str]]] = {}
     event_deck_ids: dict[str, set[int]] = {}
-    event_player_to_decks: dict[str, dict[int, list[int]]] = {}
     for eid, deck_id, pid, player in deck_rows:
         eid = (eid or "").strip()
         decks_by_event.setdefault(eid, []).append((deck_id, pid, (player or "").strip()))
         event_deck_ids.setdefault(eid, set()).add(deck_id)
-        event_player_to_decks.setdefault(eid, {}).setdefault(pid, []).append(deck_id)
     # Decks that have any result=drop (exempt from expected count)
     all_deck_ids = {did for s in event_deck_ids.values() for did in s}
     dropped_deck_ids: set[int] = set()
@@ -562,62 +607,35 @@ def list_event_ids_with_complete_matchups(session: Session) -> list[str]:
             .all()
         )
         dropped_deck_ids = {r[0] for r in dropped_rows}
-    # All matchups for these decks, with event_id and opponent_player_id
-    matchup_rows = (
+    # All matchups for these decks, grouped by event once
+    matchups_by_event: dict[str, list[tuple[int, int | None, int | None, str]]] = {}
+    for ev, did, opp_did, opp_pid, opp_name in (
         session.query(
             DeckRow.event_id,
             MatchupRow.deck_id,
             MatchupRow.opponent_deck_id,
             MatchupRow.opponent_player_id,
+            MatchupRow.opponent_player,
         )
         .join(MatchupRow, MatchupRow.deck_id == DeckRow.deck_id)
         .filter(DeckRow.event_id.in_(event_ids))
         .all()
-    )
+    ):
+        matchups_by_event.setdefault((ev or "").strip(), []).append((did, opp_did, opp_pid, opp_name))
 
     result = []
     for eid in event_ids:
         decks = decks_by_event.get(eid, [])
-        n = len(decks)
-        expected = _swiss_rounds_for_players(n)
-        if n == 0:
+        if not decks:
             result.append(eid)
             continue
-        ev_deck_ids = event_deck_ids.get(eid, set())
-        dropped_in_event = dropped_deck_ids & ev_deck_ids
-        player_id_to_deck_ids = event_player_to_decks.get(eid, {})
-        reported_by: dict[int, set[int]] = {}
-        reported_against: dict[int, set[int]] = {}
-        for ev, did, opp_did, opp_pid in matchup_rows:
-            if ev != eid:
-                continue
-            if did not in reported_by:
-                reported_by[did] = set()
-            if opp_did is not None and opp_did in ev_deck_ids:
-                reported_by[did].add(opp_did)
-            elif opp_pid is not None:
-                for opp_did_in_ev in player_id_to_deck_ids.get(opp_pid, []):
-                    if opp_did_in_ev != did:
-                        reported_by[did].add(opp_did_in_ev)
-            if did not in ev_deck_ids:
-                continue
-            victims = set()
-            if opp_did is not None and opp_did in ev_deck_ids:
-                victims.add(opp_did)
-            if opp_pid is not None:
-                victims.update(player_id_to_deck_ids.get(opp_pid, []))
-            for victim in victims:
-                if victim != did:
-                    reported_against.setdefault(victim, set()).add(did)
-        has_missing = False
-        for did, _pid, _ in decks:
-            if did in dropped_in_event:
-                continue
-            effective = reported_by.get(did, set()) | reported_against.get(did, set())
-            if len(effective) < expected:
-                has_missing = True
-                break
-        if not has_missing:
+        missing = _decks_missing_matchups(
+            decks,
+            matchups_by_event.get(eid, []),
+            dropped_deck_ids & event_deck_ids.get(eid, set()),
+            _swiss_rounds_for_players(len(decks)),
+        )
+        if not missing:
             result.append(eid)
     return result
 
@@ -640,7 +658,8 @@ def _event_id_str(value: int | str) -> str:
 
 
 def next_manual_event_id(session: Session) -> str:
-    """Return next manual event id: m1, m2, m3, ..."""
+    """Return next manual event id: m1, m2, m3, ... (takes the manual-ID advisory lock)."""
+    _lock_manual_ids(session)
     rows = (
         session.query(EventRow.event_id)
         .filter(EventRow.origin == ORIGIN_MANUAL, EventRow.event_id.like(f"{MANUAL_EVENT_ID_PREFIX}%"))
@@ -716,7 +735,48 @@ def update_event(
         row.store = store
     if location is not None:
         row.location = location
+    sync_decks_with_event(session, eid)
     return True
+
+
+def sync_decks_with_event(
+    session: Session, event_id: int | str, changes: list | None = None
+) -> int:
+    """Copy the event's name, date, format and player count onto its decks.
+
+    Each deck stores its own copy of these fields. Empty event values are skipped so a
+    partly filled event never blanks a deck's copy, and ``player_count`` is copied only
+    when the event's is above 0. Returns the number of decks changed. If ``changes`` is a
+    list, a ``(deck_id, field, old, new)`` tuple is appended for every field changed.
+    """
+    from src.mtgtop8.scraper import event_display_name
+
+    eid = _event_id_str(event_id)
+    ev = session.query(EventRow).filter(EventRow.event_id == eid).first()
+    if not ev:
+        return 0
+    wanted: dict[str, object] = {}
+    if (ev.name or "").strip():
+        wanted["event_name"] = event_display_name(ev.name, ev.store, ev.location)
+    if ev.date:
+        wanted["date"] = ev.date
+    if ev.format_id:
+        wanted["format_id"] = ev.format_id
+    if (ev.player_count or 0) > 0:
+        wanted["player_count"] = ev.player_count
+    changed = 0
+    for deck in session.query(DeckRow).filter(DeckRow.event_id == eid).all():
+        touched = False
+        for attr, value in wanted.items():
+            old = getattr(deck, attr)
+            if old != value:
+                if changes is not None:
+                    changes.append((deck.deck_id, attr, old, value))
+                setattr(deck, attr, value)
+                touched = True
+        if touched:
+            changed += 1
+    return changed
 
 
 def delete_event(session: Session, event_id: int | str, delete_decks: bool = False) -> bool:
@@ -774,10 +834,12 @@ def create_upload_link(
     deck_id: int | None = None,
     link_type: str = LINK_TYPE_DECK_UPLOAD,
 ) -> EventUploadLinkRow:
-    """Insert a one-time upload link. Token from secrets.token_urlsafe(32). If deck_id is set and link_type is deck_upload, becomes deck_update. link_type: deck_upload | deck_update | event_edit | feedback."""
+    """Insert a one-time upload link. Token from secrets.token_urlsafe(32). If deck_id is set and link_type is deck_upload, becomes deck_update. link_type: deck_upload | deck_update | event_edit | feedback. Without expires_at the link expires after DEFAULT_LINK_EXPIRY_DAYS (naive UTC)."""
     eid = _event_id_str(event_id)
     if deck_id is not None and link_type == LINK_TYPE_DECK_UPLOAD:
         link_type = LINK_TYPE_DECK_UPDATE
+    if expires_at is None:
+        expires_at = utcnow_naive() + timedelta(days=DEFAULT_LINK_EXPIRY_DAYS)
     row = EventUploadLinkRow(
         token=token,
         event_id=eid,
@@ -790,16 +852,29 @@ def create_upload_link(
     return row
 
 
-def get_upload_link(session: Session, token: str) -> EventUploadLinkRow | None:
-    return session.query(EventUploadLinkRow).filter(EventUploadLinkRow.token == token).first()
+def get_upload_link(session: Session, token: str, *, for_update: bool = False) -> EventUploadLinkRow | None:
+    query = session.query(EventUploadLinkRow).filter(EventUploadLinkRow.token == token)
+    if for_update:
+        query = query.with_for_update()
+    return query.first()
 
 
 def mark_upload_link_used(session: Session, token: str) -> bool:
     row = session.query(EventUploadLinkRow).filter(EventUploadLinkRow.token == token).first()
     if not row:
         return False
-    row.used_at = datetime.utcnow()
+    row.used_at = utcnow_naive()
     return True
+
+
+def utcnow_naive() -> datetime:
+    """Current UTC time as a naive datetime (the convention for the DB's timestamp columns)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def iso_utc(dt: datetime | None) -> str | None:
+    """ISO string for a naive-UTC datetime with a ``Z`` suffix, so browsers parse it as UTC."""
+    return dt.isoformat() + "Z" if dt else None
 
 
 def get_all_upload_links(session: Session) -> list[dict]:
@@ -811,9 +886,9 @@ def get_all_upload_links(session: Session) -> list[dict]:
             "event_id": r.event_id,
             "deck_id": getattr(r, "deck_id", None),
             "link_type": getattr(r, "link_type", "deck_upload"),
-            "created_at": r.created_at.isoformat() if r.created_at else None,
-            "used_at": r.used_at.isoformat() if r.used_at else None,
-            "expires_at": r.expires_at.isoformat() if r.expires_at else None,
+            "created_at": iso_utc(r.created_at),
+            "used_at": iso_utc(r.used_at),
+            "expires_at": iso_utc(r.expires_at),
             "label": r.label,
         }
         for r in rows
@@ -1029,18 +1104,7 @@ def count_effective_matchups_for_deck(session: Session, deck_id: int) -> int:
     return as_deck + as_opponent
 
 
-def _invert_matchup_result(result: str) -> str:
-    """Return the opponent's result: win<->loss, intentional_draw_win<->intentional_draw_loss, draw and intentional_draw unchanged."""
-    r = (result or "").strip().lower()
-    if r in ("win", "2-1", "1-0"):
-        return "loss"
-    if r in ("loss", "1-2", "0-1"):
-        return "win"
-    if r == "intentional_draw_win":
-        return "intentional_draw_loss"
-    if r == "intentional_draw_loss":
-        return "intentional_draw_win"
-    return result  # draw, intentional_draw, id, etc.
+_invert_matchup_result = invert_result
 
 
 def upsert_matchups_for_deck(
@@ -1149,12 +1213,29 @@ def update_matchup(
     row = get_matchup(session, matchup_id)
     if not row:
         return False
+    old_round = row.round
+    mirror = None
+    if row.opponent_deck_id is not None:
+        mirror = (
+            session.query(MatchupRow)
+            .filter(
+                MatchupRow.deck_id == row.opponent_deck_id,
+                MatchupRow.opponent_deck_id == row.deck_id,
+                MatchupRow.round.is_(None) if old_round is None else MatchupRow.round == old_round,
+                MatchupRow.id != row.id,
+            )
+            .first()
+        )
     if result is not None:
         row.result = result
+        if mirror is not None:
+            mirror.result = invert_result(result)
     if result_note is not None:
         row.result_note = result_note or None
     if round is not None:
         row.round = round
+        if mirror is not None:
+            mirror.round = round
     return True
 
 
@@ -1244,6 +1325,63 @@ def _swiss_rounds_for_players(n: int) -> int:
     return max(1, math.ceil(math.log2(n)))
 
 
+def _decks_missing_matchups(
+    decks: list[tuple[int, int, str]],
+    matchup_rows: list[tuple[int, int | None, int | None, str]],
+    dropped_deck_ids: set[int],
+    expected: int,
+) -> list[dict]:
+    """Pure completeness rule for one event.
+    decks: (deck_id, player_id, player); matchup_rows: (deck_id, opponent_deck_id, opponent_player_id,
+    opponent_player) for the event's decks only. A non-dropped deck is short when its distinct opponents
+    (reported by it or against it) plus its "Bye" rows are fewer than expected."""
+    event_deck_ids = {d[0] for d in decks}
+    player_id_to_deck_ids: dict[int, list[int]] = {}
+    for did, pid, _ in decks:
+        player_id_to_deck_ids.setdefault(pid, []).append(did)
+    rows_by_deck: dict[int, list[tuple[int, int | None, int | None, str]]] = {}
+    for row in matchup_rows:
+        rows_by_deck.setdefault(row[0], []).append(row)
+    # reporter deck ids per victim deck (rows reported against it)
+    against: dict[int, set[int]] = {}
+    for did, rows in rows_by_deck.items():
+        if did not in event_deck_ids:
+            continue
+        for _, opp_did, opp_pid, _opp_name in rows:
+            victims: set[int] = set()
+            if opp_did is not None and opp_did in event_deck_ids:
+                victims.add(opp_did)
+            if opp_pid is not None:
+                victims.update(player_id_to_deck_ids.get(opp_pid, []))
+            for victim in victims:
+                if victim != did:
+                    against.setdefault(victim, set()).add(did)
+    result = []
+    for deck_id, _my_pid, player in decks:
+        if deck_id in dropped_deck_ids:
+            continue
+        reported_by: set[int] = set()
+        bye_count = 0
+        for _, opp_did, opp_pid, opp_name in rows_by_deck.get(deck_id, []):
+            if opp_did is not None and opp_did in event_deck_ids:
+                reported_by.add(opp_did)
+            elif opp_pid is not None:
+                for other in player_id_to_deck_ids.get(opp_pid, []):
+                    if other != deck_id:
+                        reported_by.add(other)
+            if (opp_name or "").strip() == "Bye":
+                bye_count += 1
+        effective = len(reported_by | against.get(deck_id, set())) + bye_count
+        if effective < expected:
+            result.append({
+                "deck_id": deck_id,
+                "player": (player or "").strip() or "(unknown)",
+                "matchup_count": effective,
+                "expected_count": expected,
+            })
+    return result
+
+
 def list_missing_matchups_for_event(session: Session, event_id: str) -> list[dict]:
     """Decks in this event that have fewer matchups than expected (expected = Swiss rounds for player count).
     A round is counted as covered for a deck if either that deck reported it or another player reported
@@ -1257,22 +1395,16 @@ def list_missing_matchups_for_event(session: Session, event_id: str) -> list[dic
         .all()
     )
     n = len(decks)
-    expected = _swiss_rounds_for_players(n)
     if n == 0:
         return []
-    event_deck_ids = set(d.deck_id for d in decks)
-    player_id_to_deck_ids = {}
-    for d in decks:
-        player_id_to_deck_ids.setdefault(d.player_id, []).append(d.deck_id)
-    dropped_deck_ids = set()
-    if event_deck_ids:
-        rows = (
-            session.query(MatchupRow.deck_id)
-            .filter(MatchupRow.deck_id.in_(event_deck_ids), MatchupRow.result == "drop")
-            .distinct()
-            .all()
-        )
-        dropped_deck_ids = {r[0] for r in rows}
+    event_deck_ids = {d.deck_id for d in decks}
+    dropped_rows = (
+        session.query(MatchupRow.deck_id)
+        .filter(MatchupRow.deck_id.in_(event_deck_ids), MatchupRow.result == "drop")
+        .distinct()
+        .all()
+    )
+    dropped_deck_ids = {r[0] for r in dropped_rows}
     matchup_rows = (
         session.query(
             MatchupRow.deck_id,
@@ -1283,45 +1415,12 @@ def list_missing_matchups_for_event(session: Session, event_id: str) -> list[dic
         .filter(MatchupRow.deck_id.in_(event_deck_ids))
         .all()
     )
-    result = []
-    for d in decks:
-        deck_id, my_pid, player_name = d.deck_id, d.player_id, (d.player or "").strip() or "(unknown)"
-        if deck_id in dropped_deck_ids:
-            continue
-        reported_by = set()
-        for r in matchup_rows:
-            if r.deck_id != deck_id:
-                continue
-            if r.opponent_deck_id is not None and r.opponent_deck_id in event_deck_ids:
-                reported_by.add(r.opponent_deck_id)
-            elif r.opponent_player_id is not None:
-                for opp_did in player_id_to_deck_ids.get(r.opponent_player_id, []):
-                    if opp_did != deck_id:
-                        reported_by.add(opp_did)
-        reported_against = set()
-        for r in matchup_rows:
-            if r.deck_id == deck_id:
-                continue
-            if r.deck_id not in event_deck_ids:
-                continue
-            if r.opponent_deck_id == deck_id:
-                reported_against.add(r.deck_id)
-            elif r.opponent_player_id is not None and r.opponent_player_id == my_pid:
-                reported_against.add(r.deck_id)
-        bye_count = sum(
-            1
-            for r in matchup_rows
-            if r.deck_id == deck_id and (r.opponent_player or "").strip() == "Bye"
-        )
-        effective_count = len(reported_by | reported_against) + bye_count
-        if effective_count < expected:
-            result.append({
-                "deck_id": deck_id,
-                "player": player_name,
-                "matchup_count": effective_count,
-                "expected_count": expected,
-            })
-    return result
+    return _decks_missing_matchups(
+        [(d.deck_id, d.player_id, d.player) for d in decks],
+        [tuple(r) for r in matchup_rows],
+        dropped_deck_ids,
+        _swiss_rounds_for_players(n),
+    )
 
 
 def list_matchups_reported_against_player(session: Session, event_id: str, opponent_player: str) -> list[dict]:
@@ -1344,19 +1443,118 @@ def list_matchups_reported_against_player_id(session: Session, event_id: str, op
     if not deck_ids:
         return []
     rows = (
-        session.query(MatchupRow, DeckRow)
-        .join(DeckRow, MatchupRow.deck_id == DeckRow.deck_id)
+        session.query(DeckRow.player, MatchupRow.result, MatchupRow.round)
+        .join(MatchupRow, MatchupRow.deck_id == DeckRow.deck_id)
         .filter(DeckRow.event_id == eid, MatchupRow.opponent_player_id == opponent_player_id)
         .all()
     )
     return [
         {
-            "reporting_player": (d.player or "").strip(),
-            "result": (m.result or "").strip(),
-            "round": m.round,
+            "reporting_player": (player or "").strip(),
+            "result": (result or "").strip(),
+            "round": round_,
         }
-        for m, d in rows
+        for player, result, round_ in rows
     ]
+
+
+def match_record_for_decks(session: Session, deck_ids: list[int]) -> dict:
+    """Aggregate recorded per-match results (W/L/D) across the given decks."""
+    empty = {"recorded_matches": 0, "match_wins": 0, "match_losses": 0, "match_draws": 0, "match_win_pct": 0.0}
+    if not deck_ids:
+        return empty
+    rows = (
+        session.query(MatchupRow.result)
+        .filter(MatchupRow.deck_id.in_(deck_ids))
+        .filter(func.lower(MatchupRow.result).in_(COUNTED_RESULTS))
+        .all()
+    )
+    wins = losses = draws = 0
+    for (result,) in rows:
+        wld = effective_wld(result)
+        if wld is None:
+            continue
+        wins += wld[0]
+        losses += wld[1]
+        draws += wld[2]
+    total = wins + losses + draws
+    if not total:
+        return empty
+    return {
+        "recorded_matches": total,
+        "match_wins": wins,
+        "match_losses": losses,
+        "match_draws": draws,
+        "match_win_pct": round(wins / total * 100, 1),
+    }
+
+
+def match_winrate_by_player(session: Session, deck_ids: list[int] | None) -> dict[int, dict]:
+    """Map player_id -> {recorded_matches, match_win_pct}; deck_ids=None aggregates across all decks."""
+    if deck_ids is not None and not deck_ids:
+        return {}
+    q = (
+        session.query(DeckRow.player_id, MatchupRow.result)
+        .join(MatchupRow, MatchupRow.deck_id == DeckRow.deck_id)
+        .filter(func.lower(MatchupRow.result).in_(COUNTED_RESULTS))
+        .filter(DeckRow.player_id.isnot(None))
+    )
+    if deck_ids is not None:
+        q = q.filter(DeckRow.deck_id.in_(deck_ids))
+    tallies: dict[int, list[int]] = {}
+    for pid, result in q.all():
+        wld = effective_wld(result)
+        if wld is None:
+            continue
+        t = tallies.setdefault(pid, [0, 0])
+        t[0] += 1
+        t[1] += wld[0]
+    return {
+        pid: {"recorded_matches": total, "match_win_pct": round(wins / total * 100, 1)}
+        for pid, (total, wins) in tallies.items()
+    }
+
+
+def head_to_head_rows(session: Session, player_id: int, opponent_id: int | None = None) -> list[dict]:
+    """Counted matchups for a player (optionally against one opponent), joined with deck/event columns."""
+    q = (
+        session.query(
+            MatchupRow.opponent_player_id,
+            MatchupRow.opponent_player,
+            MatchupRow.opponent_deck_id,
+            MatchupRow.opponent_archetype,
+            MatchupRow.result,
+            MatchupRow.round,
+            DeckRow.deck_id,
+            DeckRow.event_id,
+            DeckRow.event_name,
+            DeckRow.date,
+            DeckRow.format_id,
+            DeckRow.archetype,
+        )
+        .join(DeckRow, MatchupRow.deck_id == DeckRow.deck_id)
+        .filter(DeckRow.player_id == player_id)
+        .filter(func.lower(MatchupRow.result).in_(COUNTED_RESULTS))
+    )
+    if opponent_id is None:
+        q = q.filter(MatchupRow.opponent_player_id.isnot(None))
+    else:
+        q = q.filter(MatchupRow.opponent_player_id == opponent_id)
+    keys = (
+        "opponent_player_id",
+        "opponent_player",
+        "opponent_deck_id",
+        "opponent_archetype",
+        "result",
+        "round",
+        "deck_id",
+        "event_id",
+        "event_name",
+        "date",
+        "format_id",
+        "archetype",
+    )
+    return [dict(zip(keys, row)) for row in q.all()]
 
 
 # --- Repository helpers: players ---
@@ -1457,13 +1655,13 @@ def get_or_create_player(session: Session, display_name: str) -> tuple[int, str]
     # Before creating, find existing player by normalized name (e.g. Matías vs Matias)
     norm = _normalize_name_for_lookup(canonical)
     if norm:
-        for existing in session.query(PlayerRow).all():
-            if _normalize_name_for_lookup(existing.display_name or "") == norm:
-                if name != (existing.display_name or ""):
-                    alias_row = session.query(PlayerAliasRow).filter(PlayerAliasRow.alias == name).first()
-                    if not alias_row:
-                        session.add(PlayerAliasRow(alias=name, player_id=existing.id))
-                return existing.id, (existing.display_name or "")
+        existing = session.query(PlayerRow).filter(PlayerRow.name_key == norm).order_by(PlayerRow.id).first()
+        if existing:
+            if name != (existing.display_name or ""):
+                alias_row = session.query(PlayerAliasRow).filter(PlayerAliasRow.alias == name).first()
+                if not alias_row:
+                    session.add(PlayerAliasRow(alias=name, player_id=existing.id))
+            return existing.id, (existing.display_name or "")
     new_row = PlayerRow(display_name=canonical)
     session.add(new_row)
     session.flush()
@@ -1602,9 +1800,9 @@ def resolve_name_to_player_id(session: Session, name: str) -> tuple[int | None, 
     # Normalized lookup so new event data (e.g. "Matias") relates to existing "Matías"
     norm = _normalize_name_for_lookup(canonical)
     if norm:
-        for existing in session.query(PlayerRow).all():
-            if _normalize_name_for_lookup(existing.display_name or "") == norm:
-                return existing.id, (existing.display_name or "")
+        existing = session.query(PlayerRow).filter(PlayerRow.name_key == norm).order_by(PlayerRow.id).first()
+        if existing:
+            return existing.id, (existing.display_name or "")
     return None, n
 
 
@@ -1933,24 +2131,35 @@ def set_matchups_players_min_matches(session: Session, value: int) -> None:
 def list_matchups_with_deck_info(session: Session) -> list[dict]:
     """All matchups with their deck's archetype, format_id, date, event_id (for summary aggregation)."""
     rows = (
-        session.query(MatchupRow, DeckRow)
+        session.query(
+            MatchupRow.deck_id,
+            MatchupRow.opponent_deck_id,
+            MatchupRow.opponent_archetype,
+            MatchupRow.result,
+            MatchupRow.result_note,
+            MatchupRow.round,
+            DeckRow.archetype,
+            DeckRow.format_id,
+            DeckRow.event_id,
+            DeckRow.date,
+        )
         .join(DeckRow, MatchupRow.deck_id == DeckRow.deck_id)
         .all()
     )
     return [
         {
-            "deck_id": m.deck_id,
-            "opponent_deck_id": m.opponent_deck_id,
-            "archetype": matchup_aggregate_archetype_label(d.archetype),
-            "format_id": d.format_id or "",
-            "event_id": d.event_id,
-            "date": d.date or "",
-            "opponent_archetype": matchup_aggregate_archetype_label(m.opponent_archetype),
-            "result": m.result or "loss",
-            "result_note": m.result_note or "",
-            "round": m.round,
+            "deck_id": r.deck_id,
+            "opponent_deck_id": r.opponent_deck_id,
+            "archetype": matchup_aggregate_archetype_label(r.archetype),
+            "format_id": r.format_id or "",
+            "event_id": r.event_id,
+            "date": r.date or "",
+            "opponent_archetype": matchup_aggregate_archetype_label(r.opponent_archetype),
+            "result": r.result or "loss",
+            "result_note": r.result_note or "",
+            "round": r.round,
         }
-        for m, d in rows
+        for r in rows
     ]
 
 
@@ -1974,17 +2183,12 @@ def player_row_is_unnamed_placeholder(session: Session, player_id: int) -> bool:
     return _is_unnamed_placeholder_display(row.display_name or "")
 
 
-def _matchup_row_player_display(player_row: PlayerRow | None, denormalized: str) -> str:
+def _matchup_row_player_display(display_name: str | None, denormalized: str) -> str:
     """Label for matrix / summaries: use players.display_name unless it is Unnamed* and denormalized text is a real name."""
     den = (denormalized or "").strip()
-    if player_row is not None:
-        disp = (player_row.display_name or "").strip()
-        if (
-            disp
-            and _is_unnamed_placeholder_display(disp)
-            and den
-            and not _is_unnamed_placeholder_display(den)
-        ):
+    if display_name is not None:
+        disp = display_name.strip()
+        if disp and _is_unnamed_placeholder_display(disp) and den and not _is_unnamed_placeholder_display(den):
             return den
         if disp:
             return disp
@@ -2001,7 +2205,24 @@ def list_matchups_with_deck_and_players(session: Session) -> list[dict]:
     PlayerDeck = aliased(PlayerRow)
     PlayerOpp = aliased(PlayerRow)
     rows = (
-        session.query(MatchupRow, DeckRow, PlayerDeck, PlayerOpp)
+        session.query(
+            MatchupRow.deck_id,
+            MatchupRow.opponent_deck_id,
+            MatchupRow.opponent_player,
+            MatchupRow.opponent_archetype,
+            MatchupRow.result,
+            MatchupRow.result_note,
+            MatchupRow.round,
+            DeckRow.player_id,
+            DeckRow.player,
+            DeckRow.archetype,
+            DeckRow.format_id,
+            DeckRow.event_id,
+            DeckRow.date,
+            PlayerDeck.display_name.label("deck_player_display"),
+            PlayerOpp.id.label("opp_player_pk"),
+            PlayerOpp.display_name.label("opp_player_display"),
+        )
         .join(DeckRow, MatchupRow.deck_id == DeckRow.deck_id)
         .outerjoin(PlayerDeck, DeckRow.player_id == PlayerDeck.id)
         .outerjoin(PlayerOpp, MatchupRow.opponent_player_id == PlayerOpp.id)
@@ -2009,22 +2230,22 @@ def list_matchups_with_deck_and_players(session: Session) -> list[dict]:
     )
     return [
         {
-            "deck_id": m.deck_id,
-            "opponent_deck_id": m.opponent_deck_id,
-            "player_id": d.player_id,
-            "opponent_player_id": (p_opp.id if p_opp else None),
-            "player": _matchup_row_player_display(p_deck, d.player or ""),
-            "opponent_player": _matchup_row_player_display(p_opp, m.opponent_player or ""),
-            "archetype": matchup_aggregate_archetype_label(d.archetype),
-            "opponent_archetype": matchup_aggregate_archetype_label(m.opponent_archetype),
-            "format_id": d.format_id or "",
-            "event_id": d.event_id,
-            "date": d.date or "",
-            "result": m.result or "loss",
-            "result_note": m.result_note or "",
-            "round": m.round,
+            "deck_id": r.deck_id,
+            "opponent_deck_id": r.opponent_deck_id,
+            "player_id": r.player_id,
+            "opponent_player_id": r.opp_player_pk,
+            "player": _matchup_row_player_display(r.deck_player_display, r.player or ""),
+            "opponent_player": _matchup_row_player_display(r.opp_player_display, r.opponent_player or ""),
+            "archetype": matchup_aggregate_archetype_label(r.archetype),
+            "opponent_archetype": matchup_aggregate_archetype_label(r.opponent_archetype),
+            "format_id": r.format_id or "",
+            "event_id": r.event_id,
+            "date": r.date or "",
+            "result": r.result or "loss",
+            "result_note": r.result_note or "",
+            "round": r.round,
         }
-        for m, d, p_deck, p_opp in rows
+        for r in rows
     ]
 
 
@@ -2033,6 +2254,7 @@ def list_matchups_with_deck_and_players(session: Session) -> list[dict]:
 # Columns refreshed by the metadata sync (price columns are deliberately excluded
 # so the separate price sync is not clobbered).
 _CARD_METADATA_COLUMNS = (
+    "front_face_name",
     "scryfall_id",
     "mtgjson_uuid",
     "mana_cost",
@@ -2047,12 +2269,28 @@ _CARD_METADATA_COLUMNS = (
 
 
 def get_cards_by_name(session: Session, names: list[str]) -> dict[str, CardRow]:
-    """Return {name: CardRow} for the given card names (only those present)."""
+    """Return {requested_name: CardRow} for the given card names (only those present).
+
+    Exact ``name`` matches win; names still missing are matched on ``front_face_name``
+    (double-faced cards are stored by front face only in decks). When several rows
+    share a front face, the lowest ``name`` wins.
+    """
     names = [n for n in dict.fromkeys(names) if n]
     if not names:
         return {}
     rows = session.query(CardRow).filter(CardRow.name.in_(names)).all()
-    return {r.name: r for r in rows}
+    found: dict[str, CardRow] = {r.name: r for r in rows}
+    missing = [n for n in names if n not in found]
+    if missing:
+        fallback = (
+            session.query(CardRow)
+            .filter(CardRow.front_face_name.in_(missing))
+            .order_by(CardRow.name)
+            .all()
+        )
+        for r in fallback:
+            found.setdefault(r.front_face_name, r)
+    return found
 
 
 def upsert_cards(session: Session, rows: list[dict], batch_size: int = 1000) -> int:

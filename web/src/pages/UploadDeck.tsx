@@ -5,7 +5,7 @@ import toast from 'react-hot-toast'
 import { getUploadLinkInfo, getCardLookup, submitDeckWithUploadLink, submitFeedbackWithUploadLink, submitDecklistWithUploadLink } from '../api'
 import { parseMoxfieldDeckList, formatMoxfieldDeckList } from '../lib/deckListParser'
 import { normalizeDeckListByLookup } from '../lib/deckUtils'
-import { isBye, isDrop, MATCHUP_RESULT_OPTIONS, matchupItemToRow } from '../lib/matchups'
+import { isBye, isDrop, MATCHUP_RESULT_OPTIONS, matchupItemToRow, updateMatchupRowField } from '../lib/matchups'
 import { reportError } from '../utils'
 import CardSearchInput from '../components/CardSearchInput'
 import Modal from '../components/Modal'
@@ -168,7 +168,7 @@ export default function UploadDeck() {
 
   const addMatchup = () => setMatchups((prev) => (prev.length >= 10 ? prev : [...prev, { opponent_player: '', result: 'draw', intentional_draw: false }]))
   const updateMatchup = (i: number, field: 'opponent_player' | 'result' | 'intentional_draw', value: string | boolean) => {
-    setMatchups((prev) => prev.map((m, j) => (j === i ? { ...m, [field]: value } : m)))
+    setMatchups((prev) => prev.map((m, j) => (j === i ? updateMatchupRowField(m, field, value) : m)))
   }
   const removeMatchup = (i: number) => setMatchups((prev) => prev.filter((_, j) => j !== i))
 

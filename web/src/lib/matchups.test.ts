@@ -5,6 +5,8 @@ import {
   isTop8Rank,
   phasesToApiMatchups,
   swissRoundsForPlayerCount,
+  updateMatchupRowField,
+  type MatchupRow,
 } from './matchups'
 
 describe('heatmapColor', () => {
@@ -99,5 +101,35 @@ describe('phasesToApiMatchups', () => {
       { opponent_player: 'Bob', result: 'loss', round: 2 },
       { opponent_player: 'Bob', result: 'win', round: 4 },
     ])
+  })
+})
+
+describe('updateMatchupRowField', () => {
+  const row = (opponent_player: string, result: string): MatchupRow => ({ opponent_player, result, intentional_draw: false })
+
+  it('selects result bye when opponent Bye is chosen', () => {
+    expect(updateMatchupRowField(row('', 'draw'), 'opponent_player', 'Bye')).toMatchObject({ opponent_player: 'Bye', result: 'bye' })
+  })
+
+  it('selects opponent Bye when result bye is chosen', () => {
+    expect(updateMatchupRowField(row('Alice', 'win'), 'result', 'bye')).toMatchObject({ opponent_player: 'Bye', result: 'bye' })
+  })
+
+  it('keeps drop in sync the same way', () => {
+    expect(updateMatchupRowField(row('', 'draw'), 'opponent_player', '(drop)')).toMatchObject({ result: 'drop' })
+    expect(updateMatchupRowField(row('Alice', 'win'), 'result', 'drop')).toMatchObject({ opponent_player: '(drop)' })
+  })
+
+  it('resets the result when switching from Bye to a real opponent', () => {
+    expect(updateMatchupRowField(row('Bye', 'bye'), 'opponent_player', 'Alice')).toMatchObject({ opponent_player: 'Alice', result: 'draw' })
+  })
+
+  it('clears the opponent when switching from bye to a normal result', () => {
+    expect(updateMatchupRowField(row('Bye', 'bye'), 'result', 'win')).toMatchObject({ opponent_player: '', result: 'win' })
+  })
+
+  it('leaves normal edits alone', () => {
+    expect(updateMatchupRowField(row('Alice', 'win'), 'result', 'loss')).toMatchObject({ opponent_player: 'Alice', result: 'loss' })
+    expect(updateMatchupRowField(row('Alice', 'win'), 'opponent_player', 'Bob')).toMatchObject({ opponent_player: 'Bob', result: 'win' })
   })
 })

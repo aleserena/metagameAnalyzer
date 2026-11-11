@@ -5,7 +5,6 @@ import requests
 from fastapi import Depends, HTTPException, Query
 from src.mtgtop8.analyzer import (
     deck_analysis,
-    effective_commanders,
     find_duplicate_decks,
     similar_decks,
 )
@@ -19,6 +18,7 @@ from api.dependencies import (
     require_admin_or_event_edit_deck,
     require_database,
 )
+from api.formats import is_commander_format
 from api.helpers import (
     _build_board,
     _deck_sort_key,
@@ -30,6 +30,7 @@ from api.helpers import (
 )
 from api.schemas.decks import ImportMoxfieldBody, UpdateDeckBody
 from api.schemas.matchups import AdminMatchupsBody
+from api.services import deck_index
 from api.state import (
     _get_deck_by_id,
     _load_decks_from_db,
@@ -45,7 +46,7 @@ except ImportError:
 from fastapi import APIRouter
 
 from api.route_helpers import (
-    _is_intentional_draw_result,
+    opponent_report_to_prefill,
 )
 
 logger = logging.getLogger(__name__)
@@ -140,40 +141,13 @@ def list_decks(
         valid = {"W", "U", "B", "R", "G", "C"}
         color_filter = {c for c in wanted if c in valid} or None
 
-    try:
-        if filtered:
-            deck_objs = [Deck.from_dict(d) for d in filtered]
-            commander_names = list(
-                {c for deck in deck_objs for c in effective_commanders(deck) if c}
-            )
-            metadata = lookup_cards(commander_names) if commander_names else {}
-            color_order = ["W", "U", "B", "R", "G", "C"]
-            filtered_with_colors: list[dict] = []
-            for deck_obj, d in zip(deck_objs, filtered):
-                ec = effective_commanders(deck_obj)
-                ci: set[str] = set()
-                for name in ec:
-                    entry = metadata.get(name)
-                    if entry and "error" not in entry:
-                        for c in entry.get("color_identity") or entry.get("colors") or []:
-                            if c in {"W", "U", "B", "R", "G"}:
-                                ci.add(c)
-                # Treat EDH/Commander decks with no colors as colorless ("C") for filtering and display.
-                is_edh = (deck_obj.format_id or "").upper() in {"EDH", "CEDH", "COMMANDER"}
-                if not ci and is_edh and ec:
-                    ci.add("C")
-                if ci:
-                    d["color_identity"] = [c for c in color_order if c in ci]
-                if color_filter:
-                    # Require deck to contain all selected colors.
-                    if not ci or not color_filter.issubset(ci):
-                        continue
-                    filtered_with_colors.append(d)
-            if color_filter:
-                filtered = filtered_with_colors
-    except Exception:
-        # Color identity and color filter are cosmetic; ignore lookup failures.
-        logger.exception("Color identity lookup failed for /api/decks")
+    colors_by_deck = deck_index.color_identities()
+    if color_filter and colors_by_deck is not None:
+        # Require deck to contain all selected colors.
+        filtered = [
+            d for d in filtered
+            if color_filter.issubset(colors_by_deck.get(d.get("deck_id"), ()))
+        ]
 
     sort_val = sort if sort in ("date", "rank", "player", "name") else "date"
     order_val = order if order in ("asc", "desc") else "desc"
@@ -184,6 +158,10 @@ def list_decks(
 
     # Normalize player names for display (merge aliases)
     page = [{**d, "player": _normalize_player(d.get("player") or "")} for d in page]
+    for d in page:
+        ci = colors_by_deck.get(d.get("deck_id")) if colors_by_deck is not None else None
+        if ci:
+            d["color_identity"] = list(ci)
     if is_admin == "admin" and event_id is not None and state.database_available():
         # Use the canonical player_id already on each deck so we can batch the email
         # lookup into a single IN-query. Resolving by display name here is both slow
@@ -219,8 +197,7 @@ def compare_decks(ids: str = Query(..., description="Comma-separated deck IDs"))
 
 def _deck_duplicate_info(deck_id: int) -> dict | None:
     """Return duplicate info for a deck: is_duplicate, duplicate_of, same_mainboard_ids, same_mainboard_decks, primary_deck."""
-    decks = [Deck.from_dict(d) for d in state.decks]
-    dup_map = find_duplicate_decks(decks)
+    dup_map = deck_index.duplicate_map()
     deck_map = {d.get("deck_id"): d for d in state.decks}
 
     def deck_summary(did: int) -> dict:
@@ -262,9 +239,11 @@ def list_duplicate_decks(
     event_ids: str | None = Query(None, description="Limit to events (comma-separated)"),
 ):
     """Decks with identical mainboard (duplicates across events)."""
-    candidate = _filter_decks_for_query(state.decks, None, event_ids, None, None)
-    decks = [Deck.from_dict(d) for d in candidate]
-    dup_map = find_duplicate_decks(decks)
+    if event_ids:
+        candidate = _filter_decks_for_query(state.decks, None, event_ids, None, None)
+        dup_map = find_duplicate_decks([Deck.from_dict(d) for d in candidate])
+    else:
+        dup_map = deck_index.duplicate_map()
     deck_map = {d.get("deck_id"): d for d in state.decks}
     result = []
     for primary_id, duplicate_ids in dup_map.items():
@@ -458,9 +437,8 @@ def get_budget_alternatives(
     candidate_metadata = lookup_cards(list(candidate_card_names))
 
     # For EDH/cEDH, build the commander color identity and use it to exclude illegal replacements
-    edh_formats = {"EDH", "cEDH"}
     allowed_colors: set[str] | None = None
-    if deck_format in edh_formats and deck.commanders:
+    if is_commander_format(deck_format) and deck.commanders:
         commander_meta = lookup_cards(list(deck.commanders))
         allowed_colors = set()
         for cmd in deck.commanders:
@@ -523,9 +501,13 @@ def get_budget_alternatives(
     return {"deck_id": deck_id, "threshold": threshold, "currency": currency, "source": source, "alternatives": alternatives}
 
 
-@router.put("/api/v1/decks/{deck_id}", dependencies=[Depends(require_admin_or_event_edit_deck), Depends(require_database)])
-def update_deck_endpoint(deck_id: int, body: UpdateDeckBody):
-    """Update deck metadata (admin-only)."""
+@router.put("/api/v1/decks/{deck_id}", dependencies=[Depends(require_database)])
+def update_deck_endpoint(
+    deck_id: int,
+    body: UpdateDeckBody,
+    role: str = Depends(require_admin_or_event_edit_deck),
+):
+    """Update deck metadata. Moving a deck to another event is admin-only."""
     deck_dict = _get_deck_by_id(deck_id)
     if not deck_dict:
         raise HTTPException(status_code=404, detail="Deck not found")
@@ -543,6 +525,12 @@ def update_deck_endpoint(deck_id: int, body: UpdateDeckBody):
         current["rank"] = body.rank
     if body.archetype is not None:
         current["archetype"] = body.archetype
+    if (
+        role != "admin"
+        and body.event_id is not None
+        and str(body.event_id) != str(deck_dict.get("event_id"))
+    ):
+        raise HTTPException(status_code=403, detail="Only an admin can move a deck to another event")
     if body.event_id is not None:
         with _db.session_scope() as session:
             ev = _db.get_event(session, body.event_id)
@@ -607,7 +595,7 @@ def update_deck_endpoint(deck_id: int, body: UpdateDeckBody):
         raise
     except Exception as e:
         logger.exception("Update deck failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to update deck")
 
 
 @router.delete("/api/v1/decks/{deck_id}", dependencies=[Depends(require_admin_or_event_edit_deck), Depends(require_database)])
@@ -624,7 +612,7 @@ def delete_deck_endpoint(deck_id: int):
         raise
     except Exception as e:
         logger.exception("Delete deck failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to delete deck")
 
 
 @router.get("/api/v1/decks/{deck_id}/matchups", dependencies=[Depends(require_admin_or_event_edit_deck), Depends(require_database)])
@@ -644,26 +632,9 @@ def get_deck_matchups(deck_id: int):
             current_player_norm = _normalize_player(current_player)
             reported_against_me = _db.list_matchups_reported_against_player(session, event_id, current_player_norm)
             for r in reported_against_me:
-                res = (r.get("result") or "").strip().lower()
-                if res == "win":
-                    inv_result = "loss"
-                elif res == "loss":
-                    inv_result = "win"
-                elif res == "intentional_draw_win":
-                    inv_result = "intentional_draw_loss"
-                elif res == "intentional_draw_loss":
-                    inv_result = "intentional_draw_win"
-                else:
-                    inv_result = "draw" if res == "intentional_draw" else "draw"
-                # Use normalized name so it matches opponent dropdown (deck list uses normalized player)
-                reporting_player = _normalize_player((r.get("reporting_player") or "").strip())
-                if reporting_player and reporting_player != "(unknown)":
-                    opponent_reported_matchups.append({
-                        "opponent_player": reporting_player,
-                        "result": inv_result,
-                        "intentional_draw": _is_intentional_draw_result(res),
-                        "round": r.get("round"),
-                    })
+                prefill = opponent_report_to_prefill(r, _normalize_player)
+                if prefill:
+                    opponent_reported_matchups.append(prefill)
     return {"matchups": rows, "opponent_reported_matchups": opponent_reported_matchups}
 
 
@@ -751,6 +722,27 @@ def _parse_moxfield_commanders(obj) -> list[str]:
     return [e["card"] for e in entries for _ in range(e["qty"])]
 
 
+def _extract_moxfield_boards(data: dict) -> tuple[list[str], list[dict], list[dict]]:
+    """Return (commanders, mainboard, sideboard) from a Moxfield v2 or v3 response."""
+    boards = data.get("boards")
+    if isinstance(boards, dict):
+
+        def cards(name: str):
+            board = boards.get(name)
+            return board.get("cards") if isinstance(board, dict) else None
+
+        return (
+            _parse_moxfield_commanders(cards("commanders")),
+            _parse_moxfield_board(cards("mainboard")),
+            _parse_moxfield_board(cards("sideboard")),
+        )
+    return (
+        _parse_moxfield_commanders(data.get("commanders")),
+        _parse_moxfield_board(data.get("mainboard")),
+        _parse_moxfield_board(data.get("sideboard")),
+    )
+
+
 @router.post("/api/v1/decks/import-moxfield", dependencies=[Depends(require_admin)])
 def import_moxfield_deck(body: ImportMoxfieldBody):
     """Fetch a public Moxfield deck by URL and return commanders, mainboard, sideboard for the editor."""
@@ -796,9 +788,9 @@ def import_moxfield_deck(body: ImportMoxfieldBody):
             detail="Could not fetch deck from Moxfield. The deck may be private, or Moxfield may be blocking requests. Try again later or paste the deck list manually (Export from Moxfield → Moxfield format).",
         )
     try:
-        commanders = _parse_moxfield_commanders(data.get("commanders"))
-        mainboard = _parse_moxfield_board(data.get("mainboard"))
-        sideboard = _parse_moxfield_board(data.get("sideboard"))
+        commanders, mainboard, sideboard = _extract_moxfield_boards(data)
+        if not commanders and not mainboard:
+            raise HTTPException(status_code=502, detail="Moxfield returned a deck with no cards")
         return {
             "commanders": commanders,
             "mainboard": mainboard,

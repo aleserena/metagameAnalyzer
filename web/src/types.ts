@@ -267,6 +267,7 @@ export interface HadoukenPreview {
   decks: Array<{ deck_id: number; player: string; rank: string; archetype: string }>
   unmatched_deck_ids: number[]
   pairings: Array<{ round: number; player1: string; player2: string; games1: number; games2: number; result1: string; result2: string }>
+  byes: Array<{ round: number; player: string }>
   conflicts: Array<{ round: number; player1: string; player2: string; existing: string; hadouken: string }>
   existing_matchup_count: number
 }
@@ -276,6 +277,7 @@ export interface HadoukenApplyResult {
   decks_created: number
   decks_matched: number
   matches_imported: number
+  byes_imported: number
   aliases_added: number
   player_count: number
 }
@@ -389,4 +391,23 @@ export interface CommanderSynergy {
   core_cards: CommanderCardEntry[]
   flex_cards: CommanderCardEntry[]
   tech_cards: CommanderTechCardEntry[]
+}
+
+export interface ScrapeFailedDeck {
+  deck_id: number | string
+  event_id: number | string | null
+  error: string
+}
+
+export interface ScrapeJobSnapshot {
+  id: string
+  status: 'running' | 'done' | 'cancelled' | 'error'
+  pct: number
+  messages: string[]
+  next: number
+  message: string
+  decks_saved: number
+  failed_decks: ScrapeFailedDeck[]
+  started_at: string
+  finished_at: string | null
 }

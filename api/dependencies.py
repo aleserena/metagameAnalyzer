@@ -5,12 +5,13 @@ Depends on api.state for the in-memory deck lookup and DB-availability check.
 
 import hashlib
 import os
+import secrets
 import time
-from datetime import datetime, timezone
 
 import jwt
 from fastapi import Header, HTTPException
 
+from api.config import is_deployed, validate_auth_config  # noqa: F401  (re-exported)
 from api.state import _database_available, _get_deck_by_id
 
 try:
@@ -18,11 +19,20 @@ try:
 except ImportError:
     _db = None
 
+def derive_jwt_key(jwt_secret: str, admin_password: str) -> bytes:
+    """Signing key: JWT_SECRET (SHA-256 if < 32 bytes), else from the admin password, else random per process."""
+    secret = jwt_secret or admin_password
+    if not secret:
+        return secrets.token_bytes(32)
+    raw = secret.encode("utf-8")
+    # PyJWT recommends at least 32 bytes for HS256; derive a 32-byte key if shorter
+    return raw if len(raw) >= 32 else hashlib.sha256(raw).digest()
+
+
 # Admin auth: single user, password from env, JWT for session
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
-JWT_SECRET = os.getenv("JWT_SECRET", ADMIN_PASSWORD or "dev-secret-change-in-production")
-# PyJWT recommends at least 32 bytes for HS256; derive a 32-byte key if secret is shorter to avoid InsecureKeyLengthWarning
-_JWT_KEY = JWT_SECRET.encode("utf-8") if len(JWT_SECRET.encode("utf-8")) >= 32 else hashlib.sha256(JWT_SECRET.encode("utf-8")).digest()
+JWT_SECRET = os.getenv("JWT_SECRET", "")
+_JWT_KEY = derive_jwt_key(JWT_SECRET, ADMIN_PASSWORD)
 JWT_ALGORITHM = "HS256"
 JWT_EXP_SECONDS = 7 * 24 * 3600  # 7 days
 
@@ -36,6 +46,8 @@ def _create_admin_token() -> str:
 
 
 def _verify_admin_token(token: str) -> bool:
+    if not ADMIN_PASSWORD:
+        return False
     try:
         payload = jwt.decode(token, _JWT_KEY, algorithms=[JWT_ALGORITHM])
         return payload.get("sub") == "admin"
@@ -79,7 +91,7 @@ def require_admin_or_event_edit(
         with _db.session_scope() as session:
             row = _db.get_upload_link(session, x_event_edit_token.strip())
             if row and getattr(row, "link_type", None) == _db.LINK_TYPE_EVENT_EDIT and row.event_id == _db._event_id_str(event_id):
-                if row.expires_at is not None and row.expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
+                if row.expires_at is not None and row.expires_at < _db.utcnow_naive():
                     raise HTTPException(status_code=401, detail="Event edit link expired")
                 return "event_edit"
     raise HTTPException(status_code=401, detail="Invalid or expired token")
@@ -103,7 +115,7 @@ def require_admin_or_event_edit_deck(
         with _db.session_scope() as session:
             row = _db.get_upload_link(session, x_event_edit_token.strip())
             if row and getattr(row, "link_type", None) == _db.LINK_TYPE_EVENT_EDIT and row.event_id == _db._event_id_str(event_id):
-                if row.expires_at is not None and row.expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
+                if row.expires_at is not None and row.expires_at < _db.utcnow_naive():
                     raise HTTPException(status_code=401, detail="Event edit link expired")
                 return "event_edit"
     raise HTTPException(status_code=401, detail="Invalid or expired token")

@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import Depends, Query
+from fastapi import Depends, HTTPException, Query
 from src.mtgtop8.card_lookup import clear_cache as clear_scryfall_cache
 from src.mtgtop8.card_lookup import refresh_otag_index
 
@@ -17,7 +17,6 @@ from api.services import mtgjson as mtgjson_service
 from api.services import settings as settings_service
 from api.state import (
     _clear_decks_in_db,
-    _invalidate_metagame,
     state,
 )
 
@@ -85,6 +84,7 @@ def put_matchups_players_min_matches_setting(body: MatchupsMinMatchesBody):
 def post_clear_scryfall_cache(_: str = Depends(require_admin)):
     """Clear Scryfall card lookup cache (in-memory and .scryfall_cache.json). Admin-only."""
     clear_scryfall_cache()
+    state.touch()  # card data changed: drop version-keyed derived caches
     return {"message": "Scryfall cache cleared"}
 
 
@@ -97,10 +97,11 @@ def post_refresh_otag_index(
 
     Queries Scryfall search (otag:X) for each category and persists the card→[categories]
     mapping to .scryfall_otag_cache.json. Pass a subset of category keys to refresh
-    only those; omit to refresh all. Admin-only. Takes 1–5 minutes on first run.
+    only those; omit to refresh all. Admin-only. Takes 1–5 minutes, so it runs as a
+    background job (shares the single sync slot); poll ``GET /settings/sync-mtgjson/status``
+    (``jobs.otag``). Returns {started, running, message}.
     """
-    counts = refresh_otag_index(categories)
-    return {"refreshed": counts}
+    return mtgjson_service.start_sync_job("otag", lambda: {"refreshed": refresh_otag_index(categories)})
 
 
 @router.post("/api/v1/settings/sync-mtgjson", dependencies=[Depends(require_database)])
@@ -134,9 +135,10 @@ def get_sync_mtgjson_status(_: str = Depends(require_admin)):
 @router.post("/api/v1/settings/clear-decks", dependencies=[Depends(require_database)])
 def post_clear_decks(_: str = Depends(require_admin)):
     """Clear all decks in the database. Admin-only. Requires PostgreSQL."""
-    state.decks = []
-    _invalidate_metagame()
-    _clear_decks_in_db()
+    try:
+        _clear_decks_in_db()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Failed to clear decks") from e
     return {"message": "Decks cleared"}
 
 

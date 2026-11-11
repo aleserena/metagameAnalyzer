@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field
+from typing import Annotated
+
+from pydantic import BaseModel, Field, StringConstraints
 
 
 class LoginBody(BaseModel):
@@ -9,13 +11,12 @@ class SiteFeedbackBody(BaseModel):
     type: str = "bug"  # bug | enhancement | question
     title: str = ""
     description: str = ""
-    email: str | None = None
+    email: str | None = Field(default=None, max_length=254)
     website: str | None = None  # honeypot: bots often fill this; humans leave empty
-    captcha_a: int | None = None
-    captcha_b: int | None = None
+    captcha_token: str | None = None
     captcha_answer: int | None = None
 
 
 class CardLookupBody(BaseModel):
-    names: list[str] = Field(default_factory=list)
+    names: list[Annotated[str, StringConstraints(max_length=200)]] = Field(default_factory=list, max_length=1000)
 

@@ -3,6 +3,26 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from tests._dbguard import (
+    apply_test_database_env,
+    db_unavailable,
+    ensure_test_schema,
+    schema_unavailable_exit_reason,
+)
+
+# DB-backed tests run only against TEST_DATABASE_URL (never staging/prod): pin DATABASE_URL
+# to it (or to "" so tests skip) before api.config loads .env, then migrate it at import time
+# because test modules import api.main (which queries the DB) during collection.
+_TEST_DATABASE_URL = apply_test_database_env()
+try:
+    _schema_ready = ensure_test_schema(_TEST_DATABASE_URL)
+except Exception as exc:  # reachable test DB but migration failed: do not run on a bad schema
+    pytest.exit(f"Test database migration failed: {exc!r}", returncode=2)
+else:
+    _reason = None if _schema_ready else schema_unavailable_exit_reason(_TEST_DATABASE_URL)
+    if _reason:
+        pytest.exit(_reason, returncode=2)
+
 # Load .env / .env.$DB_ENV up front. api.db does not import api.config, so without this
 # the DB-backed tests only see DATABASE_URL when another module imported api.main first
 # (alphabetical luck) and silently skip when run on their own.
@@ -31,6 +51,15 @@ def _get_app_and_deps():
             "require_admin_or_event_edit_deck": require_admin_or_event_edit_deck,
         }
     return _app_ref, _dep_refs
+
+
+@pytest.fixture(autouse=True)
+def _reset_login_limiter():
+    """Keep failed-login throttling from leaking between tests."""
+    yield
+    from api.routers import auth
+
+    auth.LOGIN_LIMITER.reset()
 
 
 @pytest.fixture
@@ -123,3 +152,68 @@ def deck_with_split_card():
         "commanders": [],
         "archetype": "Test",
     }
+
+
+@pytest.fixture
+def db_session_rollback():
+    """Session that rolls back so no data is committed. Skips when DATABASE_URL is unset or DB unreachable."""
+    from sqlalchemy import text
+    from sqlalchemy.exc import OperationalError
+
+    from api.db import get_session_factory_cached, is_database_available
+
+    if not is_database_available():
+        db_unavailable("TEST_DATABASE_URL not set")
+    factory = get_session_factory_cached()
+    if factory is None:
+        db_unavailable("TEST_DATABASE_URL not set")
+    try:
+        session = factory()
+        session.execute(text("SELECT 1"))
+    except OperationalError:
+        db_unavailable("Test database unreachable")
+    try:
+        yield session
+    finally:
+        session.rollback()
+        session.close()
+
+
+@pytest.fixture
+def sql_log(db_session_rollback):
+    """List of every SQL statement executed on the test session's engine during the test."""
+    from sqlalchemy import event
+
+    engine = db_session_rollback.get_bind()
+    statements: list[str] = []
+
+    def _record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", _record)
+    try:
+        yield statements
+    finally:
+        event.remove(engine, "before_cursor_execute", _record)
+
+
+@pytest.fixture
+def settings_rows():
+    """Real-commit settings tests: needs the test DB; clears the analyzer settings rows around the test."""
+    from api import db
+    from api.services import settings as settings_service
+
+    if not db.is_database_available():
+        db_unavailable("TEST_DATABASE_URL not set")
+    keys = ("rank_weights", "ignore_lands_cards")
+
+    def _clear():
+        with db.session_scope() as session:
+            session.query(db.SettingsRow).filter(db.SettingsRow.key.in_(keys)).delete(synchronize_session=False)
+        settings_service._reset_cache_for_tests()
+
+    _clear()
+    try:
+        yield
+    finally:
+        _clear()
