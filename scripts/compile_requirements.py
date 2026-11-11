@@ -2,6 +2,9 @@
 
 Preferred: uv (universal resolution, so the lock installs on Linux/py3.12 and
 on developer machines alike). Fallback: pip-tools inside python:3.12-slim.
+
+WARNING: the Docker fallback resolves on Linux only, so it writes Linux-only pins (not universal) that can
+break Windows/macOS dev installs (platform-specific wheels or markers are missing). Install uv and prefer it.
 """
 
 import shutil
