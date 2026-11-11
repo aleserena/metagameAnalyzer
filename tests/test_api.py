@@ -895,17 +895,17 @@ def test_get_matchups_summary(client_with_overrides):
         mock_db.session_scope = mock_session_scope
         mock_db.list_matchups_with_deck_info.return_value = []
         r = client_with_overrides.get("/api/v1/matchups/summary")
+        r2 = client_with_overrides.get("/api/v1/matchups/summary?min_matches=3")
+        r3 = client_with_overrides.get(
+            "/api/v1/matchups/summary?min_matches=3&include_opponents_below_min=true"
+        )
     assert r.status_code == 200
     data = r.json()
     assert "list" in data and "matrix" in data and "min_matches" in data
     assert data["min_matches"] == 0
     assert data.get("include_opponents_below_min") is False
-    r2 = client_with_overrides.get("/api/v1/matchups/summary?min_matches=3")
     assert r2.status_code == 200
     assert r2.json()["min_matches"] == 3
-    r3 = client_with_overrides.get(
-        "/api/v1/matchups/summary?min_matches=3&include_opponents_below_min=true"
-    )
     assert r3.status_code == 200
     assert r3.json()["include_opponents_below_min"] is True
 
@@ -1628,6 +1628,23 @@ def test_metagame_cache_follows_settings_changes(client, tmp_path, monkeypatch):
         ss.set_rank_weights({"1": 99.0})
         client.get("/api/v1/metagame")
         assert spy.call_count == 2
+
+
+def test_metagame_cache_key_includes_effective_settings(client, monkeypatch):
+    """A degraded settings read (defaults, version unchanged) must not poison the cache for the real values."""
+    import api.services.settings as ss
+    from api.routers import metagame as mg
+
+    monkeypatch.setattr(ss, "get_rank_weights", lambda: {"1": 10.0})
+    with patch.object(mg, "analyze", wraps=mg.analyze) as spy, patch.object(mg, "lookup_cards", return_value={}):
+        client.get("/api/v1/metagame")
+        monkeypatch.setattr(ss, "get_rank_weights", lambda: {"1": 99.0})
+        client.get("/api/v1/metagame")
+        monkeypatch.setattr(ss, "get_ignore_lands_cards", lambda: ["Island"])
+        client.get("/api/v1/metagame?ignore_lands=true")
+        monkeypatch.setattr(ss, "get_ignore_lands_cards", lambda: ["Forest"])
+        client.get("/api/v1/metagame?ignore_lands=true")
+        assert spy.call_count == 4
 
 
 def test_list_decks_color_filter_and_no_shared_mutation(client, sample_decks):

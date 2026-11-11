@@ -147,7 +147,7 @@ class MatchupRow(Base):
     opponent_player = Column(String(512), nullable=False)  # display name or "Bye"/"(drop)"
     opponent_deck_id = Column(Integer, ForeignKey("decks.deck_id", ondelete="SET NULL"), nullable=True)
     opponent_archetype = Column(String(512), nullable=True)
-    result = Column(String(32), nullable=False)  # win | loss | draw | intentional_draw
+    result = Column(String(32), nullable=False)  # win | loss | draw | intentional_draw | intentional_draw_win | intentional_draw_loss (+ bye | drop | 2-1 | 1-2 | 1-0 | 0-1 | 1-1 | 0-0); see api/results.py
     result_note = Column(String(512), nullable=True)
     round = Column(Integer, nullable=True)
 

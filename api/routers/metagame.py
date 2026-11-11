@@ -543,9 +543,17 @@ def get_metagame(
             out["summary_top8"] = {"total_decks": 0, "unique_players": 0, "unique_archetypes": 0}
             out["archetype_distribution_top8"] = []
         return out
+    # The effective values (not just the settings version) are part of the key: a degraded settings
+    # read serves defaults without bumping the version, and must not be cached as the real values.
+    rank_weights = settings_service.get_rank_weights()
+    ignore_lands_cards = set(settings_service.get_ignore_lands_cards()) if ignore_lands else None
+    weights_sig = tuple(sorted((str(k), float(v)) for k, v in (rank_weights or {}).items()))
+    lands_sig = tuple(sorted(ignore_lands_cards)) if ignore_lands_cards is not None else None
     cache_key = (
         state.decks_version,
         settings_service.version(),
+        weights_sig,
+        lands_sig,
         placement_weighted,
         ignore_lands,
         date_from,
@@ -565,8 +573,6 @@ def get_metagame(
         decks = [d for d in decks_all if is_top8(d.rank)]
     else:
         decks = decks_all
-    ignore_lands_cards = set(settings_service.get_ignore_lands_cards()) if ignore_lands else None
-    rank_weights = settings_service.get_rank_weights()
     result = analyze(
         decks,
         placement_weighted=placement_weighted,
