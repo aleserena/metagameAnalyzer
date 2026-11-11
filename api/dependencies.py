@@ -7,7 +7,6 @@ import hashlib
 import os
 import secrets
 import time
-from datetime import datetime, timezone
 
 import jwt
 from fastapi import Header, HTTPException
@@ -92,7 +91,7 @@ def require_admin_or_event_edit(
         with _db.session_scope() as session:
             row = _db.get_upload_link(session, x_event_edit_token.strip())
             if row and getattr(row, "link_type", None) == _db.LINK_TYPE_EVENT_EDIT and row.event_id == _db._event_id_str(event_id):
-                if row.expires_at is not None and row.expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
+                if row.expires_at is not None and row.expires_at < _db.utcnow_naive():
                     raise HTTPException(status_code=401, detail="Event edit link expired")
                 return "event_edit"
     raise HTTPException(status_code=401, detail="Invalid or expired token")
@@ -116,7 +115,7 @@ def require_admin_or_event_edit_deck(
         with _db.session_scope() as session:
             row = _db.get_upload_link(session, x_event_edit_token.strip())
             if row and getattr(row, "link_type", None) == _db.LINK_TYPE_EVENT_EDIT and row.event_id == _db._event_id_str(event_id):
-                if row.expires_at is not None and row.expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
+                if row.expires_at is not None and row.expires_at < _db.utcnow_naive():
                     raise HTTPException(status_code=401, detail="Event edit link expired")
                 return "event_edit"
     raise HTTPException(status_code=401, detail="Invalid or expired token")

@@ -2,7 +2,6 @@ import logging
 import math
 import threading
 from datetime import date
-from urllib.parse import unquote
 
 from fastapi import HTTPException, Query
 from src.mtgtop8.analyzer import (
@@ -19,6 +18,7 @@ from src.mtgtop8.card_lookup import lookup_cards
 from src.mtgtop8.config import FORMATS
 from src.mtgtop8.models import Deck
 
+from api.formats import is_commander_format
 from api.helpers import (
     _date_yymmdd_to_parts,
     _filter_decks_for_query,
@@ -46,6 +46,24 @@ from api.route_helpers import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _card_category(type_line: str) -> str:
+    """Best-effort card category from a type line (first match wins)."""
+    t = (type_line or "").lower()
+    if "land" in t:
+        return "Land"
+    if "creature" in t:
+        return "Creature"
+    if "planeswalker" in t:
+        return "Planeswalker"
+    if "instant" in t or "sorcery" in t:
+        return "Spell"
+    if "artifact" in t:
+        return "Artifact"
+    if "enchantment" in t:
+        return "Enchantment"
+    return "Other"
 
 
 @router.get("/api/v1/date-range")
@@ -712,7 +730,7 @@ def get_archetype_weekly_stats(
     """
     if not state.decks:
         raise HTTPException(status_code=404, detail="No data loaded")
-    decoded = unquote(archetype_name)
+    decoded = archetype_name
     if (decoded or "").strip().lower() == "(unknown)":
         raise HTTPException(status_code=404, detail="Archetype not found")
     want_key = _db.archetype_canonical_key(decoded)
@@ -806,7 +824,7 @@ def get_archetype_card_trends(
 
     if not state.decks:
         raise HTTPException(status_code=404, detail="No data loaded")
-    decoded = unquote(archetype_name)
+    decoded = archetype_name
     if (decoded or "").strip().lower() == "(unknown)":
         raise HTTPException(status_code=404, detail="Archetype not found")
     want_key = _db.archetype_canonical_key(decoded)
@@ -965,7 +983,7 @@ def get_commander_synergies(
     """Commander synergy view: co-commanders, shell composition, core/flex/tech cards."""
     if not state.decks:
         raise HTTPException(status_code=404, detail="No data loaded")
-    decoded = unquote(commander_name).strip()
+    decoded = commander_name.strip()
     if not decoded:
         raise HTTPException(status_code=404, detail="Commander name required")
 
@@ -973,7 +991,7 @@ def get_commander_synergies(
     filtered = _filter_decks_for_query(state.decks, event_id, event_ids, date_from, date_to)
     filtered = [
         d for d in filtered
-        if (d.get("format_id") or "").upper() in {"EDH", "CEDH", "COMMANDER"}
+        if is_commander_format(d.get("format_id"))
         and any(
             _db.archetype_canonical_key(c) == want_key
             for c in (d.get("commanders") or [])
@@ -1005,23 +1023,6 @@ def get_commander_synergies(
     # Fetch metadata for category classification
     metadata = lookup_cards(list(all_card_names)) if all_card_names else {}
 
-    def _classify_category(card_name: str) -> str:
-        meta = metadata.get(card_name) or {}
-        type_line = (meta.get("type_line") or "").lower()
-        if "land" in type_line:
-            return "Land"
-        if "creature" in type_line:
-            return "Creature"
-        if "planeswalker" in type_line:
-            return "Planeswalker"
-        if "instant" in type_line or "sorcery" in type_line:
-            return "Spell"
-        if "artifact" in type_line:
-            return "Artifact"
-        if "enchantment" in type_line:
-            return "Enchantment"
-        return "Other"
-
     # Shell composition: average category % across all decks
     category_totals: dict[str, float] = {}
     for d in decks_objs:
@@ -1032,7 +1033,7 @@ def get_commander_synergies(
             continue
         cat_counts: dict[str, int] = {}
         for qty, card in d.mainboard:
-            cat = _classify_category(card)
+            cat = _card_category((metadata.get(card) or {}).get("type_line") or "")
             cat_counts[cat] = cat_counts.get(cat, 0) + qty
         for cat, cnt in cat_counts.items():
             category_totals[cat] = category_totals.get(cat, 0) + (cnt / deck_total * 100)
@@ -1117,7 +1118,7 @@ def get_archetype_card_heatmap(
     """
     if not state.decks:
         raise HTTPException(status_code=404, detail="No data loaded")
-    decoded = unquote(archetype_name)
+    decoded = archetype_name
     if (decoded or "").strip().lower() == "(unknown)":
         raise HTTPException(status_code=404, detail="Archetype not found")
     want_key = _db.archetype_canonical_key(decoded)
@@ -1157,24 +1158,6 @@ def get_archetype_card_heatmap(
     # Fetch Scryfall metadata for category classification
     metadata = lookup_cards(list(all_cards))
 
-    def _classify_category(card_name: str) -> str:
-        """Best-effort card category from type_line."""
-        meta = metadata.get(card_name) or {}
-        type_line = (meta.get("type_line") or "").lower()
-        if "land" in type_line:
-            return "Land"
-        if "creature" in type_line:
-            return "Creature"
-        if "planeswalker" in type_line:
-            return "Planeswalker"
-        if "instant" in type_line or "sorcery" in type_line:
-            return "Spell"
-        if "artifact" in type_line:
-            return "Artifact"
-        if "enchantment" in type_line:
-            return "Enchantment"
-        return "Other"
-
     CATEGORY_ORDER = ["Creature", "Spell", "Artifact", "Enchantment", "Planeswalker", "Land", "Other"]
 
     entries = []
@@ -1191,7 +1174,7 @@ def get_archetype_card_heatmap(
         total_rate = round(100 * inclusion / total, 1)
         entries.append({
             "card": card,
-            "category": _classify_category(card),
+            "category": _card_category((metadata.get(card) or {}).get("type_line") or ""),
             "main_decks": m,
             "side_decks": s,
             "main_rate_pct": main_rate,
@@ -1223,7 +1206,7 @@ def get_archetype_detail(
     """Archetype detail: average analysis and top cards for decks with this archetype."""
     if not state.decks:
         raise HTTPException(status_code=404, detail="No data loaded")
-    decoded = unquote(archetype_name)
+    decoded = archetype_name
     if (decoded or "").strip().lower() == "(unknown)":
         raise HTTPException(status_code=404, detail="Archetype not found")
     want_key = _db.archetype_canonical_key(decoded)
@@ -1242,7 +1225,7 @@ def get_archetype_detail(
         for _, c in d.sideboard:
             card_names.add(c)
         # Include archetype (commander) for empty EDH decks so we fetch metadata
-        if not d.mainboard and (d.format_id or "").upper() in ("EDH", "COMMANDER", "CEDH") and (d.archetype or "").strip():
+        if not d.mainboard and is_commander_format(d.format_id) and (d.archetype or "").strip():
             card_names.add((d.archetype or "").strip())
     metadata = lookup_cards(list(card_names))
     merged: dict = {}

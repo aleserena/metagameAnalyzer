@@ -8,7 +8,6 @@ import logging
 import re
 import threading
 import uuid
-from datetime import datetime, timezone
 
 from api import db as _db
 from api.services.scrape_store import persist_scraped_decks
@@ -49,7 +48,7 @@ class ScrapeJob:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")
+    return _db.utcnow_naive().isoformat(timespec="seconds")
 
 
 def _progress_pct(job: ScrapeJob, msg: str) -> float:

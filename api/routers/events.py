@@ -2,7 +2,7 @@ import json
 import logging
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 import requests
 from fastapi import Depends, File, HTTPException, Query, Request, UploadFile
@@ -18,6 +18,7 @@ from api.dependencies import (
     require_admin_or_event_edit,
     require_database,
 )
+from api.formats import is_commander_format
 from api.helpers import (
     _normalize_split_cards,
     _read_upload_json_bytes_async,
@@ -199,10 +200,8 @@ def _deck_merge_conflicts(deck_keep: dict, deck_remove: dict) -> list[MergeConfl
     """Compare two deck dicts on DECK_MERGE_FIELDS. Only add conflict when both have data and values differ (prefer non-empty).
     For EDH, commanders and archetype are a single combined field."""
     conflicts = []
-    format_keep = (deck_keep.get("format_id") or "").strip().upper()
-    format_remove = (deck_remove.get("format_id") or "").strip().upper()
-    is_edh_keep = format_keep in ("EDH", "COMMANDER", "CEDH")
-    is_edh_remove = format_remove in ("EDH", "COMMANDER", "CEDH")
+    is_edh_keep = is_commander_format(deck_keep.get("format_id"))
+    is_edh_remove = is_commander_format(deck_remove.get("format_id"))
     is_edh_both = is_edh_keep and is_edh_remove
 
     for field in DECK_MERGE_FIELDS:
@@ -875,7 +874,7 @@ def create_upload_links(event_id: str, request: Request, body: CreateUploadLinks
     body = body or CreateUploadLinksBody()
     expires_at = None  # None -> db.create_upload_link applies DEFAULT_LINK_EXPIRY_DAYS
     if body.expires_in_days is not None and body.expires_in_days > 0:
-        expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=body.expires_in_days)
+        expires_at = _db.utcnow_naive() + timedelta(days=body.expires_in_days)
     with _db.session_scope() as session:
         ev = _db.get_event(session, event_id)
         if not ev:

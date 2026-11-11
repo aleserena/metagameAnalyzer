@@ -1,6 +1,5 @@
 import json
 import logging
-from datetime import datetime, timezone
 
 from fastapi import Depends, HTTPException
 from fastapi.responses import Response
@@ -86,7 +85,7 @@ def _get_validated_upload_link(
     if row.used_at is not None:
         raise HTTPException(status_code=404, detail="Link already used")
 
-    if row.expires_at is not None and row.expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
+    if row.expires_at is not None and row.expires_at < _db.utcnow_naive():
         raise HTTPException(status_code=404, detail="Link expired")
 
     ev = _db.get_event(session, row.event_id)

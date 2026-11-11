@@ -18,6 +18,7 @@ from api.dependencies import (
     require_admin_or_event_edit_deck,
     require_database,
 )
+from api.formats import is_commander_format
 from api.helpers import (
     _build_board,
     _deck_sort_key,
@@ -436,9 +437,8 @@ def get_budget_alternatives(
     candidate_metadata = lookup_cards(list(candidate_card_names))
 
     # For EDH/cEDH, build the commander color identity and use it to exclude illegal replacements
-    edh_formats = {"EDH", "cEDH"}
     allowed_colors: set[str] | None = None
-    if deck_format in edh_formats and deck.commanders:
+    if is_commander_format(deck_format) and deck.commanders:
         commander_meta = lookup_cards(list(deck.commanders))
         allowed_colors = set()
         for cmd in deck.commanders:

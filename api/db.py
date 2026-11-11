@@ -839,7 +839,7 @@ def create_upload_link(
     if deck_id is not None and link_type == LINK_TYPE_DECK_UPLOAD:
         link_type = LINK_TYPE_DECK_UPDATE
     if expires_at is None:
-        expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=DEFAULT_LINK_EXPIRY_DAYS)
+        expires_at = utcnow_naive() + timedelta(days=DEFAULT_LINK_EXPIRY_DAYS)
     row = EventUploadLinkRow(
         token=token,
         event_id=eid,
@@ -863,8 +863,13 @@ def mark_upload_link_used(session: Session, token: str) -> bool:
     row = session.query(EventUploadLinkRow).filter(EventUploadLinkRow.token == token).first()
     if not row:
         return False
-    row.used_at = datetime.utcnow()
+    row.used_at = utcnow_naive()
     return True
+
+
+def utcnow_naive() -> datetime:
+    """Current UTC time as a naive datetime (the convention for the DB's timestamp columns)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def iso_utc(dt: datetime | None) -> str | None:

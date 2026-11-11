@@ -24,6 +24,8 @@ pytest tests/ -v
 pytest tests/ --cov=src --cov=api
 ```
 
+Database tests need a throwaway Postgres: set `TEST_DATABASE_URL` (never a staging/prod URL; tests migrate it to head). Without it they skip. CI (`.github/workflows/ci.yml`) provides one and sets `REQUIRE_DB_TESTS=1` so they cannot silently skip. See `CLAUDE.md` for setup commands.
+
 **Frontend (Vitest + React Testing Library):**
 
 ```bash
@@ -148,7 +150,7 @@ You can also set `DB_ENV=dev` (or `staging` / `prod`) and run `alembic` or `uvic
 
 ### Player aliases (merge duplicate names)
 
-If the same player appears under different names (e.g. "Tomas Pesci" and "Pablo Tomas Pesci"), an admin can merge them in **Settings → Player aliases**: add mappings (alias → canonical). On the Player detail page, similar names are suggested with a "Merge into X" button (merge requires admin login). Aliases are stored in the database (with `player_aliases.json` in `DATA_DIR` as a fallback when the DB is unavailable). Merged players share stats and deck lists.
+If the same player appears under different names (e.g. "Tomas Pesci" and "Pablo Tomas Pesci"), an admin can merge them in **Settings → Player aliases**: add mappings (alias → canonical). On the Player detail page, similar names are suggested with a "Merge into X" button (merge requires admin login). Aliases are stored in the database. Merged players share stats and deck lists.
 
 ## CLI Usage
 

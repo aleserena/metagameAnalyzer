@@ -1869,3 +1869,27 @@ def test_player_missing_deck_links_email_sent_after_commit(client_with_overrides
         r = client_with_overrides.post("/api/v1/players/Ann/send-missing-deck-links")
     assert r.status_code == 200
     assert tracker["sent_while_open"] is False
+
+
+def test_archetype_names_are_decoded_only_once(client, sample_decks):
+    decks = [dict(d, archetype="Mono %41 Red") for d in sample_decks]
+    state.set_decks(decks)
+    # Starlette's TestClient decodes the path once more than a real server, so %252541 here
+    # reaches the handler as the literal "%41" that a real request for %2541 would.
+    with patch("api.routers.metagame.lookup_cards", return_value={}):
+        r = client.get("/api/v1/archetypes/Mono%20%252541%20Red")
+    assert r.status_code == 200
+    assert r.json()["archetype"] == "Mono %41 Red"
+
+
+def test_card_category_order():
+    from api.routers.metagame import _card_category
+
+    types = (
+        "Artifact Creature — Golem",
+        "Land Creature — Forest Dryad",
+        "Instant",
+        "Tribal Enchantment",
+        "",
+    )
+    assert [_card_category(t) for t in types] == ["Creature", "Land", "Spell", "Enchantment", "Other"]

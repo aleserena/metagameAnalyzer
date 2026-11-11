@@ -9,6 +9,7 @@ callers trigger a single computation.
 import logging
 import threading
 
+from api.formats import is_commander_format
 from api.state import state
 from src.mtgtop8.analyzer import effective_commanders, find_duplicate_decks
 from src.mtgtop8.card_lookup import lookup_cards
@@ -23,7 +24,6 @@ _colors: tuple[int, dict[int, list[str]]] | None = None
 
 _COLOR_ORDER = ["W", "U", "B", "R", "G", "C"]
 _BASIC = {"W", "U", "B", "R", "G"}
-_EDH_FORMATS = {"EDH", "CEDH", "COMMANDER"}
 
 
 def duplicate_map() -> dict[int, list[int]]:
@@ -52,7 +52,7 @@ def _build_color_identities(deck_dicts: list[dict]) -> dict[int, list[str]]:
                     if c in _BASIC:
                         ci.add(c)
         # EDH/Commander decks with commanders but no colors are colorless ("C").
-        if not ci and ec and (deck_obj.format_id or "").upper() in _EDH_FORMATS:
+        if not ci and ec and is_commander_format(deck_obj.format_id):
             ci.add("C")
         if ci:
             result[d.get("deck_id")] = [c for c in _COLOR_ORDER if c in ci]

@@ -2,7 +2,6 @@ import logging
 import math
 import secrets
 from datetime import datetime
-from urllib.parse import unquote
 
 from fastapi import Depends, HTTPException, Query, Request
 from src.mtgtop8.analyzer import (
@@ -22,6 +21,7 @@ from api.dependencies import (
     require_admin,
     require_database,
 )
+from api.formats import is_commander_format
 from api.helpers import (
     _deck_sort_key,
     _filter_decks_by_date,
@@ -164,7 +164,7 @@ def add_player_alias(body: PlayerAliasBody, _: str = Depends(require_admin)):
 @router.delete("/api/v1/player-aliases/{alias:path}")
 def remove_player_alias(alias: str, _: str = Depends(require_admin)):
     """Remove a player alias."""
-    a = unquote(alias).strip()
+    a = alias.strip()
     if a in state.player_aliases:
         del state.player_aliases[a]
         if state.database_available():
@@ -378,7 +378,7 @@ def get_player_analysis_by_name(
     date_to: str | None = Query(None, description="Filter to date (DD/MM/YY)"),
 ):
     """Aggregated analytics for the player dashboard by name (alias-resolved). Optional date range."""
-    name = unquote(player_name).strip()
+    name = player_name.strip()
     # If the name ends with "/analysis" because of path matching quirks, strip it.
     if name.endswith("/analysis"):
         name = name[: -len("/analysis")].strip()
@@ -521,7 +521,7 @@ def get_player_detail(
     date_to: str | None = Query(None, description="Filter to date (DD/MM/YY)"),
 ):
     """Player stats and their decks. Merges aliased players (e.g. Pablo Tomas Pesci = Tomas Pesci). Accent-insensitive: matias finds Matías."""
-    name = unquote(player_name).strip()
+    name = player_name.strip()
     canonical = _resolve_player_name_to_canonical(name)
     all_player_decks = [d for d in state.decks if _normalize_player(d.get("player") or "") == canonical]
     if not all_player_decks:
@@ -589,7 +589,7 @@ def _deck_color_identity(deck_obj: Deck, card_metadata: dict[str, dict]) -> list
     EDH: derived from commander color identity (colorless EDH -> ['C']).
     Non-EDH: derived from mainboard cards' color identities.
     """
-    is_edh = (deck_obj.format_id or "").upper() in {"EDH", "CEDH", "COMMANDER"}
+    is_edh = is_commander_format(deck_obj.format_id)
     ci: set[str] = set()
     if is_edh:
         for name in effective_commanders(deck_obj):
@@ -695,7 +695,7 @@ def _commander_distribution_edh(player_deck_objs: list[Deck]) -> list[dict]:
     """Top commanders, EDH-only. Empty for non-EDH players."""
     counts: dict[str, int] = {}
     for d in player_deck_objs:
-        if (d.format_id or "").upper() not in {"EDH", "CEDH", "COMMANDER"}:
+        if not is_commander_format(d.format_id):
             continue
         ec = effective_commanders(d)
         key = " / ".join(sorted(ec)) if ec else "(no commander)"

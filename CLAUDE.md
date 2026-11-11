@@ -47,11 +47,17 @@ metagameAnalyzer/
 │   ├── state.py     # in-memory deck list + caches: the `state` holder + DB/alias loaders
 │   ├── helpers.py   # pure date/rank/sort/filter + card-name normalization helpers
 │   ├── route_helpers.py # helpers shared by 2+ routers (upload-link URL, matchup result, date range)
+│   ├── results.py   # single match-result vocabulary: WIN/LOSS/DRAW_RESULTS (incl. intentional_draw_win/loss), effective_wld, invert_result — every win-rate statistic goes through it
+│   ├── dates.py     # DD/MM/YY deck-date parsing and range helpers (parse_ddmmyy, parse_bound, in_range, sort_key)
+│   ├── formats.py   # is_commander_format() — the one commander-format check (EDH/cEDH/Commander, any case)
 │   ├── dependencies.py # auth/DB FastAPI dependencies (require_admin, …) + JWT
 │   ├── db.py        # SQLAlchemy models and database layer
 │   ├── routers/     # one APIRouter module per domain (see below) — ~90 routes; aggregated in routers/__init__.py
 │   ├── schemas/     # Pydantic request/response models (one file per domain)
-│   ├── services/    # settings.py — rank weights and ignore-lands list (stored in the `settings` table under `rank_weights`/`ignore_lands_cards`, imported once from the legacy `DATA_DIR/settings/*.json` files; the JSON files are used only when there is no DB), matchup thresholds
+│   ├── services/    # business logic shared by routers:
+│   │                #   settings (rank weights + ignore-lands list live in the `settings` table under `rank_weights`/`ignore_lands_cards`, imported once from the legacy `DATA_DIR/settings/*.json`; matchup thresholds),
+│   │                #   scrape_job (background scrape job + status), scrape_store (persist scraped decks), event_import / event_export (event JSON round-trip),
+│   │                #   deck_index (cached duplicate map + colour identities), rate_limit, captcha, mtgjson (card/price sync jobs), alerts, hadouken
 │   └── email.py     # Brevo email integration
 │   # routers/: health, auth, feedback, cards, decks, events, upload,
 │   #           metagame, matchups, players, settings, data
@@ -77,6 +83,12 @@ metagameAnalyzer/
 
 **Supported formats** (`src/mtgtop8/config.py` FORMATS, mirrored in `web/src/config.ts`): EDH (Duel Commander), Standard, Pioneer, Modern, Legacy, Vintage, Pauper, cEDH, Premodern, Explorer, Historic, Alchemy, Peasant, Block, Extended, Highlander, Canadian Highlander.
 
+**Scrape jobs:** `POST /api/v1/scrape` starts a background scrape (`api/services/scrape_job.py`), `GET /api/v1/scrape/status` reports progress and `POST /api/v1/scrape/stop` cancels it (all admin, handlers in `api/routers/data.py`); results are persisted by `api/services/scrape_store.py`.
+
+**Shared helpers (use these, don't re-inline):** `is_commander_format()` (`api/formats.py`), `effective_wld()` (`api/results.py`), `db.utcnow_naive()` for naive-UTC timestamps (never `datetime.utcnow()`), `metagame._card_category()` for card type buckets. Path parameters are already URL-decoded by FastAPI — do not `unquote` them again.
+
+**CI:** `.github/workflows/ci.yml` runs the backend suite against a Postgres 16 service (`TEST_DATABASE_URL`, `REQUIRE_DB_TESTS=1` so DB tests fail instead of skipping) plus lint and the frontend build/tests.
+
 **Route index:** `docs/API_ROUTES.md` lists every endpoint with its handler function name and source router — grep the handler name to jump to it. It is **auto-generated** by `scripts/gen_api_routes.py` (scans `api/main.py` + `api/routers/*.py`); after adding/changing a route run `npm run gen:routes` (pre-push runs `gen:routes:check` and fails if it's stale).
 
 ## Backend Patterns
@@ -91,14 +103,14 @@ with _db.session_scope() as session:
 
 **Key DB models** (`api/db.py`):
 - `DeckRow` — deck with `player_id`, `event_id`, `archetype`, `format_id`
-- `MatchupRow` — per-round match result: `deck_id`, `opponent_player_id`, `opponent_deck_id`, `opponent_archetype`, `result` (`win|loss|draw|intentional_draw`), `round`. Both sides stored (inverse written automatically by `upsert_matchups_for_deck`).
+- `MatchupRow` — per-round match result: `deck_id`, `opponent_player_id`, `opponent_deck_id`, `opponent_archetype`, `result` (`win|loss|draw|intentional_draw|intentional_draw_win|intentional_draw_loss`; see `api/results.py`), `round`. Both sides stored (inverse written automatically by `upsert_matchups_for_deck`).
 - `PlayerRow` — canonical player with `display_name`
 
 **In-memory data:** the process-wide `state` object (`api/state.py`) holds `state.decks` (list of dicts loaded from DB on startup), plus `metagame_cache`, `events_cache`, `player_aliases`. Most read endpoints query `state.decks` directly for speed; mutations go to DB then call `_load_decks_from_db()` (which reassigns `state.decks`). It is a holder object on purpose — `from api.state import state` then `state.decks` always sees the current list, whereas `from api.state import decks` would capture a stale reference after reassignment. Tests patch `state.decks` (see `tests/test_api.py`).
 
 **Derived-data caches and invalidation:** `state.decks_version` is bumped by `state.set_decks()` (replace the deck list) and `state.touch()` (invalidate without replacing, e.g. card data changed); both also clear `metagame_cache`/`events_cache`. `GET /metagame` (cached in `state.metagame_cache`), and `api/services/deck_index.py` (`duplicate_map()`, `color_identities()`, each computed once per version) key off it, plus `settings_service.version()` (bumped when rank weights or the ignore-lands list change) for `/metagame`. **Rule:** any mutation of an input to `/metagame`, the `/decks` colour filter/`color_identity`, or the duplicate map (decks, player aliases, the `cards` table, rank weights, ignore-lands list) must call `set_decks()`/`touch()` or bump the settings version. Degraded results (card-table lookup failed) are never cached: `lookup_cards(..., strict=True)` re-raises DB errors so callers can skip caching. `scripts/sync_mtgjson.py` runs in a separate process and cannot invalidate a running API's caches; after running it, trigger `POST /analyze` (which calls `touch()`) or restart the API. If players were inserted by an older release after migration 016 (NULL `players.name_key`), run `python3 -m scripts.backfill_player_name_keys --apply --db-env <env>` (idempotent).
 
-**Player aliases:** stored in the database when available (`_db.get_player_aliases`), with `player_aliases.json` in `DATA_DIR` as the JSON fallback. Managed via the `/api/v1/player-aliases` endpoints in `api/main.py` (not in `api/services/`).
+**Player aliases:** stored in the database when available (`_db.get_player_aliases`), with `player_aliases.json` in `DATA_DIR` as the JSON fallback. Managed via the `/api/v1/player-aliases` endpoints in `api/routers/players.py`. (The JSON fallback only applies when no database is configured, which the app does not support in normal operation.)
 
 ## Frontend Patterns
 
@@ -120,7 +132,6 @@ with _db.session_scope() as session:
 - The E402/I001 warnings in `alembic/`, `api/main.py`, and `src/mtgtop8/scraper.py` (intentional — path manipulation before imports) are now suppressed via `per-file-ignores` in `pyproject.toml`, so `ruff check .` is clean.
 - Husky git hooks (`.husky/`): **pre-commit** runs fast lint only (`npm run lint`); **pre-push** runs the frontend build and both test suites (`npm run build`, `npm run test`, `npm run test:py`). Use `--no-verify` to bypass either when iterating, but ensure all checks pass before the final push.
 - Ruff `per-file-ignores` (in `pyproject.toml`) suppress E402/I001 for the path-manipulation entrypoints (`api/main.py`, `src/mtgtop8/scraper.py`), `alembic/`, `scripts/`, and `tests/`. Real bugs (F-codes) are still enforced everywhere, so `ruff check .` should stay green.
-- `api/main.py` is intentionally large and centralized — most FastAPI route logic lives there.
 
 ## Environment
 
