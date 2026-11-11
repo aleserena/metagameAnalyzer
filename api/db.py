@@ -17,6 +17,7 @@ from pathlib import Path
 
 from sqlalchemy import (
     Column,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -34,6 +35,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, aliased, declarative_base, sessionmaker, validates
 
+from api.dates import parse_ddmmyy
 from api.results import COUNTED_RESULTS, effective_wld, invert_result
 
 logger = logging.getLogger(__name__)
@@ -58,7 +60,13 @@ class EventRow(Base):
     store = Column(String(512), nullable=False, default="")
     location = Column(String(512), nullable=False, default="")
     date = Column(String(32), nullable=False, default="")  # DD/MM/YY
+    event_date = Column(Date, nullable=True, index=True)  # parsed from `date` (see _sync_event_date)
     player_count = Column(Integer, nullable=False, default=0)  # number of players in the event
+
+    @validates("date")
+    def _sync_event_date(self, _key, value):
+        self.event_date = parse_ddmmyy(value)
+        return value
 
 
 class PlayerRow(Base):
@@ -86,6 +94,7 @@ class DeckRow(Base):
     player = Column(String(512), nullable=False, default="")  # denormalized display name
     event_name = Column(String(512), nullable=False, default="")
     date = Column(String(32), nullable=False, default="")
+    event_date = Column(Date, nullable=True, index=True)  # parsed from `date` (see _sync_event_date)
     rank = Column(String(32), nullable=False, default="")
     player_count = Column(Integer, nullable=False, default=0)
     commanders = Column(JSONB, nullable=False)  # list of strings
@@ -93,6 +102,11 @@ class DeckRow(Base):
     mainboard = Column(JSONB, nullable=False)  # [{"qty": int, "card": str}, ...]
     sideboard = Column(JSONB, nullable=False)
     # deck_id is globally unique: MTGTop8 use site IDs; manual use MANUAL_DECK_ID_START+
+
+    @validates("date")
+    def _sync_event_date(self, _key, value):
+        self.event_date = parse_ddmmyy(value)
+        return value
 
 
 class PlayerAliasRow(Base):
@@ -533,7 +547,7 @@ def _normalize_boards(d: dict) -> tuple[list[dict], list[dict]]:
 
 
 def get_all_events(session: Session) -> list[dict]:
-    rows = session.query(EventRow).order_by(EventRow.date.desc(), EventRow.event_id).all()
+    rows = session.query(EventRow).order_by(EventRow.event_date.desc().nulls_last(), EventRow.event_id).all()
     return [event_row_to_dict(r) for r in rows]
 
 

@@ -12,6 +12,8 @@ from fastapi import HTTPException, UploadFile
 from src.mtgtop8.normalize import normalize_card_name as _normalize_card_name
 
 from api.config import DATA_DIR, MAX_UPLOAD_JSON_BYTES
+from api.dates import in_range as _date_in_range
+from api.dates import sort_key as _parse_date_sortkey
 
 try:
     from api import db as _db
@@ -132,14 +134,6 @@ def _rank_sort_value(rank_str: str) -> int:
     return n if 1 <= n <= 128 else 999
 
 
-def _parse_date_sortkey(date_str: str) -> str:
-    """Convert DD/MM/YY to YYMMDD for sorting."""
-    parts = date_str.split("/")
-    if len(parts) == 3:
-        return parts[2] + parts[1] + parts[0]
-    return date_str
-
-
 def _date_yymmdd_to_parts(key: str) -> tuple[int, int, int] | None:
     """Convert a YYMMDD sort key to (yy, mm, dd) ints, or None if invalid."""
     if not key or not key.isdigit() or len(key) != 6:
@@ -194,23 +188,6 @@ def _deck_sort_key(d: dict) -> tuple:
     date_key = _parse_date_sortkey(d.get("date", ""))
     rank_val = _rank_sort_value(d.get("rank", ""))
     return (-int(date_key) if date_key.isdigit() else 0, rank_val)
-
-
-def _date_in_range(date_str: str, date_from: str | None, date_to: str | None) -> bool:
-    """Check if DD/MM/YY date_str is within [date_from, date_to] (inclusive)."""
-    key = _parse_date_sortkey(date_str)
-    if not key.isdigit():
-        return True
-    key_int = int(key)
-    if date_from:
-        from_key = _parse_date_sortkey(date_from)
-        if from_key.isdigit() and key_int < int(from_key):
-            return False
-    if date_to:
-        to_key = _parse_date_sortkey(date_to)
-        if to_key.isdigit() and key_int > int(to_key):
-            return False
-    return True
 
 
 def _filter_decks_by_date(decks: list[dict], date_from: str | None, date_to: str | None) -> list[dict]:

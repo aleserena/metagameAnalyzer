@@ -5,6 +5,7 @@ from collections.abc import Callable
 
 from fastapi import Request
 
+from api.dates import in_range as _date_in_range  # noqa: F401  (re-exported for routers)
 from api.results import invert_result
 
 
@@ -101,53 +102,3 @@ def opponent_report_to_prefill(report: dict, normalize_player: Callable[[str], s
         "intentional_draw": _is_intentional_draw_result(res),
         "round": report.get("round"),
     }
-
-
-def _parse_deck_date(s: str) -> tuple[int, int, int] | None:
-    """Parse DD/MM/YY or DD/MM/YYYY to (year, month, day) for comparison. Returns None if invalid."""
-    if not s or not s.strip():
-        return None
-    parts = s.strip().split("/")
-    if len(parts) != 3:
-        return None
-    try:
-        day, month, year = int(parts[0]), int(parts[1]), int(parts[2])
-        if year < 100:
-            year += 2000 if year < 50 else 1900
-        if 1 <= month <= 12 and 1 <= day <= 31:
-            return (year, month, day)
-    except (ValueError, IndexError):
-        pass
-    return None
-
-
-def _date_in_range(deck_date_str: str, from_date: str | None, to_date: str | None) -> bool:
-    if not from_date and not to_date:
-        return True
-    parsed = _parse_deck_date(deck_date_str)
-    if not parsed:
-        return True
-    y, m, d = parsed
-    if from_date:
-        f = _parse_deck_date(from_date)
-        if not f:
-            try:
-                from datetime import datetime as _dt
-                _d = _dt.fromisoformat(from_date.replace("Z", "+00:00")[:10])
-                f = (_d.year, _d.month, _d.day)
-            except Exception:
-                f = None
-        if f and (y, m, d) < f:
-            return False
-    if to_date:
-        t = _parse_deck_date(to_date)
-        if not t:
-            try:
-                from datetime import datetime as _dt
-                _d = _dt.fromisoformat(to_date.replace("Z", "+00:00")[:10])
-                t = (_d.year, _d.month, _d.day)
-            except Exception:
-                t = None
-        if t and (y, m, d) > t:
-            return False
-    return True
