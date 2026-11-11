@@ -25,3 +25,13 @@ Do this if the admin password or a session token may have leaked. Change `ADMIN_
 ## Single instance
 
 The login throttle, the feedback throttle and the captcha replay store live in the API process memory. They reset on restart and are not shared between replicas. Run **one replica**; move these to the database before scaling out.
+
+## Dependencies
+
+- Dependabot (`.github/dependabot.yml`) opens weekly update PRs against `staging` for Python, the frontend, GitHub Actions and the Docker base images. `requirements*.txt` are generated, so after merging a Python update run `npm run deps:compile`.
+- CI fails on a known vulnerability in `requirements.txt` (`pip-audit`) or a high-severity one in the frontend's runtime dependencies (`npm audit --omit=dev --audit-level=high`).
+- Turn on **secret scanning**, **push protection** and **Dependabot alerts** in the GitHub repository settings (Code security).
+
+## Accepted risks
+
+- **The container runs as root.** Railway mounts volumes as root, so a non-root user cannot write to `DATA_DIR` (`/data`). Revisit if the app stops needing a volume.
