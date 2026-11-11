@@ -342,3 +342,54 @@ def test_lookup_cards_strict_reraises_db_error(monkeypatch):
     monkeypatch.setattr(db, "session_scope", boom)
     with pytest.raises(RuntimeError):
         cl.lookup_cards(["Sol Ring"], strict=True)
+
+
+# ---- bounded Scryfall fallback (public lookups) ---------------------------------------------
+
+
+def _no_database(monkeypatch):
+    """Every name is missing from the cards table; record what goes to the Scryfall fallback."""
+    from src.mtgtop8 import card_lookup as cl
+    import api.db as db
+
+    monkeypatch.setattr(db, "is_database_available", lambda: False)
+    monkeypatch.setattr(cl, "SCRYFALL_FALLBACK_ENABLED", True)
+    sent: list[str] = []
+
+    def fake_fallback(names):
+        sent.extend(names)
+        return {n: {"name": n} for n in names}
+
+    monkeypatch.setattr(cl, "_scryfall_lookup_cards", fake_fallback)
+    return cl, sent
+
+
+def test_max_fallback_limits_names_sent_to_scryfall(monkeypatch):
+    cl, sent = _no_database(monkeypatch)
+    names = [f"Unknown {i}" for i in range(20)]
+    result = cl.lookup_cards(names, max_fallback=5)
+    assert sent == names[:5]
+    assert all(result[n] == {"name": n} for n in names[:5])
+    assert all(result[n] == {"error": "not_found"} for n in names[5:])
+
+
+def test_names_over_the_fallback_limit_are_not_cached_as_not_found(monkeypatch):
+    cl, _ = _no_database(monkeypatch)
+    monkeypatch.setattr(cl, "_card_cache", {})
+    names = [f"Unknown {i}" for i in range(20)]
+    cl.lookup_cards(names, max_fallback=5)
+    assert all(n not in cl._card_cache for n in names[5:])
+
+
+def test_max_fallback_none_sends_every_missing_name(monkeypatch):
+    cl, sent = _no_database(monkeypatch)
+    names = [f"Unknown {i}" for i in range(20)]
+    cl.lookup_cards(names)
+    assert sent == names
+
+
+def test_max_fallback_zero_never_calls_scryfall(monkeypatch):
+    cl, sent = _no_database(monkeypatch)
+    result = cl.lookup_cards(["Unknown"], max_fallback=0)
+    assert sent == []
+    assert result == {"Unknown": {"error": "not_found"}}

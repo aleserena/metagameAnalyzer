@@ -227,12 +227,24 @@ export interface CardLookupResult {
   error?: string
 }
 
+/** The API accepts at most this many names per lookup (MAX_LOOKUP_NAMES); larger lists are split. */
+const CARD_LOOKUP_BATCH = 200
+
 export async function getCardLookup(names: string[]): Promise<Record<string, CardLookupResult>> {
   if (names.length === 0) return {}
-  return fetchApi('/cards/lookup', {
-    method: 'POST',
-    body: JSON.stringify({ names }),
-  })
+  const batches: string[][] = []
+  for (let i = 0; i < names.length; i += CARD_LOOKUP_BATCH) {
+    batches.push(names.slice(i, i + CARD_LOOKUP_BATCH))
+  }
+  const results = await Promise.all(
+    batches.map((batch) =>
+      fetchApi<Record<string, CardLookupResult>>('/cards/lookup', {
+        method: 'POST',
+        body: JSON.stringify({ names: batch }),
+      })
+    )
+  )
+  return Object.assign({}, ...results)
 }
 
 export async function getCardSearch(query: string, role?: string): Promise<{ data: string[] }> {

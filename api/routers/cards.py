@@ -1,8 +1,9 @@
 import logging
 
-from fastapi import Query
+from fastapi import Depends, Query
 from src.mtgtop8.card_lookup import autocomplete_cards, lookup_cards
 
+from api.dependencies import optional_admin
 from api.schemas.auth_feedback import CardLookupBody
 
 try:
@@ -15,12 +16,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# Names an anonymous request may send on to Scryfall when the cards table does not know them.
+# Enough for a newly released card or two on a deck page; too few to turn the API into a relay.
+PUBLIC_FALLBACK_NAMES = 5
+
+
 @router.post("/api/v1/cards/lookup")
-def cards_lookup(body: CardLookupBody):
-    """Look up card metadata and images from Scryfall."""
+def cards_lookup(body: CardLookupBody, admin: str | None = Depends(optional_admin)):
+    """Look up card metadata and images (cards table, then a bounded Scryfall fallback).
+
+    Public. Anonymous callers get at most PUBLIC_FALLBACK_NAMES live Scryfall lookups per
+    request; an admin gets the full fallback.
+    """
     if not body.names:
         return {}
-    return lookup_cards(body.names)
+    return lookup_cards(body.names, max_fallback=None if admin else PUBLIC_FALLBACK_NAMES)
 
 
 @router.get("/api/v1/cards/search")

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { getDecks, getMetagame, clearScryfallCache, clearDecks } from './api'
+import { getDecks, getMetagame, clearScryfallCache, clearDecks, getCardLookup } from './api'
 
 describe('api', () => {
   beforeEach(() => {
@@ -136,6 +136,39 @@ describe('api', () => {
       await expect(clearDecks()).rejects.toThrow()
 
       expect(sessionStorage.getItem('session_expired')).toBe('1')
+    })
+  })
+
+  describe('getCardLookup batching', () => {
+    const echoNames = async (_url: unknown, init?: RequestInit) => {
+      const { names } = JSON.parse(String(init?.body)) as { names: string[] }
+      return { ok: true, status: 200, json: async () => Object.fromEntries(names.map((n) => [n, { name: n }])) } as Response
+    }
+    const batchSizes = () =>
+      vi.mocked(fetch).mock.calls.map((call) => (JSON.parse(String((call[1] as RequestInit).body)) as { names: string[] }).names.length)
+
+    it('splits a large request into batches of 200 and merges the results', async () => {
+      vi.mocked(fetch).mockImplementation(echoNames as typeof fetch)
+      const names = Array.from({ length: 450 }, (_, i) => `Card ${i}`)
+
+      const result = await getCardLookup(names)
+
+      expect(batchSizes().sort((a, b) => b - a)).toEqual([200, 200, 50])
+      expect(Object.keys(result)).toHaveLength(450)
+      expect(result['Card 449']).toEqual({ name: 'Card 449' })
+    })
+
+    it('sends a small request in one call', async () => {
+      vi.mocked(fetch).mockImplementation(echoNames as typeof fetch)
+
+      await getCardLookup(Array.from({ length: 10 }, (_, i) => `Card ${i}`))
+
+      expect(batchSizes()).toEqual([10])
+    })
+
+    it('makes no call for an empty list', async () => {
+      expect(await getCardLookup([])).toEqual({})
+      expect(fetch).not.toHaveBeenCalled()
     })
   })
 })

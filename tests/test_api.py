@@ -1581,9 +1581,9 @@ def test_feedback_alert_failure_still_creates_issue_and_never_logs_address(clien
 
 def test_cards_lookup_size_limits(client):
     with patch("api.routers.cards.lookup_cards", return_value={}):
-        ok = client.post("/api/v1/cards/lookup", json={"names": ["x"] * 1000})
+        ok = client.post("/api/v1/cards/lookup", json={"names": ["x"] * 200})
         assert ok.status_code == 200
-        too_many = client.post("/api/v1/cards/lookup", json={"names": ["x"] * 1001})
+        too_many = client.post("/api/v1/cards/lookup", json={"names": ["x"] * 201})
         assert too_many.status_code == 422
         too_long = client.post("/api/v1/cards/lookup", json={"names": ["y" * 201]})
         assert too_long.status_code == 422
@@ -1922,3 +1922,21 @@ def test_admin_token_lifetime_is_twelve_hours():
     assert deps.JWT_EXP_SECONDS == 12 * 3600
     claims = jwt.decode(deps._create_admin_token(), deps._JWT_KEY, algorithms=[deps.JWT_ALGORITHM])
     assert 0 < claims["exp"] - time.time() <= 12 * 3600
+
+
+def test_anonymous_card_lookup_bounds_the_scryfall_fallback(client):
+    with patch("api.routers.cards.lookup_cards", return_value={}) as lookup:
+        r = client.post("/api/v1/cards/lookup", json={"names": ["Made Up Card"]})
+    assert r.status_code == 200
+    assert lookup.call_args.kwargs["max_fallback"] == 5
+
+
+def test_admin_card_lookup_has_unbounded_fallback(client, monkeypatch):
+    from api import dependencies as deps
+
+    monkeypatch.setattr(deps, "ADMIN_PASSWORD", "test-admin-password")
+    headers = {"Authorization": f"Bearer {deps._create_admin_token()}"}
+    with patch("api.routers.cards.lookup_cards", return_value={}) as lookup:
+        r = client.post("/api/v1/cards/lookup", json={"names": ["Brand New Card"]}, headers=headers)
+    assert r.status_code == 200
+    assert lookup.call_args.kwargs["max_fallback"] is None

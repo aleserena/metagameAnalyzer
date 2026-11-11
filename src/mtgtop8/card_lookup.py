@@ -378,7 +378,9 @@ def _row_to_entry(row) -> dict:
     }
 
 
-def lookup_cards(card_names: list[str], *, strict: bool = False) -> dict[str, dict]:
+def lookup_cards(
+    card_names: list[str], *, strict: bool = False, max_fallback: int | None = None
+) -> dict[str, dict]:
     """Look up cards by name. Returns {card_name: {image_uris, mana_cost, cmc, type_line, ...}}.
 
     Reads from the MTGJSON-backed ``cards`` table; names not found there fall back to
@@ -386,6 +388,10 @@ def lookup_cards(card_names: list[str], *, strict: bool = False) -> dict[str, di
 
     A database error is logged and what was found so far is returned; with ``strict`` it is
     re-raised instead, so callers that cache derived data can avoid caching a degraded result.
+
+    ``max_fallback`` caps how many missing names go to Scryfall (``None`` = no cap). It is for
+    callers passing untrusted names: the rest are reported ``not_found`` without being cached,
+    so a later lookup can still resolve them.
     """
     names = list(dict.fromkeys(card_names))
     result: dict[str, dict] = {}
@@ -412,7 +418,11 @@ def lookup_cards(card_names: list[str], *, strict: bool = False) -> dict[str, di
         return result
 
     if missing and SCRYFALL_FALLBACK_ENABLED:
-        result.update(_scryfall_lookup_cards(missing))
+        to_fetch = missing if max_fallback is None else missing[: max(0, max_fallback)]
+        if to_fetch:
+            result.update(_scryfall_lookup_cards(to_fetch))
+        for name in missing[len(to_fetch) :]:
+            result[name] = {"error": "not_found"}
     return result
 
 
