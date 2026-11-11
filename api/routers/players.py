@@ -123,12 +123,12 @@ def send_player_missing_deck_links(player_name: str, request: Request):
             body_parts.append("")
         subject = "Deck upload links (missing decks)"
         body = "\n".join(body_parts).strip()
-        try:
-            _email.send_email(addr, subject, body)
-        except Exception as e:
-            logger.exception("Send player missing-deck email failed for %s", canonical)
-            raise HTTPException(status_code=500, detail="Failed to send email") from e
-        return {"sent": 1}
+    try:
+        _email.send_email(addr, subject, body)
+    except Exception as e:
+        logger.exception("Send player missing-deck email failed for %s", canonical)
+        raise HTTPException(status_code=500, detail="Failed to send email") from e
+    return {"sent": 1}
 
 
 @router.get("/api/v1/player-aliases")

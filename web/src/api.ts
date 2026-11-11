@@ -449,7 +449,7 @@ export async function sendPlayerMissingDeckLinks(playerName: string): Promise<{ 
   return fetchApi(`/players/${encodeURIComponent(playerName)}/send-missing-deck-links`, { method: 'POST' })
 }
 
-export async function sendFeedbackLinks(eventId: string): Promise<{ sent: number }> {
+export async function sendFeedbackLinks(eventId: string): Promise<{ sent: number; failed?: string[] }> {
   return fetchApi(`/events/${encodeURIComponent(eventId)}/send-feedback-links`, { method: 'POST' })
 }
 

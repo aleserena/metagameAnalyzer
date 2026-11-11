@@ -943,6 +943,29 @@ def create_upload_links(event_id: str, request: Request, body: CreateUploadLinks
         return {"links": links}
 
 
+def _event_decks_for_mail(session, event_id: str) -> list:
+    """All deck rows of an event (used by the bulk link-email endpoints)."""
+    return session.query(_db.DeckRow).filter(_db.DeckRow.event_id == _db._event_id_str(event_id)).all()
+
+
+def _send_queued_emails(queued: list[tuple[str, str, str, str]], send_email, log_label: str) -> tuple[int, list[str]]:
+    """Send (player_name, address, subject, body) emails; return (sent count, failed player names).
+
+    Called after the link-creating transaction has committed, so a provider failure
+    never rolls back links that may already have been emailed.
+    """
+    sent = 0
+    failed: list[str] = []
+    for player_name, addr, subject, body in queued:
+        try:
+            send_email(addr, subject, body)
+            sent += 1
+        except Exception:
+            logger.exception("%s failed for %s", log_label, player_name)
+            failed.append(player_name)
+    return sent, failed
+
+
 @router.post("/api/v1/events/{event_id}/send-missing-deck-links", dependencies=[Depends(require_admin), Depends(require_database)])
 def send_missing_deck_links(event_id: str, request: Request):
     """Email one-time deck links to players with missing (empty) decks. Uses DB-stored emails only. 503 if email not configured."""
@@ -960,7 +983,7 @@ def send_missing_deck_links(event_id: str, request: Request):
         ev = _db.get_event(session, event_id)
         if not ev:
             raise HTTPException(status_code=404, detail="Event not found")
-        decks = session.query(_db.DeckRow).filter(_db.DeckRow.event_id == _db._event_id_str(event_id)).all()
+        decks = _event_decks_for_mail(session, event_id)
         # Group decks missing a list by player_id so emails can be batched in one
         # query (resolving by display name does a per-name full-table scan).
         missing_by_pid: dict[int, list] = {}
@@ -974,8 +997,7 @@ def send_missing_deck_links(event_id: str, request: Request):
         if not missing_by_pid:
             return {"sent": 0, "failed": []}
         email_map = _db.get_emails_for_player_ids(session, list(missing_by_pid))
-        sent = 0
-        failed = []
+        queued: list[tuple[str, str, str, str]] = []
         for pid, addr in email_map.items():
             deck_list = missing_by_pid.get(pid, [])
             if not deck_list or not addr:
@@ -992,13 +1014,9 @@ def send_missing_deck_links(event_id: str, request: Request):
             event_name = event_display_name(ev.name or "", getattr(ev, "store", "") or "", getattr(ev, "location", "") or "")
             subject = f"Deck upload link: {event_name}"
             body = f"Please submit your deck list for {event_name}.\n\nUse this link (one-time):\n\n" + "\n".join(links_for_player)
-            try:
-                _email.send_email(addr, subject, body)
-                sent += 1
-            except Exception:
-                logger.exception("Send missing-deck email failed for %s", player_name)
-                failed.append(player_name)
-        return {"sent": sent, "failed": failed}
+            queued.append((player_name, addr, subject, body))
+    sent, failed = _send_queued_emails(queued, _email.send_email, "Send missing-deck email")
+    return {"sent": sent, "failed": failed}
 
 
 @router.post("/api/v1/events/{event_id}/send-feedback-links", dependencies=[Depends(require_admin), Depends(require_database)])
@@ -1018,13 +1036,13 @@ def send_feedback_links(event_id: str, request: Request):
         ev = _db.get_event(session, event_id)
         if not ev:
             raise HTTPException(status_code=404, detail="Event not found")
-        decks = session.query(_db.DeckRow).filter(_db.DeckRow.event_id == _db._event_id_str(event_id)).all()
+        decks = _event_decks_for_mail(session, event_id)
         if not decks:
-            return {"sent": 0}
+            return {"sent": 0, "failed": []}
         # Batch email lookup by player_id (name resolution does a per-name full-table scan).
         player_ids = list({getattr(d, "player_id", None) for d in decks} - {None})
         email_map = _db.get_emails_for_player_ids(session, player_ids)
-        sent = 0
+        queued: list[tuple[str, str, str, str]] = []
         for deck_row in decks:
             pid = getattr(deck_row, "player_id", None)
             addr = email_map.get(pid) if pid is not None else None
@@ -1038,12 +1056,10 @@ def send_feedback_links(event_id: str, request: Request):
             event_name = event_display_name(ev.name or "", getattr(ev, "store", "") or "", getattr(ev, "location", "") or "")
             subject = f"Event feedback: {event_name}"
             body = f"Please submit your match results for {event_name}.\n\nLink (one-time): {base_url}/upload/{token}"
-            try:
-                _email.send_email(addr, subject, body)
-                sent += 1
-            except Exception:
-                logger.exception("Send feedback email failed for %s", (deck_row.player or "").strip() or pid)
-        return {"sent": sent}
+            player_name = (deck_row.player or "").strip() or str(pid)
+            queued.append((player_name, addr, subject, body))
+    sent, failed = _send_queued_emails(queued, _email.send_email, "Send feedback email")
+    return {"sent": sent, "failed": failed}
 
 
 @router.post("/api/v1/events/{event_id}/send-feedback-link-to-player", dependencies=[Depends(require_admin), Depends(require_database)])
@@ -1081,11 +1097,11 @@ def send_feedback_link_to_player(event_id: str, request: Request, body: SendFeed
         event_name = event_display_name(ev.name or "", getattr(ev, "store", "") or "", getattr(ev, "location", "") or "")
         subject = f"Event feedback: {event_name}"
         body_text = f"Please submit your match results for {event_name}.\n\nLink (one-time): {base_url}/upload/{token}"
-        try:
-            _email.send_email(addr, subject, body_text)
-        except Exception as e:
-            logger.exception("Send feedback email failed for %s", canonical)
-            raise HTTPException(status_code=500, detail="Failed to send email") from e
+    try:
+        _email.send_email(addr, subject, body_text)
+    except Exception as e:
+        logger.exception("Send feedback email failed for %s", canonical)
+        raise HTTPException(status_code=500, detail="Failed to send email") from e
     return {"sent": 1}
 
 

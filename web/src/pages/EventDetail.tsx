@@ -645,7 +645,7 @@ export default function EventDetail() {
     sendFeedbackLinks(eventId)
       .then((res) => {
         refetch()
-        toast.success(`Sent ${res.sent} email(s).`)
+        toast.success(`Sent ${res.sent} email(s).${res.failed?.length ? ` Failed: ${res.failed.length}` : ''}`)
       })
       .catch((e) => {
         if (String(e?.message || e).includes('503') || String(e?.message || e).toLowerCase().includes('not configured')) {

@@ -1729,3 +1729,143 @@ def test_submit_reloads_decks_after_the_transaction_commits(client_with_override
         r = client_with_overrides.post("/api/v1/upload/tok", json=body)
     assert r.status_code == 201
     assert events == ["open", "closed", "reload"]
+
+
+# --- Link emails are sent after the transaction commits ---
+
+
+def _fake_db_scope(tracker):
+    @contextmanager
+    def scope():
+        tracker["open"] = True
+        try:
+            yield MagicMock()
+        finally:
+            tracker["open"] = False
+
+    return scope
+
+
+def test_feedback_link_email_is_sent_after_commit(client_with_overrides):
+    from api.routers import events as er
+
+    tracker = {"open": False, "sent_while_open": None}
+    fake_db = MagicMock()
+    fake_db.session_scope = _fake_db_scope(tracker)
+    fake_db.get_player_email.return_value = "p@example.com"
+
+    def send(to, subject, body):
+        tracker["sent_while_open"] = tracker["open"]
+
+    with (
+        patch.object(er, "_db", fake_db),
+        patch("api.email.is_email_configured", return_value=True),
+        patch("api.email.send_email", side_effect=send),
+    ):
+        r = client_with_overrides.post(
+            "/api/v1/events/80455/send-feedback-link-to-player", json={"player": "Jeremy Lb"}
+        )
+    assert r.status_code == 200
+    assert tracker["sent_while_open"] is False
+
+
+def test_single_feedback_link_send_failure_is_500_but_link_is_created(client_with_overrides):
+    from api.routers import events as er
+
+    fake_db = MagicMock()
+    fake_db.session_scope = _fake_db_scope({})
+    fake_db.get_player_email.return_value = "p@example.com"
+    with (
+        patch.object(er, "_db", fake_db),
+        patch("api.email.is_email_configured", return_value=True),
+        patch("api.email.send_email", side_effect=RuntimeError("provider down")),
+    ):
+        r = client_with_overrides.post(
+            "/api/v1/events/80455/send-feedback-link-to-player", json={"player": "Jeremy Lb"}
+        )
+    assert r.status_code == 500
+    assert r.json()["detail"] == "Failed to send email"
+    assert fake_db.create_upload_link.call_count == 1
+
+
+def test_bulk_feedback_links_report_failed_players(client_with_overrides):
+    from api.routers import events as er
+
+    fake_db = MagicMock()
+    fake_db.session_scope = _fake_db_scope({})
+    decks = [
+        SimpleNamespace(deck_id=1, player_id=1, player="Ann"),
+        SimpleNamespace(deck_id=2, player_id=2, player="Bob"),
+    ]
+    fake_db.get_emails_for_player_ids.return_value = {1: "ann@example.com", 2: "bob@example.com"}
+
+    def send(to, subject, body):
+        if to == "bob@example.com":
+            raise RuntimeError("provider down")
+
+    with (
+        patch.object(er, "_db", fake_db),
+        patch.object(er, "_event_decks_for_mail", return_value=decks),
+        patch("api.email.is_email_configured", return_value=True),
+        patch("api.email.send_email", side_effect=send),
+    ):
+        r = client_with_overrides.post("/api/v1/events/80455/send-feedback-links")
+    assert r.json() == {"sent": 1, "failed": ["Bob"]}
+    assert fake_db.create_upload_link.call_count == 2
+
+
+def test_bulk_missing_deck_links_email_sent_after_commit(client_with_overrides):
+    from api.routers import events as er
+
+    tracker = {"open": False, "sent_while_open": []}
+    fake_db = MagicMock()
+    fake_db.session_scope = _fake_db_scope(tracker)
+    decks = [SimpleNamespace(deck_id=1, player_id=1, player="Ann", mainboard=[])]
+    fake_db.get_emails_for_player_ids.return_value = {1: "ann@example.com"}
+
+    def send(to, subject, body):
+        tracker["sent_while_open"].append(tracker["open"])
+
+    with (
+        patch.object(er, "_db", fake_db),
+        patch.object(er, "_event_decks_for_mail", return_value=decks),
+        patch("api.email.is_email_configured", return_value=True),
+        patch("api.email.send_email", side_effect=send),
+    ):
+        r = client_with_overrides.post("/api/v1/events/80455/send-missing-deck-links")
+    assert r.json() == {"sent": 1, "failed": []}
+    assert tracker["sent_while_open"] == [False]
+
+
+def test_player_missing_deck_links_email_sent_after_commit(client_with_overrides):
+    from api.routers import players as pr
+
+    tracker = {"open": False, "sent_while_open": None}
+    deck = SimpleNamespace(deck_id=5, event_id="e1", player="Ann", mainboard=[])
+    session = MagicMock()
+    session.query.return_value.filter.return_value.all.return_value = [deck]
+
+    @contextmanager
+    def scope():
+        tracker["open"] = True
+        try:
+            yield session
+        finally:
+            tracker["open"] = False
+
+    fake_db = MagicMock()
+    fake_db.session_scope = scope
+    fake_db.get_player_email.return_value = "p@example.com"
+    fake_db.get_event.return_value = SimpleNamespace(name="E", store="", location="")
+
+    def send(to, subject, body):
+        tracker["sent_while_open"] = tracker["open"]
+
+    with (
+        patch.object(pr, "_db", fake_db),
+        patch("api.email.is_email_configured", return_value=True),
+        patch("api.email.send_email", side_effect=send),
+    ):
+        r = client_with_overrides.post("/api/v1/players/Ann/send-missing-deck-links")
+    assert r.status_code == 200
+    assert tracker["sent_while_open"] is False
