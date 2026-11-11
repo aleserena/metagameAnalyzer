@@ -40,7 +40,7 @@ def duplicate_map() -> dict[int, list[int]]:
 def _build_color_identities(deck_dicts: list[dict]) -> dict[int, list[str]]:
     deck_objs = [Deck.from_dict(d) for d in deck_dicts]
     commander_names = list({c for deck in deck_objs for c in effective_commanders(deck) if c})
-    metadata = lookup_cards(commander_names) if commander_names else {}
+    metadata = lookup_cards(commander_names, strict=True) if commander_names else {}
     result: dict[int, list[str]] = {}
     for deck_obj, d in zip(deck_objs, deck_dicts):
         ec = effective_commanders(deck_obj)
@@ -66,6 +66,8 @@ def color_identities() -> dict[int, list[str]] | None:
     so the next call retries.
     """
     global _colors
+    # Held across lookup_cards (which may call Scryfall) on purpose: cold-version callers
+    # wait for the single computation instead of each repeating it.
     with _color_lock:
         version = state.decks_version
         if _colors is None or _colors[0] != version:

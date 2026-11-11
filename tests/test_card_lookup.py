@@ -327,3 +327,18 @@ def test_db_error_does_not_fall_back_to_scryfall_for_everything(monkeypatch):
     monkeypatch.setattr(cl, "_scryfall_lookup_cards", lambda names: called.append(names) or {})
     assert cl.lookup_cards(["Sol Ring", "Island"]) == {}
     assert called == []
+
+
+def test_lookup_cards_strict_reraises_db_error(monkeypatch):
+    from src.mtgtop8 import card_lookup as cl
+    import api.db as db
+    import pytest
+
+    monkeypatch.setattr(db, "is_database_available", lambda: True)
+
+    def boom():
+        raise RuntimeError("connection reset")
+
+    monkeypatch.setattr(db, "session_scope", boom)
+    with pytest.raises(RuntimeError):
+        cl.lookup_cards(["Sol Ring"], strict=True)

@@ -1645,14 +1645,41 @@ def test_list_decks_color_filter_and_no_shared_mutation(client, sample_decks):
     assert all("color_identity" not in d for d in state.decks)
 
 
-def test_list_decks_color_filter_skipped_when_lookup_fails(client, sample_decks):
-    from api.services import deck_index
+def _break_card_db(monkeypatch):
+    import api.db as db
 
-    with patch.object(deck_index, "lookup_cards", side_effect=RuntimeError("boom")):
-        r = client.get("/api/v1/decks?colors=U,R")
+    def boom():
+        raise RuntimeError("connection reset")
+
+    monkeypatch.setattr(db, "is_database_available", lambda: True)
+    monkeypatch.setattr(db, "session_scope", boom)
+
+
+def test_list_decks_color_filter_skipped_when_lookup_fails(client, sample_decks, monkeypatch):
+    _break_card_db(monkeypatch)
+    r = client.get("/api/v1/decks?colors=U,R")
     decks = r.json()["decks"]
     assert len(decks) == len(state.decks)
     assert all("color_identity" not in d for d in decks)
+
+
+def test_degraded_metagame_response_is_not_cached(client, sample_decks, monkeypatch):
+    import api.db as db
+    from api.routers import metagame as mg
+
+    real_scope = db.session_scope
+    real_avail = db.is_database_available
+    _break_card_db(monkeypatch)
+    first = client.get("/api/v1/metagame")
+    assert first.status_code == 200
+    assert state.metagame_cache == {}
+    monkeypatch.setattr(db, "session_scope", real_scope)
+    monkeypatch.setattr(db, "is_database_available", real_avail)
+    meta = {"Spider-Man 2099": {"color_identity": ["U", "R"]}, "Terra, Magical Adept": {"color_identity": ["G"]}}
+    with patch.object(mg, "lookup_cards", return_value=meta):
+        second = client.get("/api/v1/metagame")
+    assert second.status_code == 200
+    assert len(state.metagame_cache) == 1
 
 
 def test_refresh_otag_index_returns_immediately(client_with_overrides):

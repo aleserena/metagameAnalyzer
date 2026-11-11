@@ -378,11 +378,14 @@ def _row_to_entry(row) -> dict:
     }
 
 
-def lookup_cards(card_names: list[str]) -> dict[str, dict]:
+def lookup_cards(card_names: list[str], *, strict: bool = False) -> dict[str, dict]:
     """Look up cards by name. Returns {card_name: {image_uris, mana_cost, cmc, type_line, ...}}.
 
     Reads from the MTGJSON-backed ``cards`` table; names not found there fall back to
     the Scryfall API (unless disabled). Returns the same entry shape from both paths.
+
+    A database error is logged and what was found so far is returned; with ``strict`` it is
+    re-raised instead, so callers that cache derived data can avoid caching a degraded result.
     """
     names = list(dict.fromkeys(card_names))
     result: dict[str, dict] = {}
@@ -404,6 +407,8 @@ def lookup_cards(card_names: list[str]) -> dict[str, dict]:
             missing = list(names)
     except Exception:
         logger.exception("Card lookup from the database failed")
+        if strict:
+            raise
         return result
 
     if missing and SCRYFALL_FALLBACK_ENABLED:

@@ -571,7 +571,14 @@ def get_metagame(
     _COLOR_LABEL = {"W": "White", "U": "Blue", "B": "Black", "R": "Red", "G": "Green"}
     _COLOR_ORDER = ["W", "U", "B", "R", "G", "Colorless"]
     commander_names = list({c for d in decks for c in effective_commanders(d) if c})
-    lookup = lookup_cards(commander_names) if commander_names else {}
+    degraded = False
+    try:
+        lookup = lookup_cards(commander_names, strict=True) if commander_names else {}
+    except Exception:
+        # Same output as an empty lookup, but must not be cached for the data version.
+        logger.exception("Commander color lookup failed; serving a degraded /metagame response")
+        lookup = {}
+        degraded = True
     color_counts: dict[str, int] = {k: 0 for k in _COLOR_ORDER}
     # Per-color commander counts (or weighted score) for tooltip "top decks in this color"
     color_deck_scores: dict[str, dict[str, float]] = {k: {} for k in _COLOR_ORDER}
@@ -682,10 +689,11 @@ def get_metagame(
     result["top_players"] = full_leaderboard[:5]
     # Unique players must match leaderboard (alias-aware): count distinct canonical players
     result["summary"]["unique_players"] = len(full_leaderboard)
-    with _metagame_cache_lock:
-        if len(state.metagame_cache) > _METAGAME_CACHE_MAX:
-            state.metagame_cache = {}
-        state.metagame_cache[cache_key] = result
+    if not degraded:
+        with _metagame_cache_lock:
+            if len(state.metagame_cache) > _METAGAME_CACHE_MAX:
+                state.metagame_cache = {}
+            state.metagame_cache[cache_key] = result
     return result
 
 
