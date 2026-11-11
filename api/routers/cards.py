@@ -5,6 +5,7 @@ from src.mtgtop8.card_lookup import autocomplete_cards, lookup_cards
 
 from api.dependencies import optional_admin
 from api.schemas.auth_feedback import CardLookupBody
+from api.services.rate_limit import RateLimiter, rate_limited
 
 try:
     from api import db as _db
@@ -21,7 +22,11 @@ router = APIRouter()
 PUBLIC_FALLBACK_NAMES = 5
 
 
-@router.post("/api/v1/cards/lookup")
+# Per client IP. A deck page fires several lookups plus one per card hover, so this is loose.
+LOOKUP_LIMITER = RateLimiter(600, 60)
+
+
+@router.post("/api/v1/cards/lookup", dependencies=[Depends(rate_limited(LOOKUP_LIMITER))])
 def cards_lookup(body: CardLookupBody, admin: str | None = Depends(optional_admin)):
     """Look up card metadata and images (cards table, then a bounded Scryfall fallback).
 

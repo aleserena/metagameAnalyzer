@@ -6,7 +6,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 
 class RateLimiter:
@@ -70,3 +70,19 @@ def client_ip(request: Request) -> str:
     if real_ip:
         return real_ip
     return request.client.host if request.client else "unknown"
+
+
+def rate_limited(limiter: RateLimiter) -> Callable[[Request], None]:
+    """FastAPI dependency: count every request per client IP against ``limiter``; 429 when over."""
+
+    def dependency(request: Request) -> None:
+        ip = client_ip(request)
+        if not limiter.allow(ip):
+            raise HTTPException(
+                status_code=429,
+                detail="Too many requests. Try again later.",
+                headers={"Retry-After": str(limiter.retry_after(ip))},
+            )
+        limiter.record(ip)
+
+    return dependency

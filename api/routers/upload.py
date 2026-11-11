@@ -33,9 +33,15 @@ from api.route_helpers import (
     _is_intentional_draw_result,
     opponent_report_to_prefill,
 )
+from api.services.rate_limit import RateLimiter, rate_limited
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Per client IP, shared by the four /upload/{token} routes. Loose on purpose: a whole
+# tournament may submit decks from one venue address within a few minutes.
+UPLOAD_LIMITER = RateLimiter(120, 60)
+_upload_rate_limit = Depends(rate_limited(UPLOAD_LIMITER))
 
 
 def _get_validated_upload_link(
@@ -101,7 +107,7 @@ def _get_validated_upload_link(
     return row, ev
 
 
-@router.get("/api/v1/upload/{token}", dependencies=[Depends(require_database)])
+@router.get("/api/v1/upload/{token}", dependencies=[_upload_rate_limit, Depends(require_database)])
 def get_upload_link_info(token: str):
     """Return event info for a valid one-time upload link (public). For update links, also return current deck."""
     with _db.session_scope() as session:
@@ -246,7 +252,7 @@ def _submit_create_with_upload_link(session, row, ev, event_name: str, body: Sub
     return deck_id
 
 
-@router.post("/api/v1/upload/{token}", dependencies=[Depends(require_database)])
+@router.post("/api/v1/upload/{token}", dependencies=[_upload_rate_limit, Depends(require_database)])
 def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
     """Submit or update a deck using a one-time upload link (public). Update links modify the linked deck."""
     _validate_deck_payload(body)
@@ -302,7 +308,7 @@ def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
     )
 
 
-@router.post("/api/v1/upload/{token}/feedback", dependencies=[Depends(require_database)])
+@router.post("/api/v1/upload/{token}/feedback", dependencies=[_upload_rate_limit, Depends(require_database)])
 def submit_feedback_with_upload_link(token: str, body: EventFeedbackBody):
     """Submit event feedback (archetype + matchups) via one-time feedback link. Deck must exist; deck list not required."""
     if not (body.archetype or "").strip():
@@ -364,7 +370,7 @@ def submit_feedback_with_upload_link(token: str, body: EventFeedbackBody):
     return {"deck_id": deck_id, "message": "Feedback submitted successfully"}
 
 
-@router.post("/api/v1/upload/{token}/decklist", dependencies=[Depends(require_database)])
+@router.post("/api/v1/upload/{token}/decklist", dependencies=[_upload_rate_limit, Depends(require_database)])
 def submit_decklist_with_upload_link(token: str, body: DeckListBody):
     """Update deck list (mainboard/sideboard/commanders) via one-time feedback link. Does not mark the link as used."""
     mainboard = _build_board(body.mainboard)

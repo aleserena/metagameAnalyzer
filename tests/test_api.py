@@ -1940,3 +1940,45 @@ def test_admin_card_lookup_has_unbounded_fallback(client, monkeypatch):
         r = client.post("/api/v1/cards/lookup", json={"names": ["Brand New Card"]}, headers=headers)
     assert r.status_code == 200
     assert lookup.call_args.kwargs["max_fallback"] is None
+
+
+# ---- per-IP rate limit on public upload / lookup endpoints -----------------------------------
+
+
+def test_a_venue_of_players_on_one_ip_is_not_limited(client):
+    """A whole tournament submits from one venue address within a minute."""
+    headers = {"X-Real-IP": "203.0.113.50"}
+    statuses = {client.get("/api/v1/upload/no-such-token", headers=headers).status_code for _ in range(100)}
+    assert 429 not in statuses
+
+
+def test_upload_endpoints_return_429_after_the_limit(client, monkeypatch):
+    from api.routers import upload
+
+    monkeypatch.setattr(upload.UPLOAD_LIMITER, "max_events", 3)
+    headers = {"X-Real-IP": "203.0.113.51"}
+    statuses = [client.get("/api/v1/upload/no-such-token", headers=headers).status_code for _ in range(4)]
+    assert 429 not in statuses[:3]
+    assert statuses[3] == 429
+    # the POST routes share the same budget
+    for path in ("/api/v1/upload/t", "/api/v1/upload/t/feedback", "/api/v1/upload/t/decklist"):
+        assert client.post(path, json={}, headers=headers).status_code == 429
+    # another address is unaffected
+    assert client.get("/api/v1/upload/no-such-token", headers={"X-Real-IP": "203.0.113.52"}).status_code != 429
+
+
+def test_card_lookup_returns_429_after_the_limit(client, monkeypatch):
+    from api.routers import cards
+
+    monkeypatch.setattr(cards.LOOKUP_LIMITER, "max_events", 2)
+    headers = {"X-Real-IP": "203.0.113.53"}
+    with patch("api.routers.cards.lookup_cards", return_value={}):
+        statuses = [client.post("/api/v1/cards/lookup", json={"names": ["x"]}, headers=headers).status_code for _ in range(3)]
+    assert statuses == [200, 200, 429]
+
+
+def test_public_limits_leave_room_for_real_use():
+    from api.routers import cards, upload
+
+    assert (upload.UPLOAD_LIMITER.max_events, upload.UPLOAD_LIMITER.window_seconds) == (120, 60)
+    assert (cards.LOOKUP_LIMITER.max_events, cards.LOOKUP_LIMITER.window_seconds) == (600, 60)
