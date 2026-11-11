@@ -96,6 +96,8 @@ If `ADMIN_PASSWORD` is not set, admin login is disabled and those tabs are hidde
    ```
    The app and Alembic load `.env` automatically, so `DATABASE_URL` is read from that file.
 
+   **On Railway, migrations run automatically on every deploy** (`deploy.preDeployCommand` in `railway.json` runs `alembic upgrade head`; a failing migration blocks the deploy). `npm run db:migrate:staging` / `db:migrate:prod` remain for manual use. Because the migration runs before traffic switches and the old release stays live if the deploy fails, every migration must leave the previous release working: add nullable columns and indexes only; dropping or retyping happens in a later release.
+
 4. **Start the API**  
    As usual: `python3 -m uvicorn api.main:app --reload --port 8000`. The API will connect to the database and load decks/aliases from it.
 
