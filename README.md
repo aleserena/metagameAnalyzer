@@ -5,8 +5,10 @@ Scrapes deck lists from [mtgtop8.com](https://www.mtgtop8.com) filtered by forma
 ## Installation
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
+
+`requirements.txt` (pinned runtime only) is what the Docker image installs; `requirements-dev.txt` adds test/lint tools. To change dependencies, edit `requirements.in` / `requirements-dev.in` and run `npm run deps:compile` (uses `uv`; falls back to pip-tools in Docker).
 
 ## Testing
 
@@ -89,7 +91,7 @@ If `ADMIN_PASSWORD` is not set, admin login is disabled and those tabs are hidde
 3. **Install dependencies and run migrations**  
    From the project root:
    ```bash
-   pip install -r requirements.txt
+   pip install -r requirements-dev.txt
    python3 -m alembic upgrade head
    ```
    The app and Alembic load `.env` automatically, so `DATABASE_URL` is read from that file.

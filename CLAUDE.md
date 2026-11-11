@@ -31,6 +31,7 @@ Start the API first, then the frontend. Vite proxies `/api` → `http://localhos
 | JS tests | `cd web && npx vitest run` |
 | JS tests + coverage | `cd web && npm run test:coverage` |
 | Frontend build | `cd web && npm run build` |
+| Dependencies | Local setup: `pip install -r requirements-dev.txt` (runtime-only `requirements.txt` is what the Docker image installs). Both are pinned and generated: edit `requirements.in` / `requirements-dev.in`, then `npm run deps:compile` (uv universal resolution; Docker pip-tools fallback). |
 | DB migrate (staging) | `npm run db:migrate:staging` |
 | DB migrate (prod) | `npm run db:migrate:prod` |
 
