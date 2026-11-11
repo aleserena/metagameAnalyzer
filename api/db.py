@@ -19,9 +19,11 @@ from sqlalchemy import (
     Column,
     DateTime,
     Float,
+    ForeignKey,
     Integer,
     String,
     Text,
+    UniqueConstraint,
     bindparam,
     create_engine,
     func,
@@ -74,12 +76,13 @@ class PlayerRow(Base):
 
 class DeckRow(Base):
     __tablename__ = "decks"
+    __table_args__ = (UniqueConstraint("event_id", "player_id", name="uq_decks_event_id_player_id"),)
     deck_id = Column(Integer, primary_key=True)
     event_id = Column(String(32), nullable=False)  # matches events.event_id (string)
     origin = Column(String(32), nullable=False, default=ORIGIN_MTGTOP8)
     format_id = Column(String(32), nullable=False, default="")
     name = Column(String(512), nullable=False, default="")
-    player_id = Column(Integer, nullable=False)  # FK to players.id
+    player_id = Column(Integer, ForeignKey("players.id", name="fk_decks_player_id"), nullable=False)
     player = Column(String(512), nullable=False, default="")  # denormalized display name
     event_name = Column(String(512), nullable=False, default="")
     date = Column(String(32), nullable=False, default="")
@@ -95,7 +98,7 @@ class DeckRow(Base):
 class PlayerAliasRow(Base):
     __tablename__ = "player_aliases"
     alias = Column(Text, primary_key=True)
-    player_id = Column(Integer, nullable=False)  # FK to players.id
+    player_id = Column(Integer, ForeignKey("players.id", name="fk_player_aliases_new_player_id"), nullable=False)
 
 
 class SettingsRow(Base):
@@ -113,17 +116,22 @@ LINK_TYPE_FEEDBACK = "feedback"
 
 class PlayerEmailRow(Base):
     __tablename__ = "player_emails"
-    player_id = Column(Integer, primary_key=True)  # FK to players.id
+    player_id = Column(Integer, ForeignKey("players.id", name="fk_player_emails_new_player_id"), primary_key=True)
     email = Column(Text, nullable=False)
 
 
 class MatchupRow(Base):
     __tablename__ = "matchups"
+    __table_args__ = (
+        UniqueConstraint("deck_id", "round", "opponent_player", name="uq_matchups_deck_id_round_opponent_player"),
+    )
     id = Column(Integer, primary_key=True, autoincrement=True)
-    deck_id = Column(Integer, nullable=False)
-    opponent_player_id = Column(Integer, nullable=True)  # FK to players.id; NULL for Bye/drop
+    deck_id = Column(Integer, ForeignKey("decks.deck_id", ondelete="CASCADE"), nullable=False, index=True)
+    opponent_player_id = Column(
+        Integer, ForeignKey("players.id", name="fk_matchups_opponent_player_id"), nullable=True
+    )  # NULL for Bye/drop
     opponent_player = Column(String(512), nullable=False)  # display name or "Bye"/"(drop)"
-    opponent_deck_id = Column(Integer, nullable=True)
+    opponent_deck_id = Column(Integer, ForeignKey("decks.deck_id", ondelete="SET NULL"), nullable=True)
     opponent_archetype = Column(String(512), nullable=True)
     result = Column(String(32), nullable=False)  # win | loss | draw | intentional_draw
     result_note = Column(String(512), nullable=True)
@@ -155,7 +163,7 @@ class CardRow(Base):
     name = Column(String(512), primary_key=True)  # canonical MTGJSON name, e.g. "Fire // Ice"
     front_face_name = Column(String(512), nullable=True, index=True)  # text before " // " for multi-face names, else NULL
     scryfall_id = Column(String(64), nullable=True)  # representative printing's identifiers.scryfallId
-    mtgjson_uuid = Column(String(64), nullable=True)  # representative printing UUID (joins AllPricesToday)
+    mtgjson_uuid = Column(String(64), nullable=True, index=True)  # representative printing UUID (joins AllPricesToday)
     mana_cost = Column(String(128), nullable=False, default="")
     cmc = Column(Float, nullable=False, default=0)  # MTGJSON manaValue
     type_line = Column(String(512), nullable=False, default="")
