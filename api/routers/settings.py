@@ -17,6 +17,7 @@ from api.services import mtgjson as mtgjson_service
 from api.services import settings as settings_service
 from api.state import (
     _clear_decks_in_db,
+    state,
 )
 
 try:
@@ -83,6 +84,7 @@ def put_matchups_players_min_matches_setting(body: MatchupsMinMatchesBody):
 def post_clear_scryfall_cache(_: str = Depends(require_admin)):
     """Clear Scryfall card lookup cache (in-memory and .scryfall_cache.json). Admin-only."""
     clear_scryfall_cache()
+    state.touch()  # card data changed: drop version-keyed derived caches
     return {"message": "Scryfall cache cleared"}
 
 

@@ -1135,7 +1135,7 @@ export type MtgjsonSyncJob = {
 
 export type MtgjsonSyncStatus = {
   running: string | null
-  jobs: { metadata: MtgjsonSyncJob; prices: MtgjsonSyncJob }
+  jobs: { metadata: MtgjsonSyncJob; prices: MtgjsonSyncJob; otag: MtgjsonSyncJob }
 }
 
 export async function syncMtgjson(): Promise<MtgjsonSyncStart> {

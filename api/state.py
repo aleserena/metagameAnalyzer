@@ -7,6 +7,7 @@ capture once and never see updated.
 """
 
 import logging
+import threading
 from pathlib import Path
 
 from src.mtgtop8.models import Deck
@@ -37,17 +38,17 @@ class AppState:
         self.metagame_cache: dict[tuple, dict] = {}  # finished /metagame responses keyed by version + query
         self.events_cache: list[dict] | None = None  # cached list for GET /api/events
         self.player_aliases: dict[str, str] = {}  # alias -> canonical
+        self._version_lock = threading.Lock()
 
     def set_decks(self, decks: list[dict]) -> None:
         """Replace the in-memory deck list and drop everything derived from it."""
         self.decks = decks
-        self.decks_version += 1
-        self.metagame_cache = {}
-        self.events_cache = None
+        self.touch()
 
     def touch(self) -> None:
         """Drop everything derived from the decks (e.g. after card data changes) without replacing them."""
-        self.decks_version += 1
+        with self._version_lock:
+            self.decks_version += 1
         self.metagame_cache = {}
         self.events_cache = None
 
@@ -150,8 +151,7 @@ def _get_event_by_id_from_decks(event_id: str) -> dict | None:
 
 
 def _invalidate_metagame() -> None:
-    state.metagame_cache = {}
-    state.events_cache = None
+    state.touch()
 
 
 def _invalidate_events_cache() -> None:

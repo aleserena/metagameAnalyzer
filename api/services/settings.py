@@ -8,6 +8,7 @@ need to know whether values come from JSON files or the database.
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 from typing import Dict, List
 
@@ -42,6 +43,7 @@ def _rank_weights_path() -> Path:
 
 
 _version = 0
+_version_lock = threading.Lock()
 
 
 def version() -> int:
@@ -51,7 +53,8 @@ def version() -> int:
 
 def _bump_version() -> None:
     global _version
-    _version += 1
+    with _version_lock:
+        _version += 1
 
 
 def get_rank_weights() -> Dict[str, float]:
