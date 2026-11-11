@@ -42,7 +42,7 @@ from api.services.alerts import (
 install_error_email_handler()
 
 # Fail fast (and emailed) on a misconfigured deploy, before api.state connects to the DB.
-from api.config import validate_auth_config
+from api.config import docs_kwargs, is_deployed, validate_auth_config
 
 try:
     validate_auth_config()
@@ -53,6 +53,7 @@ except RuntimeError as exc:
     raise
 
 from api.routers import router as api_router
+from api.security_headers import CSP_EXEMPT_PATHS, CSP_HEADER, CSP_REPORT_ONLY_HEADER, security_headers
 from api.services.rate_limit import client_ip
 from api.state import (
     log_split_player_identities,
@@ -83,6 +84,11 @@ async def lifespan(_app):
             "log_level": logging.getLevelName(logging.getLogger().level),
         },
     )
+    if is_deployed() and not os.getenv("PUBLIC_APP_URL", "").strip():
+        logger.warning(
+            "PUBLIC_APP_URL is not set: emailed links will be built from the request Host header",
+            extra={"event": "public_app_url_missing"},
+        )
     db_status = check_database_on_startup()
     notify_deployment(db_status, deck_count=len(state.decks))
     log_split_player_identities()
@@ -91,7 +97,7 @@ async def lifespan(_app):
     shutdown_alerts()
 
 
-app = FastAPI(title="MTG Metagame API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="MTG Metagame API", version="1.0.0", lifespan=lifespan, **docs_kwargs())
 
 _allowed_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",") if o.strip()]
 app.add_middleware(
@@ -119,6 +125,18 @@ def _request_id(request: Request) -> str:
     return uuid.uuid4().hex[:16]
 
 
+_SECURITY_HEADERS = security_headers(
+    deployed=is_deployed(),
+    report_only=os.getenv("CSP_REPORT_ONLY", "").strip().lower() in ("1", "true", "yes"),
+)
+
+
+def _security_headers_for(path: str) -> dict[str, str]:
+    if path in CSP_EXEMPT_PATHS:
+        return {k: v for k, v in _SECURITY_HEADERS.items() if k not in (CSP_HEADER, CSP_REPORT_ONLY_HEADER)}
+    return _SECURITY_HEADERS
+
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     """Log each request with method, path, status, duration and request id for monitoring.
@@ -138,6 +156,10 @@ async def log_requests(request: Request, call_next):
         response = await call_next(request)
         status_code = response.status_code
         response.headers["X-Request-ID"] = rid
+        # Browser protection headers ride on this middleware: a second http middleware would run
+        # the request in another task and lose request_id_var for the exception handler.
+        for name, value in _security_headers_for(request.url.path).items():
+            response.headers.setdefault(name, value)
         failed = False
         return response
     finally:
@@ -182,7 +204,8 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal server error", "request_id": rid},
-        headers={"X-Request-ID": rid} if rid else None,
+        # This handler runs outside the middleware stack, so it adds the security headers itself.
+        headers={**_security_headers_for(request.url.path), **({"X-Request-ID": rid} if rid else {})},
     )
 
 

@@ -1982,3 +1982,16 @@ def test_public_limits_leave_room_for_real_use():
 
     assert (upload.UPLOAD_LIMITER.max_events, upload.UPLOAD_LIMITER.window_seconds) == (120, 60)
     assert (cards.LOOKUP_LIMITER.max_events, cards.LOOKUP_LIMITER.window_seconds) == (600, 60)
+
+
+def test_feedback_does_not_echo_github_error_text(client, github_ok, caplog):
+    import requests as _requests
+
+    post, _ = github_ok
+    response = MagicMock()
+    response.json.return_value = {"message": "Validation Failed: label does not exist"}
+    post.return_value.raise_for_status.side_effect = _requests.HTTPError("422", response=response)
+    r = client.post("/api/v1/feedback", json=_feedback_body(client))
+    assert r.status_code == 502
+    assert r.json()["detail"] == "Could not create issue. Try again later."
+    assert "label does not exist" in caplog.text  # still logged for the operator

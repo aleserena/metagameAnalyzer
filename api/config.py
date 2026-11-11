@@ -48,3 +48,13 @@ def validate_auth_config(environ: Mapping[str, str] = os.environ) -> None:
     missing = [name for name in ("JWT_SECRET", "ADMIN_PASSWORD") if not environ.get(name, "").strip()]
     if missing:
         raise RuntimeError(f"Missing required environment variable(s) on Railway: {', '.join(missing)}")
+
+
+def docs_kwargs(environ: Mapping[str, str] = os.environ) -> dict:
+    """FastAPI() arguments that turn off /docs, /redoc and /openapi.json when deployed.
+
+    The interactive docs map every admin endpoint; they stay available locally.
+    """
+    if is_deployed(environ):
+        return {"docs_url": None, "redoc_url": None, "openapi_url": None}
+    return {}

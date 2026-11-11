@@ -96,3 +96,19 @@ def test_invalid_auth_config_alert_email_is_flushed_before_the_import_aborts(tmp
     assert "JWT_SECRET" in result.stderr + result.stdout
     assert marker.exists(), "auth_config_invalid alert was never sent"
     assert "JWT_SECRET" in marker.read_text()
+
+
+def test_api_docs_disabled_when_deployed():
+    from api.config import docs_kwargs
+
+    assert docs_kwargs({"RAILWAY_ENVIRONMENT_NAME": "production"}) == {
+        "docs_url": None,
+        "redoc_url": None,
+        "openapi_url": None,
+    }
+
+
+def test_api_docs_enabled_locally():
+    from api.config import docs_kwargs
+
+    assert docs_kwargs({}) == {}
