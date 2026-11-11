@@ -59,3 +59,24 @@ def test_ensure_test_schema_empty_url_is_noop():
     from tests._dbguard import ensure_test_schema
 
     assert ensure_test_schema("") is False
+
+
+def test_missing_database_fails_instead_of_skipping_when_required(monkeypatch):
+    from tests._dbguard import db_unavailable
+
+    monkeypatch.setenv("REQUIRE_DB_TESTS", "1")
+    with pytest.raises(pytest.fail.Exception):
+        db_unavailable("DATABASE_URL not set")
+    monkeypatch.delenv("REQUIRE_DB_TESTS")
+    with pytest.raises(pytest.skip.Exception):
+        db_unavailable("DATABASE_URL not set")
+
+
+def test_schema_unavailable_aborts_session_when_required(monkeypatch):
+    from tests._dbguard import schema_unavailable_exit_reason
+
+    monkeypatch.setenv("REQUIRE_DB_TESTS", "1")
+    assert schema_unavailable_exit_reason("") is not None
+    assert schema_unavailable_exit_reason(TEST_URL) is not None
+    monkeypatch.delenv("REQUIRE_DB_TESTS")
+    assert schema_unavailable_exit_reason("") is None

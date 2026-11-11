@@ -84,3 +84,25 @@ def ensure_test_schema(url: str, migrate=None) -> bool:
 
     migrate()
     return True
+
+
+def _db_required() -> bool:
+    return os.environ.get("REQUIRE_DB_TESTS") == "1"
+
+
+def db_unavailable(reason: str):
+    """No usable test database: fail when REQUIRE_DB_TESTS=1 (CI), otherwise skip."""
+    import pytest
+
+    if _db_required():
+        pytest.fail(f"REQUIRE_DB_TESTS=1 but {reason}")
+    pytest.skip(reason)
+
+
+def schema_unavailable_exit_reason(url: str) -> str | None:
+    """Reason to abort the session when the test schema could not be prepared (None = fine to skip)."""
+    if not _db_required():
+        return None
+    if not url:
+        return "REQUIRE_DB_TESTS=1 but TEST_DATABASE_URL is not set"
+    return "REQUIRE_DB_TESTS=1 but the test database is unreachable"

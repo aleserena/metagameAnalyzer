@@ -3,16 +3,25 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from tests._dbguard import apply_test_database_env, ensure_test_schema
+from tests._dbguard import (
+    apply_test_database_env,
+    db_unavailable,
+    ensure_test_schema,
+    schema_unavailable_exit_reason,
+)
 
 # DB-backed tests run only against TEST_DATABASE_URL (never staging/prod): pin DATABASE_URL
 # to it (or to "" so tests skip) before api.config loads .env, then migrate it at import time
 # because test modules import api.main (which queries the DB) during collection.
 _TEST_DATABASE_URL = apply_test_database_env()
 try:
-    ensure_test_schema(_TEST_DATABASE_URL)
+    _schema_ready = ensure_test_schema(_TEST_DATABASE_URL)
 except Exception as exc:  # reachable test DB but migration failed: do not run on a bad schema
     pytest.exit(f"Test database migration failed: {exc!r}", returncode=2)
+else:
+    _reason = None if _schema_ready else schema_unavailable_exit_reason(_TEST_DATABASE_URL)
+    if _reason:
+        pytest.exit(_reason, returncode=2)
 
 # Load .env / .env.$DB_ENV up front. api.db does not import api.config, so without this
 # the DB-backed tests only see DATABASE_URL when another module imported api.main first
@@ -154,15 +163,15 @@ def db_session_rollback():
     from api.db import get_session_factory_cached, is_database_available
 
     if not is_database_available():
-        pytest.skip("TEST_DATABASE_URL not set")
+        db_unavailable("TEST_DATABASE_URL not set")
     factory = get_session_factory_cached()
     if factory is None:
-        pytest.skip("TEST_DATABASE_URL not set")
+        db_unavailable("TEST_DATABASE_URL not set")
     try:
         session = factory()
         session.execute(text("SELECT 1"))
     except OperationalError:
-        pytest.skip("Test database unreachable")
+        db_unavailable("Test database unreachable")
     try:
         yield session
     finally:
