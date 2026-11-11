@@ -1699,3 +1699,33 @@ def test_submitting_through_a_link_locks_it(client_with_overrides):
         r = client_with_overrides.post("/api/v1/upload/some-token", json=body)
     assert r.status_code == 404
     assert get.call_args.kwargs == {"for_update": True}
+
+
+def test_submit_reloads_decks_after_the_transaction_commits(client_with_overrides):
+    from api.routers import upload as ur
+
+    events = []
+
+    class _Scope:
+        def __enter__(self):
+            events.append("open")
+            return MagicMock()
+
+        def __exit__(self, *exc):
+            events.append("closed")
+            return False
+
+    link = SimpleNamespace(event_id="m1", deck_id=None, link_type="deck_upload", used_at=None, expires_at=None)
+    ev = SimpleNamespace(name="E", store="", location="", format_id="Modern", date="01/01/25")
+    body = {"player": "P", "name": "N", "mainboard": [{"qty": 1, "card": "Sol Ring"}]}
+    with (
+        patch.object(ur._db, "session_scope", lambda: _Scope()),
+        patch.object(ur._db, "get_upload_link", return_value=link),
+        patch.object(ur._db, "get_event", return_value=ev),
+        patch.object(ur._db, "mark_upload_link_used"),
+        patch.object(ur, "_submit_create_with_upload_link", return_value=2_000_001),
+        patch.object(ur, "_load_decks_from_db", side_effect=lambda: events.append("reload")),
+    ):
+        r = client_with_overrides.post("/api/v1/upload/tok", json=body)
+    assert r.status_code == 201
+    assert events == ["open", "closed", "reload"]

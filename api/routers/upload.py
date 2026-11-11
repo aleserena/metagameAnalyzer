@@ -279,18 +279,21 @@ def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
             _resolve_deck_player(session, deck_list[0])
             _db.upsert_deck(session, deck_list[0], origin=current.get("origin", _db.ORIGIN_MANUAL))
             _db.mark_upload_link_used(session, token)
-            _load_decks_from_db()
-            return {"deck_id": deck_id, "message": "Deck updated successfully"}
+            created = False
         else:
             # Create new deck
             deck_id = _submit_create_with_upload_link(session, row, ev, event_name, body)
             _db.mark_upload_link_used(session, token)
-            _load_decks_from_db()
-            return Response(
-                content=json.dumps({"deck_id": deck_id, "message": "Deck submitted successfully"}),
-                status_code=201,
-                media_type="application/json",
-            )
+            created = True
+    # Reload only after the transaction has committed, so the new deck is visible and the link lock is released.
+    _load_decks_from_db()
+    if not created:
+        return {"deck_id": deck_id, "message": "Deck updated successfully"}
+    return Response(
+        content=json.dumps({"deck_id": deck_id, "message": "Deck submitted successfully"}),
+        status_code=201,
+        media_type="application/json",
+    )
 
 
 @router.post("/api/v1/upload/{token}/feedback", dependencies=[Depends(require_database)])
