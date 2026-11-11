@@ -34,7 +34,7 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 JWT_SECRET = os.getenv("JWT_SECRET", "")
 _JWT_KEY = derive_jwt_key(JWT_SECRET, ADMIN_PASSWORD)
 JWT_ALGORITHM = "HS256"
-JWT_EXP_SECONDS = 7 * 24 * 3600  # 7 days
+JWT_EXP_SECONDS = 12 * 3600  # 12 hours: one admin sitting (see docs/SECURITY_OPERATIONS.md)
 
 
 def _create_admin_token() -> str:

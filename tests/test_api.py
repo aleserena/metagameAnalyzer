@@ -1910,3 +1910,15 @@ def test_card_category_order():
         "",
     )
     assert [_card_category(t) for t in types] == ["Creature", "Land", "Spell", "Enchantment", "Other"]
+
+
+def test_admin_token_lifetime_is_twelve_hours():
+    import time
+
+    import jwt
+
+    from api import dependencies as deps
+
+    assert deps.JWT_EXP_SECONDS == 12 * 3600
+    claims = jwt.decode(deps._create_admin_token(), deps._JWT_KEY, algorithms=[deps.JWT_ALGORITHM])
+    assert 0 < claims["exp"] - time.time() <= 12 * 3600

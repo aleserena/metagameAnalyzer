@@ -101,4 +101,41 @@ describe('api', () => {
     )
     expect(result).toEqual({ message: 'Decks cleared' })
   })
+
+  describe('expired admin session', () => {
+    beforeEach(() => {
+      localStorage.clear()
+      sessionStorage.clear()
+    })
+
+    const unauthorized = () =>
+      ({ ok: false, status: 401, statusText: 'Unauthorized', json: async () => ({ detail: 'Invalid or expired token' }) }) as Response
+
+    it('flags the session as expired when a 401 arrives while logged in', async () => {
+      localStorage.setItem('admin_token', 'stale-token')
+      vi.mocked(fetch).mockResolvedValueOnce(unauthorized())
+
+      await expect(getDecks({})).rejects.toThrow()
+
+      expect(localStorage.getItem('admin_token')).toBeNull()
+      expect(sessionStorage.getItem('session_expired')).toBe('1')
+    })
+
+    it('does not flag an expired session for a visitor who was never logged in', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(unauthorized())
+
+      await expect(getDecks({})).rejects.toThrow()
+
+      expect(sessionStorage.getItem('session_expired')).toBeNull()
+    })
+
+    it('flags the session as expired on the authenticated fetch path too', async () => {
+      localStorage.setItem('admin_token', 'stale-token')
+      vi.mocked(fetch).mockResolvedValueOnce(unauthorized())
+
+      await expect(clearDecks()).rejects.toThrow()
+
+      expect(sessionStorage.getItem('session_expired')).toBe('1')
+    })
+  })
 })

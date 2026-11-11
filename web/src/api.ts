@@ -28,6 +28,17 @@ export function clearEventEditToken(): void {
   sessionStorage.removeItem(EVENT_EDIT_TOKEN_KEY)
 }
 
+export const SESSION_EXPIRED_KEY = 'session_expired'
+
+/** A 401 ends the admin session. If there was one, remember it so the login page can say why. */
+function handleUnauthorized(): void {
+  if (localStorage.getItem('admin_token') !== null && typeof sessionStorage !== 'undefined') {
+    sessionStorage.setItem(SESSION_EXPIRED_KEY, '1')
+  }
+  localStorage.removeItem('admin_token')
+  window.dispatchEvent(new Event('auth-logout'))
+}
+
 /** Shared 401 + error handling for fetch. Use for JSON or blob responses with auth. */
 async function fetchWithAuth(
   path: string,
@@ -42,10 +53,7 @@ async function fetchWithAuth(
     ...options,
     headers: { ...headers, ...(options.headers as Record<string, string>) },
   })
-  if (res.status === 401) {
-    localStorage.removeItem('admin_token')
-    window.dispatchEvent(new Event('auth-logout'))
-  }
+  if (res.status === 401) handleUnauthorized()
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     const detail = err.detail ?? res.statusText
@@ -65,10 +73,7 @@ async function fetchApi<T>(path: string, options?: RequestInit & { timeoutMs?: n
       ...options?.headers,
     },
   })
-  if (res.status === 401) {
-    localStorage.removeItem('admin_token')
-    window.dispatchEvent(new Event('auth-logout'))
-  }
+  if (res.status === 401) handleUnauthorized()
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     const detail = err.detail ?? res.statusText
