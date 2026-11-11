@@ -47,6 +47,7 @@ def _get_validated_upload_link(
     require_deck: bool = False,
     missing_deck_detail: str = "Feedback link has no deck",
     mark_used: bool = False,
+    sitting_hours: int | None = None,
     lock: bool = False,
 ):
     """Load and validate a one-time upload link and its event.
@@ -57,6 +58,8 @@ def _get_validated_upload_link(
     - Optionally require an attached deck_id
     - Not already used and not expired
     - Associated event still exists
+
+    ``sitting_hours`` (with ``mark_used``) makes the link expire that long after this first use.
 
     With ``lock=True`` the link row is read ``FOR UPDATE``: concurrent submissions of the same link
     serialise on it, so the second one sees ``used_at`` set and is rejected.
@@ -93,7 +96,7 @@ def _get_validated_upload_link(
         raise HTTPException(status_code=404, detail="Event not found")
 
     if mark_used:
-        _db.mark_upload_link_used(session, token)
+        _db.mark_upload_link_used(session, token, sitting_hours=sitting_hours)
 
     return row, ev
 
@@ -172,13 +175,17 @@ def get_upload_link_info(token: str):
 
 @router.get("/api/v1/event-edit/{token}", dependencies=[Depends(require_database)])
 def get_event_edit_link_info(token: str):
-    """Validate a one-time event-edit link, mark it as used, and return event_id. Public (no auth)."""
+    """Validate a one-time event-edit link, mark it as used, and return event_id. Public (no auth).
+
+    The token keeps authorising edits (X-Event-Edit-Token) for EVENT_EDIT_SITTING_HOURS after this call.
+    """
     with _db.session_scope() as session:
         row, _ = _get_validated_upload_link(
             session,
             token,
             expected_link_type=_db.LINK_TYPE_EVENT_EDIT,
             mark_used=True,
+            sitting_hours=_db.EVENT_EDIT_SITTING_HOURS,
         )
         return {"event_id": row.event_id}
 

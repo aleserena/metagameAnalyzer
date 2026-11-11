@@ -133,6 +133,8 @@ class SettingsRow(Base):
 
 
 DEFAULT_LINK_EXPIRY_DAYS = 7
+# An event-edit link is used in one sitting: once opened it stays valid this long, never longer.
+EVENT_EDIT_SITTING_HOURS = 12
 LINK_TYPE_DECK_UPLOAD = "deck_upload"
 LINK_TYPE_DECK_UPDATE = "deck_update"
 LINK_TYPE_EVENT_EDIT = "event_edit"
@@ -870,11 +872,18 @@ def get_upload_link(session: Session, token: str, *, for_update: bool = False) -
     return query.first()
 
 
-def mark_upload_link_used(session: Session, token: str) -> bool:
+def mark_upload_link_used(session: Session, token: str, *, sitting_hours: int | None = None) -> bool:
+    """Mark a link used. With ``sitting_hours`` the link also expires that long from now,
+    unless it already expires sooner (the window never extends a link's life)."""
     row = session.query(EventUploadLinkRow).filter(EventUploadLinkRow.token == token).first()
     if not row:
         return False
-    row.used_at = utcnow_naive()
+    now = utcnow_naive()
+    row.used_at = now
+    if sitting_hours is not None:
+        sitting_end = now + timedelta(hours=sitting_hours)
+        if row.expires_at is None or row.expires_at > sitting_end:
+            row.expires_at = sitting_end
     return True
 
 
