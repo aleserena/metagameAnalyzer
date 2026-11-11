@@ -46,6 +46,8 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
+LOCK_TIMEOUT = "10s"
+
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
@@ -87,6 +89,10 @@ def run_migrations_online() -> None:
             target_metadata=target_metadata,
         )
         with context.begin_transaction():
+            # ALTER/CREATE INDEX queue behind any long-running transaction and every later query then queues
+            # behind the ALTER while the previous release is still serving. Fail fast (blocking the deploy)
+            # instead of hanging the site. SET LOCAL scopes this to the migration transaction.
+            connection.exec_driver_sql(f"SET LOCAL lock_timeout = '{LOCK_TIMEOUT}'")
             context.run_migrations()
 
 

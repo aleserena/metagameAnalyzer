@@ -5,8 +5,12 @@ Revises: 016
 Create Date: 2026-11-11
 
 Rows written by the previous release between this migration and the new deploy (or while an old release keeps
-serving after a failed deploy) get event_date NULL. Re-run the backfill (it only touches rows with a NULL
-event_date, so it is idempotent) or rely on release 2's Step 1 checks.
+serving after a failed deploy) get event_date NULL, and an old-release edit of the text ``date`` leaves a stale
+non-NULL event_date. Repair both with the idempotent script (it syncs every row where event_date differs from
+the parsed text):
+
+    python3 -m scripts.backfill_event_dates --dry-run --db-env <env>
+    python3 -m scripts.backfill_event_dates --apply --db-env <env>
 
 """
 from datetime import date
@@ -21,6 +25,7 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 _TABLES = ("events", "decks")
+_CHUNK = 5000
 
 
 def _parse(s):
@@ -40,17 +45,25 @@ def _parse(s):
 
 
 def _backfill(bind) -> None:
+    """Set event_date per table in a few set-based statements (there is no index on ``date`` yet).
+
+    One UPDATE per distinct date would full-scan the table each time while the ADD COLUMN lock is held.
+    """
+    stmt_tpl = (
+        "UPDATE {table} t SET event_date = v.d "
+        "FROM unnest(CAST(:s AS text[]), CAST(:d AS date[])) AS v(s, d) "
+        "WHERE t.date = v.s AND t.event_date IS NULL"
+    )
     for table in _TABLES:
         distinct = [
             r[0] for r in bind.execute(sa.text(f"SELECT DISTINCT date FROM {table} WHERE event_date IS NULL"))
         ]
-        for text_value in distinct:
-            parsed = _parse(text_value)
-            if parsed is not None:
-                bind.execute(
-                    sa.text(f"UPDATE {table} SET event_date = :d WHERE date = :s AND event_date IS NULL"),
-                    {"d": parsed, "s": text_value},
-                )
+        pairs = [(v, _parse(v)) for v in distinct]
+        pairs = [(v, d) for v, d in pairs if d is not None]
+        stmt = sa.text(stmt_tpl.format(table=table))
+        for i in range(0, len(pairs), _CHUNK):
+            chunk = pairs[i : i + _CHUNK]
+            bind.execute(stmt, {"s": [v for v, _ in chunk], "d": [d for _, d in chunk]})
 
 
 def upgrade() -> None:
