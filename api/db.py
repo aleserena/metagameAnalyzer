@@ -476,13 +476,27 @@ def update_deck_event(
     return True
 
 
+MANUAL_ID_LOCK_KEY = 815001
+
+
+def _lock_manual_ids(session: Session) -> None:
+    """Serialise manual ID allocation: a transaction-scoped advisory lock, released at commit/rollback.
+
+    Allocate in the same session that inserts the rows, so the lock is held until they are committed.
+    """
+    session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": MANUAL_ID_LOCK_KEY})
+
+
 def next_manual_deck_id(session: Session) -> int:
     """Return next deck_id for manual uploads (>= MANUAL_DECK_ID_START).
 
     Must be strictly greater than every existing deck_id (MTGTop8 and manual) to avoid PK collisions.
+    Takes the manual-ID advisory lock. Sessions do not autoflush, so allocating several IDs in one
+    transaction means taking the first from here and counting up, or flushing in between.
     """
     from sqlalchemy import func
 
+    _lock_manual_ids(session)
     r = session.query(func.max(DeckRow.deck_id)).scalar()
     next_after_max = (r or 0) + 1
     return max(MANUAL_DECK_ID_START, next_after_max)
@@ -630,7 +644,8 @@ def _event_id_str(value: int | str) -> str:
 
 
 def next_manual_event_id(session: Session) -> str:
-    """Return next manual event id: m1, m2, m3, ..."""
+    """Return next manual event id: m1, m2, m3, ... (takes the manual-ID advisory lock)."""
+    _lock_manual_ids(session)
     rows = (
         session.query(EventRow.event_id)
         .filter(EventRow.origin == ORIGIN_MANUAL, EventRow.event_id.like(f"{MANUAL_EVENT_ID_PREFIX}%"))
@@ -823,8 +838,11 @@ def create_upload_link(
     return row
 
 
-def get_upload_link(session: Session, token: str) -> EventUploadLinkRow | None:
-    return session.query(EventUploadLinkRow).filter(EventUploadLinkRow.token == token).first()
+def get_upload_link(session: Session, token: str, *, for_update: bool = False) -> EventUploadLinkRow | None:
+    query = session.query(EventUploadLinkRow).filter(EventUploadLinkRow.token == token)
+    if for_update:
+        query = query.with_for_update()
+    return query.first()
 
 
 def mark_upload_link_used(session: Session, token: str) -> bool:

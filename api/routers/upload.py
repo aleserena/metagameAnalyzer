@@ -48,6 +48,7 @@ def _get_validated_upload_link(
     require_deck: bool = False,
     missing_deck_detail: str = "Feedback link has no deck",
     mark_used: bool = False,
+    lock: bool = False,
 ):
     """Load and validate a one-time upload link and its event.
 
@@ -57,8 +58,11 @@ def _get_validated_upload_link(
     - Optionally require an attached deck_id
     - Not already used and not expired
     - Associated event still exists
+
+    With ``lock=True`` the link row is read ``FOR UPDATE``: concurrent submissions of the same link
+    serialise on it, so the second one sees ``used_at`` set and is rejected.
     """
-    row = _db.get_upload_link(session, token)
+    row = _db.get_upload_link(session, token, for_update=lock)
     if not row:
         raise HTTPException(status_code=404, detail="Link not found or invalid")
 
@@ -245,6 +249,7 @@ def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
             session,
             token,
             forbid_event_edit=True,
+            lock=True,
         )
         event_name = event_display_name(ev.name, ev.store or "", ev.location or "")
 
@@ -302,6 +307,7 @@ def submit_feedback_with_upload_link(token: str, body: EventFeedbackBody):
             expected_link_type=_db.LINK_TYPE_FEEDBACK,
             require_deck=True,
             missing_deck_detail="Feedback link has no deck",
+            lock=True,
         )
         deck_id = row.deck_id
         deck_dict = _get_deck_by_id(deck_id)
@@ -352,32 +358,38 @@ def submit_feedback_with_upload_link(token: str, body: EventFeedbackBody):
 @router.post("/api/v1/upload/{token}/decklist", dependencies=[Depends(require_database)])
 def submit_decklist_with_upload_link(token: str, body: DeckListBody):
     """Update deck list (mainboard/sideboard/commanders) via one-time feedback link. Does not mark the link as used."""
-    with _db.session_scope() as session:
-        row, _ = _get_validated_upload_link(
-            session,
-            token,
-            expected_link_type=_db.LINK_TYPE_FEEDBACK,
-            require_deck=True,
-            missing_deck_detail="No deck linked",
-        )
-        deck_id = row.deck_id
-    deck_dict = _get_deck_by_id(deck_id)
-    if not deck_dict:
-        raise HTTPException(status_code=404, detail="Deck not found")
     mainboard = _build_board(body.mainboard)
     if not mainboard:
         raise HTTPException(status_code=400, detail="mainboard must have at least one card")
     sideboard = _build_board(body.sideboard)
     commanders = _normalize_commanders(body.commanders or [])
-    current = dict(deck_dict)
-    current["mainboard"] = mainboard
-    current["sideboard"] = sideboard
-    current["commanders"] = commanders if commanders else None
-    if (current.get("format_id") or "").upper() == "EDH" and not current.get("commanders") and current.get("mainboard"):
-        current["commanders"] = [current["mainboard"][0]["card"]]
     try:
         with _db.session_scope() as session:
+            row, _ = _get_validated_upload_link(
+                session,
+                token,
+                expected_link_type=_db.LINK_TYPE_FEEDBACK,
+                require_deck=True,
+                missing_deck_detail="No deck linked",
+                lock=True,
+            )
+            deck_id = row.deck_id
+            deck_dict = _get_deck_by_id(deck_id)
+            if not deck_dict:
+                raise HTTPException(status_code=404, detail="Deck not found")
+            current = dict(deck_dict)
+            current["mainboard"] = mainboard
+            current["sideboard"] = sideboard
+            current["commanders"] = commanders if commanders else None
+            if (
+                (current.get("format_id") or "").upper() == "EDH"
+                and not current.get("commanders")
+                and current.get("mainboard")
+            ):
+                current["commanders"] = [current["mainboard"][0]["card"]]
             _db.upsert_deck(session, current, origin=current.get("origin", _db.ORIGIN_MTGTOP8))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Deck list update failed: %s", e)
         raise HTTPException(status_code=500, detail="Failed to update deck list")

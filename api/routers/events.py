@@ -746,19 +746,21 @@ async def upload_decks_to_event(
         raise HTTPException(status_code=400, detail="Provide JSON body with 'decks' or file upload")
     decks = _normalize_split_cards(decks)
     try:
-        with _db.session_scope() as session:
-            next_id = _db.next_manual_deck_id(session)
         out = []
-        for i, d in enumerate(decks):
-            d = dict(d)
-            d["event_id"] = event_id
-            d["event_name"] = event_name
-            d["date"] = date
-            d["format_id"] = format_id
-            if "deck_id" not in d or d.get("deck_id") is None:
-                d["deck_id"] = next_id + i
-            out.append(d)
         with _db.session_scope() as session:
+            # Allocate IDs in the inserting transaction (advisory lock held until commit); consecutive
+            # because sessions do not autoflush between allocations.
+            next_id = _db.next_manual_deck_id(session)
+            for d in decks:
+                d = dict(d)
+                d["event_id"] = event_id
+                d["event_name"] = event_name
+                d["date"] = date
+                d["format_id"] = format_id
+                if "deck_id" not in d or d.get("deck_id") is None:
+                    d["deck_id"] = next_id
+                    next_id += 1
+                out.append(d)
             for d in out:
                 _resolve_deck_player(session, d)
                 _db.upsert_deck(session, d, origin=_db.ORIGIN_MANUAL)

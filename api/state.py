@@ -210,14 +210,33 @@ def log_split_player_identities() -> None:
     )
 
 
-def _persist_decks_to_db(decks: list[dict], origin: str = None) -> None:
-    """Write decks to DB (upsert each). Resolve player name to player_id before each upsert. Then reload state.decks from DB."""
+def _persist_decks_to_db(decks: list[dict], origin: str = None, *, assign_manual_ids: bool = False) -> None:
+    """Write decks to DB (upsert each). Resolve player name to player_id before each upsert. Then reload state.decks from DB.
+
+    With ``assign_manual_ids``, decks whose deck_id is missing or below MANUAL_DECK_ID_START get consecutive
+    manual IDs, allocated in the persisting transaction (advisory lock held until the decks are committed).
+    """
     if not _database_available() or _db is None:
         return
     if origin is None:
         origin = _db.ORIGIN_MTGTOP8
     try:
         with _db.session_scope() as session:
+            if assign_manual_ids:
+                needs_id = [
+                    d
+                    for d in decks
+                    if d.get("deck_id") is None
+                    or (isinstance(d.get("deck_id"), int) and d["deck_id"] < _db.MANUAL_DECK_ID_START)
+                ]
+                if needs_id:
+                    next_id = _db.next_manual_deck_id(session)
+                    explicit = [d["deck_id"] for d in decks if isinstance(d.get("deck_id"), int) and d not in needs_id]
+                    if explicit:
+                        next_id = max(next_id, max(explicit) + 1)
+                    for d in needs_id:
+                        d["deck_id"] = next_id
+                        next_id += 1
             for d in decks:
                 if "player_id" not in d:
                     _resolve_deck_player(session, d)

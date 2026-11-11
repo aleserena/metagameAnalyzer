@@ -999,7 +999,6 @@ def test_post_load_inline_decks_attaches_event_id(client_with_overrides, sample_
             with patch("api.routers.data._db") as mock_db:
                 mock_db.session_scope = session_scope
                 mock_db.get_event = MagicMock(return_value=ev)
-                mock_db.next_manual_deck_id.return_value = 2_000_500
                 mock_db.ORIGIN_MANUAL = "manual"
                 mock_db.ORIGIN_MTGTOP8 = "mtgtop8"
                 mock_db.MANUAL_DECK_ID_START = 2_000_000
@@ -1011,7 +1010,7 @@ def test_post_load_inline_decks_attaches_event_id(client_with_overrides, sample_
     saved = persist.call_args.args[0]
     assert saved[0]["event_id"] == "m42"
     assert saved[0]["event_name"] == "Linked Event"
-    assert saved[0]["deck_id"] == 2_000_500
+    assert persist.call_args.kwargs["assign_manual_ids"] is True
 
 
 def test_post_load_new_event_creates_and_attaches(client_with_overrides, sample_deck_dict):
@@ -1028,7 +1027,6 @@ def test_post_load_new_event_creates_and_attaches(client_with_overrides, sample_
             with patch("api.routers.data._db") as mock_db:
                 mock_db.session_scope = session_scope
                 mock_db.create_event = MagicMock(return_value=row)
-                mock_db.next_manual_deck_id.return_value = 2_000_600
                 mock_db.ORIGIN_MANUAL = "manual"
                 mock_db.ORIGIN_MTGTOP8 = "mtgtop8"
                 mock_db.MANUAL_DECK_ID_START = 2_000_000
@@ -1043,7 +1041,7 @@ def test_post_load_new_event_creates_and_attaches(client_with_overrides, sample_
     saved = persist.call_args.args[0]
     assert saved[0]["event_id"] == "m1"
     assert saved[0]["event_name"] == "Fresh"
-    assert saved[0]["deck_id"] == 2_000_600
+    assert persist.call_args.kwargs["assign_manual_ids"] is True
 
 
 # ---------- Player analysis endpoint ---------------------------------------
@@ -1691,3 +1689,13 @@ def test_refresh_otag_index_returns_immediately(client_with_overrides):
         r = client_with_overrides.post("/api/v1/settings/refresh-otag-index", json=["ramp"])
     assert r.status_code == 200 and r.json() == started
     assert start.call_args.args[0] == "otag"
+
+
+def test_submitting_through_a_link_locks_it(client_with_overrides):
+    from api.routers import upload as ur
+
+    body = {"player": "P", "name": "N", "mainboard": [{"qty": 1, "card": "Sol Ring"}]}
+    with patch.object(ur._db, "session_scope"), patch.object(ur._db, "get_upload_link", return_value=None) as get:
+        r = client_with_overrides.post("/api/v1/upload/some-token", json=body)
+    assert r.status_code == 404
+    assert get.call_args.kwargs == {"for_update": True}

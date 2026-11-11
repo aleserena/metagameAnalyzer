@@ -113,21 +113,18 @@ async def load_decks(
                         raise HTTPException(status_code=404, detail="Event not found")
                     event_id, event_name, date, format_id = ev.event_id, ev.name, ev.date, ev.format_id
             if event_id is not None and event_name is not None:
-                next_id = None
-                with _db.session_scope() as session:
-                    next_id = _db.next_manual_deck_id(session)
                 for i, d in enumerate(decks):
                     d = dict(d)
                     d["event_id"] = event_id
                     d["event_name"] = event_name or d.get("event_name", "")
                     d["date"] = date or d.get("date", "")
                     d["format_id"] = format_id or d.get("format_id", "")
-                    if d.get("deck_id") is None or (isinstance(d.get("deck_id"), int) and d["deck_id"] < _db.MANUAL_DECK_ID_START):
-                        d["deck_id"] = next_id + i
                     decks[i] = d
-        origin = _db.ORIGIN_MANUAL if (body and (body.event_id is not None or body.new_event)) else _db.ORIGIN_MTGTOP8
+        for_event = bool(body and (body.event_id is not None or body.new_event))
+        origin = _db.ORIGIN_MANUAL if for_event else _db.ORIGIN_MTGTOP8
         try:
-            _persist_decks_to_db(decks, origin=origin)
+            # Manual deck IDs are allocated inside the persisting transaction.
+            _persist_decks_to_db(decks, origin=origin, assign_manual_ids=for_event)
         except Exception as e:
             raise HTTPException(status_code=500, detail="Failed to save decks") from e
     return {"loaded": len(decks), "message": f"Loaded {len(decks)} decks"}
