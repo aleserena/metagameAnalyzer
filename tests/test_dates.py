@@ -48,3 +48,10 @@ def test_sort_key():
     assert sort_key("05/03/25") == "250305"
     assert sort_key("05/03/2025") == "250305"
     assert sort_key("bad") == "bad"
+
+
+def test_format_ddmmyy():
+    from api.dates import format_ddmmyy
+
+    assert format_ddmmyy(date(2025, 3, 5)) == "05/03/25"
+    assert format_ddmmyy(None) == ""

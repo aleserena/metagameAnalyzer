@@ -4,14 +4,8 @@ Revision ID: 017
 Revises: 016
 Create Date: 2026-11-11
 
-Rows written by the previous release between this migration and the new deploy (or while an old release keeps
-serving after a failed deploy) get event_date NULL, and an old-release edit of the text ``date`` leaves a stale
-non-NULL event_date. Repair both with the idempotent script (it syncs every row where event_date differs from
-the parsed text):
-
-    python3 -m scripts.backfill_event_dates --dry-run --db-env <env>
-    python3 -m scripts.backfill_event_dates --apply --db-env <env>
-
+Rows written or edited by the previous release after this migration (NULL or stale event_date) are
+repaired by migration 018 before it drops the text columns.
 """
 from datetime import date
 from typing import Sequence, Union

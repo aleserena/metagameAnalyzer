@@ -247,7 +247,7 @@ def _all_event_ids(session) -> list[str]:
     return [
         _db._event_id_str(r[0])
         for r in session.query(_db.EventRow.event_id)
-        .order_by(_db.EventRow.date.desc(), _db.EventRow.event_id)
+        .order_by(_db.EventRow.event_date.desc().nulls_last(), _db.EventRow.event_id)
         .all()
     ]
 

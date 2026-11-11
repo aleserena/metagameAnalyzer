@@ -33,9 +33,10 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Session, aliased, declarative_base, sessionmaker, validates
 
-from api.dates import parse_ddmmyy
+from api.dates import format_ddmmyy, parse_ddmmyy
 from api.results import COUNTED_RESULTS, effective_wld, invert_result
 
 logger = logging.getLogger(__name__)
@@ -51,7 +52,29 @@ ORIGIN_MANUAL = "manual"
 Base = declarative_base()
 
 
-class EventRow(Base):
+class _TextDateMixin:
+    """``date``: the DD/MM/YY text view of ``event_date`` (the text column was dropped in migration 018).
+
+    Reading formats ``event_date``; assigning parses the text, and anything unparseable stores NULL (read
+    back as ``""``). In a query, ``Model.date`` renders the same text in SQL - sort and filter on
+    ``event_date`` instead.
+    """
+
+    @hybrid_property
+    def date(self) -> str:
+        return format_ddmmyy(self.event_date)
+
+    @date.inplace.setter
+    def _set_date(self, value: str | None) -> None:
+        self.event_date = parse_ddmmyy(value)
+
+    @date.inplace.expression
+    @classmethod
+    def _date_expression(cls):
+        return func.coalesce(func.to_char(cls.event_date, "DD/MM/YY"), "")
+
+
+class EventRow(_TextDateMixin, Base):
     __tablename__ = "events"
     event_id = Column(String(32), primary_key=True)  # scraped: "80454"; manual: "m1", "m2"
     origin = Column(String(32), nullable=False, default=ORIGIN_MTGTOP8)  # 'mtgtop8' | 'manual'
@@ -59,14 +82,8 @@ class EventRow(Base):
     name = Column(String(512), nullable=False, default="")
     store = Column(String(512), nullable=False, default="")
     location = Column(String(512), nullable=False, default="")
-    date = Column(String(32), nullable=False, default="")  # DD/MM/YY
-    event_date = Column(Date, nullable=True, index=True)  # parsed from `date` (see _sync_event_date)
+    event_date = Column(Date, nullable=True, index=True)  # the only stored date; `date` is its DD/MM/YY view
     player_count = Column(Integer, nullable=False, default=0)  # number of players in the event
-
-    @validates("date")
-    def _sync_event_date(self, _key, value):
-        self.event_date = parse_ddmmyy(value)
-        return value
 
 
 class PlayerRow(Base):
@@ -82,7 +99,7 @@ class PlayerRow(Base):
         return value
 
 
-class DeckRow(Base):
+class DeckRow(_TextDateMixin, Base):
     __tablename__ = "decks"
     __table_args__ = (UniqueConstraint("event_id", "player_id", name="uq_decks_event_id_player_id"),)
     deck_id = Column(Integer, primary_key=True)
@@ -93,8 +110,7 @@ class DeckRow(Base):
     player_id = Column(Integer, ForeignKey("players.id", name="fk_decks_player_id"), nullable=False)
     player = Column(String(512), nullable=False, default="")  # denormalized display name
     event_name = Column(String(512), nullable=False, default="")
-    date = Column(String(32), nullable=False, default="")
-    event_date = Column(Date, nullable=True, index=True)  # parsed from `date` (see _sync_event_date)
+    event_date = Column(Date, nullable=True, index=True)  # the only stored date; `date` is its DD/MM/YY view
     rank = Column(String(32), nullable=False, default="")
     player_count = Column(Integer, nullable=False, default=0)
     commanders = Column(JSONB, nullable=False)  # list of strings
@@ -102,11 +118,6 @@ class DeckRow(Base):
     mainboard = Column(JSONB, nullable=False)  # [{"qty": int, "card": str}, ...]
     sideboard = Column(JSONB, nullable=False)
     # deck_id is globally unique: MTGTop8 use site IDs; manual use MANUAL_DECK_ID_START+
-
-    @validates("date")
-    def _sync_event_date(self, _key, value):
-        self.event_date = parse_ddmmyy(value)
-        return value
 
 
 class PlayerAliasRow(Base):
