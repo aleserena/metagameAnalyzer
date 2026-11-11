@@ -1,6 +1,7 @@
 """Date parsing shared by the models, the migration's twin and the filter helpers.
 
-Stored dates are text in DD/MM/YY (scraped) or DD/MM/YYYY form; a two-digit year is always 20xx.
+Dates are stored as DATE (``event_date``) and travel through the API as DD/MM/YY text. Input may be
+DD/MM/YY (scraped) or DD/MM/YYYY; a two-digit year is always 20xx.
 This module must not import from ``api``.
 """
 
@@ -23,6 +24,13 @@ def parse_ddmmyy(s: str | None) -> date | None:
         return date(year, month, day)
     except ValueError:
         return None
+
+
+def format_ddmmyy(d: date | None) -> str:
+    """``DD/MM/YY``; ``""`` for ``None``. The inverse of :func:`parse_ddmmyy` for years 2000-2099."""
+    if d is None:
+        return ""
+    return f"{d.day:02d}/{d.month:02d}/{d.year % 100:02d}"
 
 
 def parse_bound(s: str | None) -> date | None:

@@ -75,15 +75,38 @@ def test_sync_reports_number_of_changed_decks(db_session_rollback):
     assert sync_decks_with_event(session, EID) == 1
 
 
-def test_event_date_follows_the_text_date(db_session_rollback):
+def test_date_is_a_view_of_event_date(db_session_rollback):
     from datetime import date
 
     session = db_session_rollback
-    row = create_event(session, "Dates", "05/03/25", "EDH", event_id="test_dates_1", player_count=1)
+    row = create_event(session, "Dates", "05/03/2025", "EDH", event_id="test_dates_1", player_count=1)
     assert row.event_date == date(2025, 3, 5)
+    assert row.date == "05/03/25"
     row.date = "not a date"
     assert row.event_date is None
-    assert row.date == "not a date"
+    assert row.date == ""
+
+
+def test_date_property_round_trips_without_a_text_column(db_session_rollback):
+    from api.db import EventRow, event_row_to_dict
+
+    session = db_session_rollback
+    create_event(session, "Dates", "05/03/2025", "EDH", event_id="test_dates_2", player_count=1)
+    session.flush()
+    session.expire_all()
+    assert event_row_to_dict(session.get(EventRow, "test_dates_2"))["date"] == "05/03/25"
+    assert "date" not in EventRow.__table__.columns and "date" not in DeckRow.__table__.columns
+
+
+def test_date_in_a_query_renders_the_text(db_session_rollback):
+    from api.db import EventRow
+
+    session = db_session_rollback
+    for eid, d in (("test_dates_q1", "05/03/25"), ("test_dates_q2", "")):
+        create_event(session, "Dates", d, "EDH", event_id=eid, player_count=1)
+    session.flush()
+    rows = session.query(EventRow.event_id, EventRow.date).filter(EventRow.event_id.like("test_dates_q%")).all()
+    assert {r.event_id: r.date for r in rows} == {"test_dates_q1": "05/03/25", "test_dates_q2": ""}
 
 
 def test_events_are_listed_newest_first_with_undated_last(db_session_rollback):
@@ -120,59 +143,93 @@ def test_sync_decks_with_event_updates_deck_event_date(db_session_rollback):
     assert deck.event_date == date(2025, 2, 2)
 
 
-def test_migration_parser_matches_the_runtime_parser():
+def _load_migration(filename):
     import importlib.util
     from pathlib import Path
 
-    from api.dates import parse_ddmmyy
-
-    path = Path(__file__).resolve().parent.parent / "alembic" / "versions" / "017_event_date_columns.py"
-    spec = importlib.util.spec_from_file_location("m017", path)
+    path = Path(__file__).resolve().parent.parent / "alembic" / "versions" / filename
+    spec = importlib.util.spec_from_file_location(filename[:3], path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    for s in ("05/03/25", "05/03/2025", "31/02/25", "", "garbage", " 01/01/24 "):
-        assert mod._parse(s) == parse_ddmmyy(s)
+    return mod
 
 
-def test_migration_017_backfill_sets_event_date(db_session_rollback):
-    import importlib.util
+def test_migration_parsers_match_the_runtime_parser():
+    from api.dates import parse_ddmmyy
+
+    for filename in ("017_event_date_columns.py", "018_drop_text_dates.py"):
+        mod = _load_migration(filename)
+        for s in ("05/03/25", "05/03/2025", "31/02/25", "", "garbage", " 01/01/24 "):
+            assert mod._parse(s) == parse_ddmmyy(s)
+
+
+def _with_text_date_columns(session, values):
+    """Re-create the pre-018 text columns inside the rolled-back transaction and seed one event+deck per value."""
+    from sqlalchemy import text
+
+    from api.db import PlayerRow
+
+    player = PlayerRow(display_name="Zzm018 Player")
+    session.add(player)
+    session.flush()
+    for i in range(len(values)):
+        create_event(session, "M018", "", "EDH", event_id=f"test_m018_{i}", player_count=1)
+        session.add(
+            DeckRow(
+                deck_id=990000 + i,
+                event_id=f"test_m018_{i}",
+                player_id=player.id,
+                commanders=[],
+                mainboard=[],
+                sideboard=[],
+            )
+        )
+    session.flush()
+    for table in ("events", "decks"):
+        session.execute(text(f"ALTER TABLE {table} ADD COLUMN date VARCHAR(32) NOT NULL DEFAULT ''"))
+    for i, (txt, stored) in enumerate(values):
+        params = {"t": txt, "d": stored, "e": f"test_m018_{i}", "k": 990000 + i}
+        session.execute(text("UPDATE events SET date = :t, event_date = :d WHERE event_id = :e"), params)
+        session.execute(text("UPDATE decks SET date = :t, event_date = :d WHERE deck_id = :k"), params)
+
+
+def test_migration_018_syncs_null_and_stale_dates_before_dropping(db_session_rollback):
     from datetime import date
-    from pathlib import Path
 
     from sqlalchemy import text
 
-    from api.db import EventRow, PlayerRow
-
-    path = Path(__file__).resolve().parent.parent / "alembic" / "versions" / "017_event_date_columns.py"
-    spec = importlib.util.spec_from_file_location("m017_bf", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
     session = db_session_rollback
-    player = PlayerRow(display_name="Zzbf017 Player")
-    session.add(player)
-    session.flush()
-    values = ["05/03/25", "05/03/2025", " 05/03/25 ", "", "31/02/25", "junk"]
-    events = []
-    decks = []
-    for i, d in enumerate(values):
-        events.append(create_event(session, "Bf", d, "EDH", event_id=f"test_bf017_{i}", player_count=1))
-        deck = DeckRow(
-            deck_id=990000 + i,
-            event_id=f"test_bf017_{i}",
-            player_id=player.id,
-            date=d,
-            commanders=[],
-            mainboard=[],
-            sideboard=[],
+    mod = _load_migration("018_drop_text_dates.py")
+    # (text date, stored event_date): written by the old release (NULL), edited by it (stale), cleared, in sync
+    values = [("05/03/25", None), ("06/03/25", date(2020, 1, 1)), ("", date(2020, 1, 1)), ("07/03/2025", date(2025, 3, 7))]
+    _with_text_date_columns(session, values)
+    mod._sync(session.connection())
+    mod._check(session.connection())
+    want = [date(2025, 3, 5), date(2025, 3, 6), None, date(2025, 3, 7)]
+    got_events = [
+        r[0] for r in session.execute(text("SELECT event_date FROM events WHERE event_id LIKE 'test_m018_%' ORDER BY event_id"))
+    ]
+    got_decks = [
+        r[0]
+        for r in session.execute(
+            text("SELECT event_date FROM decks WHERE deck_id >= 990000 AND deck_id < 990010 ORDER BY deck_id")
         )
-        session.add(deck)
-        decks.append(deck)
-    session.flush()
-    session.execute(text("UPDATE events SET event_date = NULL WHERE event_id LIKE 'test_bf017_%'"))
-    session.execute(text("UPDATE decks SET event_date = NULL WHERE deck_id >= 990000 AND deck_id < 990006"))
-    mod._backfill(session.connection())
-    session.expire_all()
-    expected = [date(2025, 3, 5)] * 3 + [None] * 3
-    for ev, dk, want in zip(events, decks, expected):
-        assert session.get(EventRow, ev.event_id).event_date == want
-        assert session.get(DeckRow, dk.deck_id).event_date == want
+    ]
+    assert got_events == want and got_decks == want
+
+
+def test_migration_018_refuses_to_drop_an_unparseable_or_out_of_range_date(db_session_rollback):
+    from datetime import date
+
+    import pytest
+
+    session = db_session_rollback
+    mod = _load_migration("018_drop_text_dates.py")
+    _with_text_date_columns(session, [("junk", None), ("05/03/1999", None)])
+    mod._sync(session.connection())
+    with pytest.raises(RuntimeError) as err:
+        mod._check(session.connection())
+    message = str(err.value)
+    assert "cannot be parsed" in message and "'junk'" in message
+    assert "outside 2000-2099" in message
+    assert date(1999, 3, 5) == mod._parse("05/03/1999")
