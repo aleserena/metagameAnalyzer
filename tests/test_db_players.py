@@ -115,3 +115,25 @@ def test_migration_016_key_matches_runtime_normalizer():
     spec.loader.exec_module(mod)
     for name in ("  Matías Ñandú  ", "", "   ", "ABC"):
         assert mod._key(name) == _normalize_name_for_lookup(name)
+
+
+def test_migration_016_backfill_sets_keys(db_session_rollback):
+    import importlib.util
+
+    from sqlalchemy import text
+
+    path = Path(__file__).resolve().parent.parent / "alembic" / "versions" / "016_players_name_key.py"
+    spec = importlib.util.spec_from_file_location("migration_016_bf", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    session = db_session_rollback
+    a = PlayerRow(display_name="Zzbf Matías")
+    b = PlayerRow(display_name="Zzbf Plain")
+    session.add_all([a, b])
+    session.flush()
+    session.execute(text("UPDATE players SET name_key = NULL WHERE id IN (:a, :b)"), {"a": a.id, "b": b.id})
+    mod._CHUNK = 1  # force more than one statement
+    mod._backfill(session.connection())
+    session.expire_all()
+    assert session.get(PlayerRow, a.id).name_key == "zzbf matias"
+    assert session.get(PlayerRow, b.id).name_key == "zzbf plain"

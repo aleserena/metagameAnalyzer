@@ -553,15 +553,13 @@ def list_event_ids_with_complete_matchups(session: Session) -> list[str]:
         .filter(DeckRow.event_id.in_(event_ids))
         .all()
     )
-    # event_id -> [(deck_id, player_id, player)], event_id -> set(deck_id), and event_id -> player_id -> [deck_id]
+    # event_id -> [(deck_id, player_id, player)] and event_id -> set(deck_id)
     decks_by_event: dict[str, list[tuple[int, int, str]]] = {}
     event_deck_ids: dict[str, set[int]] = {}
-    event_player_to_decks: dict[str, dict[int, list[int]]] = {}
     for eid, deck_id, pid, player in deck_rows:
         eid = (eid or "").strip()
         decks_by_event.setdefault(eid, []).append((deck_id, pid, (player or "").strip()))
         event_deck_ids.setdefault(eid, set()).add(deck_id)
-        event_player_to_decks.setdefault(eid, {}).setdefault(pid, []).append(deck_id)
     # Decks that have any result=drop (exempt from expected count)
     all_deck_ids = {did for s in event_deck_ids.values() for did in s}
     dropped_deck_ids: set[int] = set()
