@@ -4,6 +4,10 @@ Revision ID: 017
 Revises: 016
 Create Date: 2026-11-11
 
+Rows written by the previous release between this migration and the new deploy (or while an old release keeps
+serving after a failed deploy) get event_date NULL. Re-run the backfill (it only touches rows with a NULL
+event_date, so it is idempotent) or rely on release 2's Step 1 checks.
+
 """
 from datetime import date
 from typing import Sequence, Union
@@ -35,18 +39,25 @@ def _parse(s):
         return None
 
 
-def upgrade() -> None:
-    bind = op.get_bind()
+def _backfill(bind) -> None:
     for table in _TABLES:
-        op.add_column(table, sa.Column("event_date", sa.Date(), nullable=True))
-        distinct = [r[0] for r in bind.execute(sa.text(f"SELECT DISTINCT date FROM {table}"))]
+        distinct = [
+            r[0] for r in bind.execute(sa.text(f"SELECT DISTINCT date FROM {table} WHERE event_date IS NULL"))
+        ]
         for text_value in distinct:
             parsed = _parse(text_value)
             if parsed is not None:
                 bind.execute(
-                    sa.text(f"UPDATE {table} SET event_date = :d WHERE date = :s"),
+                    sa.text(f"UPDATE {table} SET event_date = :d WHERE date = :s AND event_date IS NULL"),
                     {"d": parsed, "s": text_value},
                 )
+
+
+def upgrade() -> None:
+    for table in _TABLES:
+        op.add_column(table, sa.Column("event_date", sa.Date(), nullable=True))
+    _backfill(op.get_bind())
+    for table in _TABLES:
         op.create_index(f"ix_{table}_event_date", table, ["event_date"])
 
 

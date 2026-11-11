@@ -97,13 +97,27 @@ def test_events_are_listed_newest_first_with_undated_last(db_session_rollback):
     assert ids == ["test_dates_b", "test_dates_a", "test_dates_c"]
 
 
-def test_deck_date_copied_from_event_sets_event_date(db_session_rollback):
+def test_deck_constructor_date_sets_event_date(db_session_rollback):
+    from datetime import date
+
+    deck = DeckRow(date="01/01/24")
+    assert deck.event_date == date(2024, 1, 1)
+
+
+def test_sync_decks_with_event_updates_deck_event_date(db_session_rollback):
     from datetime import date
 
     session = db_session_rollback
-    create_event(session, "Dates", "05/03/25", "EDH", event_id="test_dates_sync", player_count=1)
-    deck = DeckRow(date="01/01/24")
-    assert deck.event_date == date(2024, 1, 1)
+    _seed(session)
+    ev = create_event(session, "Old Name", "02/02/25", "EDH", event_id="test_dates_sync2", player_count=8)
+    session.flush()
+    deck = session.query(DeckRow).filter(DeckRow.event_id == EID).first()
+    deck.event_id = ev.event_id
+    session.flush()
+    sync_decks_with_event(session, ev.event_id)
+    session.flush()
+    assert deck.date == "02/02/25"
+    assert deck.event_date == date(2025, 2, 2)
 
 
 def test_migration_parser_matches_the_runtime_parser():
@@ -118,3 +132,47 @@ def test_migration_parser_matches_the_runtime_parser():
     spec.loader.exec_module(mod)
     for s in ("05/03/25", "05/03/2025", "31/02/25", "", "garbage", " 01/01/24 "):
         assert mod._parse(s) == parse_ddmmyy(s)
+
+
+def test_migration_017_backfill_sets_event_date(db_session_rollback):
+    import importlib.util
+    from datetime import date
+    from pathlib import Path
+
+    from sqlalchemy import text
+
+    from api.db import EventRow, PlayerRow
+
+    path = Path(__file__).resolve().parent.parent / "alembic" / "versions" / "017_event_date_columns.py"
+    spec = importlib.util.spec_from_file_location("m017_bf", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    session = db_session_rollback
+    player = PlayerRow(display_name="Zzbf017 Player")
+    session.add(player)
+    session.flush()
+    values = ["05/03/25", "05/03/2025", " 05/03/25 ", "", "31/02/25", "junk"]
+    events = []
+    decks = []
+    for i, d in enumerate(values):
+        events.append(create_event(session, "Bf", d, "EDH", event_id=f"test_bf017_{i}", player_count=1))
+        deck = DeckRow(
+            deck_id=990000 + i,
+            event_id=f"test_bf017_{i}",
+            player_id=player.id,
+            date=d,
+            commanders=[],
+            mainboard=[],
+            sideboard=[],
+        )
+        session.add(deck)
+        decks.append(deck)
+    session.flush()
+    session.execute(text("UPDATE events SET event_date = NULL WHERE event_id LIKE 'test_bf017_%'"))
+    session.execute(text("UPDATE decks SET event_date = NULL WHERE deck_id >= 990000 AND deck_id < 990006"))
+    mod._backfill(session.connection())
+    session.expire_all()
+    expected = [date(2025, 3, 5)] * 3 + [None] * 3
+    for ev, dk, want in zip(events, decks, expected):
+        assert session.get(EventRow, ev.event_id).event_date == want
+        assert session.get(DeckRow, dk.deck_id).event_date == want
