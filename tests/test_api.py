@@ -735,7 +735,7 @@ def test_get_settings_sync_mtgjson_status(client_with_overrides):
     assert r.status_code == 200
     data = r.json()
     assert "running" in data
-    assert set(data["jobs"].keys()) == {"metadata", "prices"}
+    assert set(data["jobs"].keys()) == {"metadata", "prices", "otag"}
 
 
 def test_post_settings_sync_mtgjson_starts_background_job(client_with_overrides):
@@ -1653,3 +1653,13 @@ def test_list_decks_color_filter_skipped_when_lookup_fails(client, sample_decks)
     decks = r.json()["decks"]
     assert len(decks) == len(state.decks)
     assert all("color_identity" not in d for d in decks)
+
+
+def test_refresh_otag_index_returns_immediately(client_with_overrides):
+    from api.routers import settings as sr
+
+    started = {"started": True, "running": "otag", "message": "otag sync started."}
+    with patch.object(sr.mtgjson_service, "start_sync_job", return_value=started) as start:
+        r = client_with_overrides.post("/api/v1/settings/refresh-otag-index", json=["ramp"])
+    assert r.status_code == 200 and r.json() == started
+    assert start.call_args.args[0] == "otag"

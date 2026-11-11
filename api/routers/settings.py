@@ -95,10 +95,11 @@ def post_refresh_otag_index(
 
     Queries Scryfall search (otag:X) for each category and persists the card→[categories]
     mapping to .scryfall_otag_cache.json. Pass a subset of category keys to refresh
-    only those; omit to refresh all. Admin-only. Takes 1–5 minutes on first run.
+    only those; omit to refresh all. Admin-only. Takes 1–5 minutes, so it runs as a
+    background job (shares the single sync slot); poll ``GET /settings/sync-mtgjson/status``
+    (``jobs.otag``). Returns {started, running, message}.
     """
-    counts = refresh_otag_index(categories)
-    return {"refreshed": counts}
+    return mtgjson_service.start_sync_job("otag", lambda: {"refreshed": refresh_otag_index(categories)})
 
 
 @router.post("/api/v1/settings/sync-mtgjson", dependencies=[Depends(require_database)])
