@@ -51,7 +51,7 @@ metagameAnalyzer/
 │   ├── db.py        # SQLAlchemy models and database layer
 │   ├── routers/     # one APIRouter module per domain (see below) — ~90 routes; aggregated in routers/__init__.py
 │   ├── schemas/     # Pydantic request/response models (one file per domain)
-│   ├── services/    # settings.py — rank weights, ignore-lands list, matchup thresholds
+│   ├── services/    # settings.py — rank weights and ignore-lands list (stored in the `settings` table under `rank_weights`/`ignore_lands_cards`, imported once from the legacy `DATA_DIR/settings/*.json` files; the JSON files are used only when there is no DB), matchup thresholds
 │   └── email.py     # Brevo email integration
 │   # routers/: health, auth, feedback, cards, decks, events, upload,
 │   #           metagame, matchups, players, settings, data

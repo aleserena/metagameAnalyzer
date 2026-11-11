@@ -1624,6 +1624,7 @@ def test_metagame_cache_follows_settings_changes(client, tmp_path, monkeypatch):
     from api.routers import metagame as mg
 
     monkeypatch.setattr(ss, "_DATA_DIR", tmp_path)
+    monkeypatch.setattr(ss, "_db_available", lambda: False)
     with patch.object(mg, "analyze", wraps=mg.analyze) as spy, patch.object(mg, "lookup_cards", return_value={}):
         client.get("/api/v1/metagame")
         ss.set_rank_weights({"1": 99.0})

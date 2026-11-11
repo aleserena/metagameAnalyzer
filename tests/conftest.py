@@ -195,3 +195,25 @@ def sql_log(db_session_rollback):
         yield statements
     finally:
         event.remove(engine, "before_cursor_execute", _record)
+
+
+@pytest.fixture
+def settings_rows():
+    """Real-commit settings tests: needs the test DB; clears the analyzer settings rows around the test."""
+    from api import db
+    from api.services import settings as settings_service
+
+    if not db.is_database_available():
+        db_unavailable("TEST_DATABASE_URL not set")
+    keys = ("rank_weights", "ignore_lands_cards")
+
+    def _clear():
+        with db.session_scope() as session:
+            session.query(db.SettingsRow).filter(db.SettingsRow.key.in_(keys)).delete(synchronize_session=False)
+        settings_service._reset_cache_for_tests()
+
+    _clear()
+    try:
+        yield
+    finally:
+        _clear()
