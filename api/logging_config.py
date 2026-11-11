@@ -53,6 +53,15 @@ def redact_secrets(text: Any) -> str:
     return s
 
 
+# /upload/<token> and /event-edit/<token>, API or frontend route: the token is a bearer secret.
+_LINK_TOKEN_PATH_RE = re.compile(r"(/(?:upload|event-edit)/)[^/]+")
+
+
+def mask_link_tokens(path: str) -> str:
+    """Replace the secret segment of upload / event-edit link paths with ``***`` for logging."""
+    return _LINK_TOKEN_PATH_RE.sub(r"\1***", path)
+
+
 def environment_name() -> str:
     return (os.getenv("RAILWAY_ENVIRONMENT_NAME") or os.getenv("DB_ENV") or "local").strip() or "local"
 
