@@ -65,7 +65,13 @@ class RateLimiter:
 
 
 def client_ip(request: Request) -> str:
-    """Client IP: Railway's ``X-Real-IP`` when present, else the socket peer, else "unknown"."""
+    """Client IP: Railway's ``X-Real-IP`` when present, else the socket peer, else "unknown".
+
+    Railway's edge overwrites a client-supplied ``X-Real-IP`` (and ``X-Forwarded-For``), so the
+    rate limiters keyed on this cannot be sidestepped by forging the header. Verified on staging
+    2026-11-12: a request sent with ``X-Real-IP: 203.0.113.9`` was logged with the real address.
+    Re-check if the app moves behind a different proxy.
+    """
     real_ip = request.headers.get("x-real-ip", "").strip()
     if real_ip:
         return real_ip
