@@ -84,6 +84,8 @@ class EventRow(_TextDateMixin, Base):
     location = Column(String(512), nullable=False, default="")
     event_date = Column(Date, nullable=True, index=True)  # the only stored date; `date` is its DD/MM/YY view
     player_count = Column(Integer, nullable=False, default=0)  # number of players in the event
+    # Field names edited by hand (see EVENT_MANUAL_FIELDS); a re-scrape leaves them alone. NULL = never edited.
+    manual_fields = Column(JSONB, nullable=True)
 
 
 class PlayerRow(Base):
@@ -117,6 +119,8 @@ class DeckRow(_TextDateMixin, Base):
     archetype = Column(String(512), nullable=True)
     mainboard = Column(JSONB, nullable=False)  # [{"qty": int, "card": str}, ...]
     sideboard = Column(JSONB, nullable=False)
+    # Field names edited by hand (see DECK_MANUAL_FIELDS); a re-scrape leaves them alone. NULL = never edited.
+    manual_fields = Column(JSONB, nullable=True)
     # deck_id is globally unique: MTGTop8 use site IDs; manual use MANUAL_DECK_ID_START+
 
 
@@ -175,6 +179,36 @@ class EventUploadLinkRow(Base):
     used_at = Column(DateTime, nullable=True)
     expires_at = Column(DateTime, nullable=True)
     label = Column(String(256), nullable=True)
+
+
+class EventSnapshotRow(Base):
+    """An event as it was before a destructive action (see api/services/snapshots.py).
+
+    ``event_id`` has no foreign key on purpose: the snapshot must outlive the event. ``payload`` is the
+    event export, including player emails, so it is admin-only.
+    """
+
+    __tablename__ = "event_snapshots"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    event_id = Column(String(32), nullable=False, index=True)
+    event_name = Column(String(512), nullable=False, default="", server_default="")
+    created_at = Column(DateTime, nullable=False, index=True)  # naive UTC
+    reason = Column(String(64), nullable=False)  # delete | merge | hadouken | clear_decks | rescrape | before_restore
+    payload_hash = Column(String(64), nullable=False)  # SHA-256 of the payload; identical snapshots are not repeated
+    payload = Column(JSONB, nullable=False)
+
+
+class ChangeLogRow(Base):
+    """One data mutation: when, who (admin or a link's type and label, never its token), what."""
+
+    __tablename__ = "change_log"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    at = Column(DateTime, nullable=False, index=True)  # naive UTC
+    actor = Column(String(128), nullable=False)
+    action = Column(String(64), nullable=False)
+    event_id = Column(String(32), nullable=True, index=True)
+    deck_id = Column(Integer, nullable=True)
+    summary = Column(String(512), nullable=False, default="", server_default="")
 
 
 class CardRow(Base):
