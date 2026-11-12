@@ -389,9 +389,10 @@ def lookup_cards(
     A database error is logged and what was found so far is returned; with ``strict`` it is
     re-raised instead, so callers that cache derived data can avoid caching a degraded result.
 
-    ``max_fallback`` caps how many missing names go to Scryfall (``None`` = no cap). It is for
-    callers passing untrusted names: the rest are reported ``not_found`` without being cached,
-    so a later lookup can still resolve them.
+    ``max_fallback`` caps how many missing names may cost a Scryfall request (``None`` = no cap).
+    It is for callers passing untrusted names. Names already in the Scryfall cache are free and
+    never count. Names over the cap come back as ``{"error": "unresolved"}`` -- "not looked up",
+    as opposed to ``not_found`` -- and are not cached, so a later lookup can still resolve them.
     """
     names = list(dict.fromkeys(card_names))
     result: dict[str, dict] = {}
@@ -418,12 +419,29 @@ def lookup_cards(
         return result
 
     if missing and SCRYFALL_FALLBACK_ENABLED:
-        to_fetch = missing if max_fallback is None else missing[: max(0, max_fallback)]
-        if to_fetch:
-            result.update(_scryfall_lookup_cards(to_fetch))
-        for name in missing[len(to_fetch) :]:
-            result[name] = {"error": "not_found"}
+        over_cap: set[str] = set()
+        if max_fallback is not None:
+            needs_fetch = [n for n in missing if not _fallback_is_cached(n)]
+            over_cap = set(needs_fetch[max(0, max_fallback) :])
+        allowed = [n for n in missing if n not in over_cap]
+        if allowed:
+            result.update(_scryfall_lookup_cards(allowed))
+        for name in over_cap:
+            result[name] = {"error": UNRESOLVED}
     return result
+
+
+# Error marker for a name the caller was not allowed to look up on Scryfall (see ``max_fallback``).
+UNRESOLVED = "unresolved"
+
+
+def _fallback_is_cached(name: str) -> bool:
+    """True when ``_scryfall_lookup_cards`` can answer ``name`` from its cache, without a request."""
+    _load_cache()
+    cached = _card_cache.get(name)
+    if _is_fresh_not_found(cached):
+        return True
+    return bool(cached and "error" not in cached and "card_faces" in cached and "oracle_text" in cached)
 
 
 NOT_FOUND_TTL_SECONDS = 7 * 24 * 3600

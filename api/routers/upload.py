@@ -39,8 +39,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Per client IP, shared by the four /upload/{token} routes. Loose on purpose: a whole
-# tournament may submit decks from one venue address within a few minutes.
-UPLOAD_LIMITER = RateLimiter(120, 60)
+# tournament (100+ players: open, validate, submit) may share one venue address.
+UPLOAD_LIMITER = RateLimiter(300, 60)
 _upload_rate_limit = Depends(rate_limited(UPLOAD_LIMITER))
 
 
@@ -54,6 +54,7 @@ def _get_validated_upload_link(
     missing_deck_detail: str = "Feedback link has no deck",
     mark_used: bool = False,
     sitting_hours: int | None = None,
+    allow_used: bool = False,
     lock: bool = False,
 ):
     """Load and validate a one-time upload link and its event.
@@ -66,6 +67,8 @@ def _get_validated_upload_link(
     - Associated event still exists
 
     ``sitting_hours`` (with ``mark_used``) makes the link expire that long after this first use.
+    ``allow_used`` accepts a link that was already used but has not expired; it is not marked again,
+    so its expiry does not move.
 
     With ``lock=True`` the link row is read ``FOR UPDATE``: concurrent submissions of the same link
     serialise on it, so the second one sees ``used_at`` set and is rejected.
@@ -91,7 +94,8 @@ def _get_validated_upload_link(
     if require_deck and getattr(row, "deck_id", None) is None:
         raise HTTPException(status_code=404, detail=missing_deck_detail)
 
-    if row.used_at is not None:
+    already_used = row.used_at is not None
+    if already_used and not allow_used:
         raise HTTPException(status_code=404, detail="Link already used")
 
     if row.expires_at is not None and row.expires_at < _db.utcnow_naive():
@@ -101,7 +105,7 @@ def _get_validated_upload_link(
     if not ev:
         raise HTTPException(status_code=404, detail="Event not found")
 
-    if mark_used:
+    if mark_used and not already_used:
         _db.mark_upload_link_used(session, token, sitting_hours=sitting_hours)
 
     return row, ev
@@ -183,7 +187,8 @@ def get_upload_link_info(token: str):
 def get_event_edit_link_info(token: str):
     """Validate a one-time event-edit link, mark it as used, and return event_id. Public (no auth).
 
-    The token keeps authorising edits (X-Event-Edit-Token) for EVENT_EDIT_SITTING_HOURS after this call.
+    The token keeps authorising edits (X-Event-Edit-Token) for EVENT_EDIT_SITTING_HOURS after the
+    first call; calling again within that time succeeds without extending it.
     """
     with _db.session_scope() as session:
         row, _ = _get_validated_upload_link(
@@ -192,6 +197,8 @@ def get_event_edit_link_info(token: str):
             expected_link_type=_db.LINK_TYPE_EVENT_EDIT,
             mark_used=True,
             sitting_hours=_db.EVENT_EDIT_SITTING_HOURS,
+            # Reloading the page or clicking the link again during the sitting must keep working.
+            allow_used=True,
         )
         return {"event_id": row.event_id}
 

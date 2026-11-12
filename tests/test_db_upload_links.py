@@ -145,3 +145,78 @@ def test_event_edit_token_rejected_once_sitting_window_has_passed(db_session_rol
         require_admin_or_event_edit("test_links_sit_7", None, "tok-sit-7")
     assert exc.value.status_code == 401
     assert exc.value.detail == "Event edit link expired"
+
+
+def test_reopening_an_event_edit_link_in_the_same_sitting_works(db_session_rollback, monkeypatch):
+    """Reloading the page or clicking the link again must not eject the organiser."""
+    from api.routers.upload import get_event_edit_link_info
+
+    session = db_session_rollback
+    row = _event_edit_link(session, "test_links_sit_8", "tok-sit-8")
+    _use_session(monkeypatch, session)
+    get_event_edit_link_info("tok-sit-8")
+    first_expiry, first_used = row.expires_at, row.used_at
+    assert get_event_edit_link_info("tok-sit-8") == {"event_id": "test_links_sit_8"}
+    assert row.expires_at == first_expiry  # reopening does not restart the 12 hours
+    assert row.used_at == first_used
+
+
+def test_reopening_an_expired_event_edit_link_is_refused(db_session_rollback, monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+
+    from api import db
+    from api.routers.upload import get_event_edit_link_info
+
+    session = db_session_rollback
+    row = _event_edit_link(session, "test_links_sit_9", "tok-sit-9")
+    _use_session(monkeypatch, session)
+    get_event_edit_link_info("tok-sit-9")
+    row.expires_at = db.utcnow_naive() - timedelta(minutes=1)
+    with pytest.raises(HTTPException) as exc:
+        get_event_edit_link_info("tok-sit-9")
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "Link expired"
+
+
+def test_a_used_deck_upload_link_stays_single_use(db_session_rollback, monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+
+    from api import db
+    from api.routers.upload import get_upload_link_info
+
+    session = db_session_rollback
+    create_event(session, "Links", "01/01/25", "EDH", event_id="test_links_sit_10", player_count=1)
+    create_upload_link(session, "tok-sit-10", "test_links_sit_10")
+    session.flush()
+    db.mark_upload_link_used(session, "tok-sit-10")
+    _use_session(monkeypatch, session)
+    with pytest.raises(HTTPException) as exc:
+        get_upload_link_info("tok-sit-10")
+    assert exc.value.detail == "Link already used"
+
+
+def test_link_token_validity_for_card_lookups(db_session_rollback, monkeypatch):
+    from api import db
+    from api.routers.cards import _is_valid_link_token
+
+    session = db_session_rollback
+    row = _event_edit_link(session, "test_links_sit_11", "tok-sit-11")
+    _use_session(monkeypatch, session)
+    assert _is_valid_link_token("tok-sit-11") is True
+    assert _is_valid_link_token("no-such-token") is False
+    assert _is_valid_link_token("") is False
+    row.expires_at = db.utcnow_naive() - timedelta(minutes=1)
+    assert _is_valid_link_token("tok-sit-11") is False
+
+
+def test_database_errors_do_not_carry_statement_parameters(db_session_rollback):
+    """A failed query on a link must not put the token into the error text (logs, alert emails)."""
+    import pytest
+    from sqlalchemy import text
+    from sqlalchemy.exc import DBAPIError
+
+    with pytest.raises(DBAPIError) as exc:
+        db_session_rollback.execute(text("SELECT 1 / 0 WHERE :token = :token"), {"token": "SECRET-LINK-TOKEN"})
+    assert "SECRET-LINK-TOKEN" not in str(exc.value)

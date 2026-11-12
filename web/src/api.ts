@@ -30,6 +30,22 @@ export function clearEventEditToken(): void {
 
 export const SESSION_EXPIRED_KEY = 'session_expired'
 
+/** An API error response. `status` is the HTTP status code (network failures throw a plain Error). */
+export class ApiError extends Error {
+  status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
+/** HTTP status of a failed API call, or undefined when the request never got a response. */
+export function errorStatus(e: unknown): number | undefined {
+  const status = (e as { status?: unknown } | null)?.status
+  return typeof status === 'number' ? status : undefined
+}
+
 /** A 401 ends the admin session. If there was one, remember it so the login page can say why. */
 function handleUnauthorized(): void {
   if (localStorage.getItem('admin_token') !== null && typeof sessionStorage !== 'undefined') {
@@ -59,7 +75,7 @@ async function fetchWithAuth(
     const detail = err.detail ?? res.statusText
     const message = typeof detail === 'string' ? detail : JSON.stringify(detail)
     console.error('[API]', res.status, path, detail, err)
-    throw new Error(message)
+    throw new ApiError(message, res.status)
   }
   return responseType === 'blob' ? res.blob() : res.json()
 }
@@ -79,7 +95,7 @@ async function fetchApi<T>(path: string, options?: RequestInit & { timeoutMs?: n
     const detail = err.detail ?? res.statusText
     const message = typeof detail === 'string' ? detail : JSON.stringify(detail)
     console.error(`[API] ${res.status} ${path}`, detail, err)
-    throw new Error(message)
+    throw new ApiError(message, res.status)
   }
   return res.json()
 }
@@ -108,7 +124,7 @@ export async function submitFeedback(body: {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     const detail = err.detail ?? res.statusText
     const message = typeof detail === 'string' ? detail : JSON.stringify(detail)
-    throw new Error(message)
+    throw new ApiError(message, res.status)
   }
   return res.json()
 }
@@ -230,7 +246,15 @@ export interface CardLookupResult {
 /** The API accepts at most this many names per lookup (MAX_LOOKUP_NAMES); larger lists are split. */
 const CARD_LOOKUP_BATCH = 200
 
-export async function getCardLookup(names: string[]): Promise<Record<string, CardLookupResult>> {
+/**
+ * Look up card data by name. `uploadToken` is the token of the upload/feedback link the visitor is
+ * using: the API then looks up every name (needed to validate a pasted deck list) instead of the
+ * small budget anonymous visitors get. Names it did not look up come back as `{ error: 'unresolved' }`.
+ */
+export async function getCardLookup(
+  names: string[],
+  opts?: { uploadToken?: string }
+): Promise<Record<string, CardLookupResult>> {
   if (names.length === 0) return {}
   const batches: string[][] = []
   for (let i = 0; i < names.length; i += CARD_LOOKUP_BATCH) {
@@ -241,6 +265,7 @@ export async function getCardLookup(names: string[]): Promise<Record<string, Car
       fetchApi<Record<string, CardLookupResult>>('/cards/lookup', {
         method: 'POST',
         body: JSON.stringify({ names: batch }),
+        ...(opts?.uploadToken ? { headers: { 'X-Upload-Token': opts.uploadToken } } : {}),
       })
     )
   )
@@ -630,7 +655,7 @@ async function fetchApiPublic<T>(path: string, options?: RequestInit): Promise<T
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     const detail = err.detail ?? res.statusText
     const message = typeof detail === 'string' ? detail : JSON.stringify(detail)
-    throw new Error(message)
+    throw new ApiError(message, res.status)
   }
   return res.json()
 }

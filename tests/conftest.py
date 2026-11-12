@@ -61,6 +61,8 @@ def _reset_login_limiter():
 
     auth.LOGIN_LIMITER.reset()
     cards.LOOKUP_LIMITER.reset()
+    cards.ANON_FALLBACK_IP_LIMITER.reset()
+    cards.ANON_FALLBACK_GLOBAL_LIMITER.reset()
     upload.UPLOAD_LIMITER.reset()
 
 

@@ -237,6 +237,8 @@ def _get_engine():
             pool_pre_ping=True,
             # Bounded connect so the health check fails fast instead of hanging on an unreachable host
             connect_args={"connect_timeout": 10},
+            # Error text reaches logs and alert emails: keep bound values (link tokens, emails) out of it.
+            hide_parameters=True,
             echo=os.getenv("SQL_ECHO", "").lower() in ("1", "true"),
         )
     except Exception as e:

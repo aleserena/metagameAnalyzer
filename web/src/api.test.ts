@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { getDecks, getMetagame, clearScryfallCache, clearDecks, getCardLookup } from './api'
+import { getDecks, getMetagame, clearScryfallCache, clearDecks, getCardLookup, getUploadLinkInfo, getEventEditLinkInfo } from './api'
 
 describe('api', () => {
   beforeEach(() => {
@@ -169,6 +169,47 @@ describe('api', () => {
     it('makes no call for an empty list', async () => {
       expect(await getCardLookup([])).toEqual({})
       expect(fetch).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('error status', () => {
+    const failure = (status: number, detail: string) =>
+      ({ ok: false, status, statusText: 'x', json: async () => ({ detail }) }) as Response
+
+    it('lets callers tell a dead upload link (404) from a busy server (429)', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(failure(429, 'Too many requests. Try again later.'))
+      await expect(getUploadLinkInfo('tok')).rejects.toMatchObject({ status: 429, message: 'Too many requests. Try again later.' })
+
+      vi.mocked(fetch).mockResolvedValueOnce(failure(404, 'Link already used'))
+      await expect(getUploadLinkInfo('tok')).rejects.toMatchObject({ status: 404 })
+    })
+
+    it('carries the status on event-edit link and authenticated errors too', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(failure(503, 'Database not configured'))
+      await expect(getEventEditLinkInfo('tok')).rejects.toMatchObject({ status: 503 })
+
+      vi.mocked(fetch).mockResolvedValueOnce(failure(500, 'Internal server error'))
+      await expect(getDecks({})).rejects.toMatchObject({ status: 500 })
+    })
+  })
+
+  describe('getCardLookup for a link holder', () => {
+    it('sends the upload token so the whole pasted list is looked up', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({}) } as Response)
+
+      await getCardLookup(['sol ring'], { uploadToken: 'my-upload-token' })
+
+      const headers = (vi.mocked(fetch).mock.calls[0][1] as RequestInit).headers as Record<string, string>
+      expect(headers['X-Upload-Token']).toBe('my-upload-token')
+    })
+
+    it('sends no upload token header otherwise', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({}) } as Response)
+
+      await getCardLookup(['Sol Ring'])
+
+      const headers = (vi.mocked(fetch).mock.calls[0][1] as RequestInit).headers as Record<string, string>
+      expect(headers['X-Upload-Token']).toBeUndefined()
     })
   })
 })

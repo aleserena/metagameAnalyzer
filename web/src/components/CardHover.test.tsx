@@ -58,4 +58,29 @@ describe('CardHover', () => {
     const link = screen.getByRole('link', { name: /bolt/i })
     expect(link.getAttribute('href')).toMatch(/\/decks\?card=Lightning.*Bolt/)
   })
+
+  it('asks again later for a card the server did not look up (unresolved)', async () => {
+    vi.useFakeTimers()
+    vi.mocked(api.getCardLookup).mockResolvedValue({ 'Brand New Card': { error: 'unresolved' } })
+    const first = render(wrap(<CardHover cardName="Brand New Card">New</CardHover>))
+    await act(async () => {
+      fireEvent.mouseEnter(screen.getByText('New'))
+      await vi.advanceTimersByTimeAsync(350)
+    })
+    first.unmount()
+
+    vi.mocked(api.getCardLookup).mockClear()
+    vi.mocked(api.getCardLookup).mockResolvedValue({
+      'Brand New Card': { image_uris: { normal: 'https://example.com/new.png' } },
+    })
+    render(wrap(<CardHover cardName="Brand New Card">New</CardHover>))
+    await act(async () => {
+      fireEvent.mouseEnter(screen.getByText('New'))
+      await vi.advanceTimersByTimeAsync(350)
+    })
+
+    expect(api.getCardLookup).toHaveBeenCalledWith(['Brand New Card'])
+    expect(screen.getByAltText('Brand New Card')).toBeInTheDocument()
+    vi.useRealTimers()
+  })
 })

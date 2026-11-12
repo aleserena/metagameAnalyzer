@@ -1924,11 +1924,98 @@ def test_admin_token_lifetime_is_twelve_hours():
     assert 0 < claims["exp"] - time.time() <= 12 * 3600
 
 
-def test_anonymous_card_lookup_bounds_the_scryfall_fallback(client):
-    with patch("api.routers.cards.lookup_cards", return_value={}) as lookup:
-        r = client.post("/api/v1/cards/lookup", json={"names": ["Made Up Card"]})
+def _fake_lookup(calls):
+    """lookup_cards stand-in: names starting with "Known" resolve; others need the fallback."""
+
+    def fake(names, *, strict=False, max_fallback=None):
+        calls.append((list(names), max_fallback))
+        out = {}
+        for n in names:
+            if n.startswith("Known"):
+                out[n] = {"name": n}
+            elif max_fallback == 0:
+                out[n] = {"error": "unresolved"}
+            else:
+                out[n] = {"name": n, "via": "scryfall"}
+        return out
+
+    return fake
+
+
+def test_anonymous_card_lookup_sends_at_most_five_names_to_the_fallback(client):
+    calls = []
+    names = ["Known A"] + [f"Odd {i}" for i in range(9)]
+    with patch("api.routers.cards.lookup_cards", side_effect=_fake_lookup(calls)):
+        r = client.post("/api/v1/cards/lookup", json={"names": names}, headers={"X-Real-IP": "203.0.113.60"})
     assert r.status_code == 200
-    assert lookup.call_args.kwargs["max_fallback"] == 5
+    assert calls[0] == (names, 0)  # first pass: cards table and cache only, no network
+    assert calls[1] == ([f"Odd {i}" for i in range(5)], None)
+    body = r.json()
+    assert body["Odd 0"] == {"name": "Odd 0", "via": "scryfall"}
+    assert body["Odd 8"] == {"error": "unresolved"}
+
+
+def test_anonymous_lookup_of_known_cards_never_touches_the_fallback(client):
+    calls = []
+    with patch("api.routers.cards.lookup_cards", side_effect=_fake_lookup(calls)):
+        client.post("/api/v1/cards/lookup", json={"names": ["Known A", "Known B"]})
+    assert calls == [(["Known A", "Known B"], 0)]
+
+
+def test_anonymous_fallback_has_a_small_per_address_budget(client):
+    from api.routers import cards
+
+    calls = []
+    headers = {"X-Real-IP": "203.0.113.61"}
+    budget = cards.ANON_FALLBACK_IP_LIMITER.max_events
+    with patch("api.routers.cards.lookup_cards", side_effect=_fake_lookup(calls)):
+        for i in range(budget + 3):
+            r = client.post("/api/v1/cards/lookup", json={"names": [f"Odd {i}"]}, headers=headers)
+            assert r.status_code == 200  # over budget is not an error: the card is just unresolved
+    assert len([c for c in calls if c[1] is None]) == budget
+    assert r.json() == {f"Odd {budget + 2}": {"error": "unresolved"}}
+
+
+def test_anonymous_fallback_has_a_site_wide_budget(client, monkeypatch):
+    from api.routers import cards
+
+    monkeypatch.setattr(cards.ANON_FALLBACK_GLOBAL_LIMITER, "max_events", 2)
+    calls = []
+    with patch("api.routers.cards.lookup_cards", side_effect=_fake_lookup(calls)):
+        for i in range(4):  # four different addresses
+            client.post(
+                "/api/v1/cards/lookup", json={"names": [f"Odd {i}"]}, headers={"X-Real-IP": f"203.0.113.{70 + i}"}
+            )
+    assert len([c for c in calls if c[1] is None]) == 2
+
+
+def test_anonymous_fallback_budgets_are_tight():
+    from api.routers import cards
+
+    assert (cards.ANON_FALLBACK_IP_LIMITER.max_events, cards.ANON_FALLBACK_IP_LIMITER.window_seconds) == (6, 60)
+    assert (cards.ANON_FALLBACK_GLOBAL_LIMITER.max_events, cards.ANON_FALLBACK_GLOBAL_LIMITER.window_seconds) == (
+        30,
+        60,
+    )
+
+
+def test_link_holder_card_lookup_resolves_a_whole_pasted_list(client):
+    """A player validating a deck list on an upload link gets every name looked up."""
+    calls = []
+    names = [f"odd {i}" for i in range(100)]
+    with (
+        patch("api.routers.cards.lookup_cards", side_effect=_fake_lookup(calls)),
+        patch("api.routers.cards._is_valid_link_token", side_effect=lambda t: t == "good-token"),
+    ):
+        r = client.post("/api/v1/cards/lookup", json={"names": names}, headers={"X-Upload-Token": "good-token"})
+        organiser = client.post(
+            "/api/v1/cards/lookup", json={"names": names}, headers={"X-Event-Edit-Token": "good-token"}
+        )
+        stranger = client.post("/api/v1/cards/lookup", json={"names": names}, headers={"X-Upload-Token": "made-up"})
+    assert calls[0] == (names, None)
+    assert not any(v.get("error") for v in r.json().values())
+    assert not any(v.get("error") for v in organiser.json().values())
+    assert sum(1 for v in stranger.json().values() if v.get("error") == "unresolved") == 95
 
 
 def test_admin_card_lookup_has_unbounded_fallback(client, monkeypatch):
@@ -1978,9 +2065,8 @@ def test_card_lookup_returns_429_after_the_limit(client, monkeypatch):
 
 
 def test_public_limits_leave_room_for_real_use():
-    from api.routers import cards, upload
+    from api.routers import cards
 
-    assert (upload.UPLOAD_LIMITER.max_events, upload.UPLOAD_LIMITER.window_seconds) == (120, 60)
     assert (cards.LOOKUP_LIMITER.max_events, cards.LOOKUP_LIMITER.window_seconds) == (600, 60)
 
 
@@ -1995,3 +2081,10 @@ def test_feedback_does_not_echo_github_error_text(client, github_ok, caplog):
     assert r.status_code == 502
     assert r.json()["detail"] == "Could not create issue. Try again later."
     assert "label does not exist" in caplog.text  # still logged for the operator
+
+
+def test_upload_limit_allows_a_large_event_submitting_at_once():
+    from api.routers import upload
+
+    # 100+ players told to "submit now" on one venue address: open + validate + submit each.
+    assert (upload.UPLOAD_LIMITER.max_events, upload.UPLOAD_LIMITER.window_seconds) == (300, 60)
