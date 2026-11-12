@@ -11,7 +11,7 @@ import json
 from datetime import timedelta
 
 from api import db as _db
-from api.db import DeckRow, EventSnapshotRow
+from api.db import DeckRow, EventRow, EventSnapshotRow, MatchupRow, PlayerEmailRow, PlayerRow
 from api.services.event_export import build_event_export
 from sqlalchemy import func
 
@@ -132,3 +132,146 @@ def list_snapshots(session, *, event_id: str | None = None, limit: int = 200) ->
         }
         for sid, eid, name, created_at, reason, deck_count, matchup_count in rows
     ]
+
+
+def _restore_player(session, deck: dict, used_player_ids: set[int]) -> tuple[int, str]:
+    """The player a restored deck belongs to: (player_id, display name).
+
+    The snapshot's player id wins when that player still exists (a player renamed since keeps the
+    deck, under the current name). Otherwise the player is found by name or created. One player
+    cannot hold two decks in an event, so a second deck landing on the same player (the two were
+    merged since) gets a clearly named placeholder instead of failing the restore.
+    """
+    name = (deck.get("player") or "").strip() or "(unknown)"
+    pid = deck.get("player_id")
+    row = session.get(PlayerRow, pid) if pid is not None else None
+    if row is not None:
+        pid, display = row.id, row.display_name or name
+    else:
+        pid, display = _db.resolve_name_to_player_id(session, name)
+        if pid is None:
+            pid, display = _db.get_or_create_player(session, name)
+    if pid in used_player_ids:
+        pid, display = _db.get_or_create_player(session, f"{name} (restored deck {deck['deck_id']})")
+    used_player_ids.add(pid)
+    return pid, display
+
+
+def restore_snapshot(session, snapshot_id: int) -> dict:
+    """Put an event back exactly as a snapshot recorded it: same event id, same deck ids, origins,
+    matchups, hand-edited field lists and player emails.
+
+    The event's current state is snapshotted first (``before_restore``), so a restore can be undone.
+    Decks added to the event since are removed; snapshot decks that now sit in another event (after
+    a merge) are moved back. Raises LookupError for an unknown snapshot. The caller reloads the
+    in-memory decks after commit.
+    """
+    snapshot = session.get(EventSnapshotRow, snapshot_id)
+    if snapshot is None:
+        raise LookupError("Snapshot not found")
+    payload = snapshot.payload or {}
+    event = payload.get("event") or {}
+    extras = payload.get("extras") or {}
+    event_id = snapshot.event_id
+    decks = [d for d in (payload.get("decks") or []) if d.get("deck_id") is not None]
+    deck_ids = [int(d["deck_id"]) for d in decks]
+
+    safety_id = take_snapshot(session, event_id, REASON_BEFORE_RESTORE)
+
+    # Clear the way: the event's current decks, and the snapshot's decks wherever they are now.
+    # Matchups go with their deck (ON DELETE CASCADE).
+    session.query(DeckRow).filter(DeckRow.event_id == event_id).delete(synchronize_session=False)
+    if deck_ids:
+        session.query(DeckRow).filter(DeckRow.deck_id.in_(deck_ids)).delete(synchronize_session=False)
+    session.flush()
+    session.expire_all()
+
+    row = _db.get_event(session, event_id)
+    if row is None:
+        row = EventRow(event_id=event_id)
+        session.add(row)
+    row.origin = event.get("origin") or _db.ORIGIN_MTGTOP8
+    row.name = event.get("event_name") or ""
+    row.store = event.get("store") or ""
+    row.location = event.get("location") or ""
+    row.date = event.get("date") or ""
+    row.format_id = event.get("format_id") or ""
+    row.player_count = int(event.get("player_count") or 0)
+    row.manual_fields = list(extras.get("event_manual_fields") or []) or None
+    session.flush()
+
+    deck_origins = extras.get("deck_origins") or {}
+    deck_manual = extras.get("deck_manual_fields") or {}
+    used_player_ids: set[int] = set()
+    deck_player: dict[int, tuple[int, str]] = {}
+    for deck in decks:
+        data = dict(deck)
+        data["deck_id"] = int(deck["deck_id"])
+        data["event_id"] = event_id
+        data["player_id"], data["player"] = _restore_player(session, data, used_player_ids)
+        deck_row = _db.dict_to_deck_row(data, origin=deck_origins.get(str(data["deck_id"])) or row.origin)
+        deck_row.manual_fields = list(deck_manual.get(str(data["deck_id"])) or []) or None
+        session.add(deck_row)
+        deck_player[data["deck_id"]] = (data["player_id"], data["player"])
+    session.flush()
+
+    # Matchup rows exactly as stored: both sides are in the snapshot, so no inverse rows are generated.
+    matchup_count = 0
+    restored_ids = set(deck_player)
+    for m in payload.get("matchups") or []:
+        try:
+            deck_id = int(m.get("deck_id"))
+        except (TypeError, ValueError):
+            continue
+        if deck_id not in restored_ids:
+            continue
+        opp_deck_id = m.get("opponent_deck_id")
+        opp_pid = m.get("opponent_player_id")
+        opp_name = (m.get("opponent_player") or "").strip()
+        if opp_deck_id is not None:
+            if opp_deck_id in restored_ids:
+                opp_pid, opp_name = deck_player[opp_deck_id]
+            elif session.get(DeckRow, opp_deck_id) is None:
+                continue  # the opposing deck is gone for good
+        elif opp_pid is not None and session.get(PlayerRow, opp_pid) is None:
+            opp_pid = None
+            if opp_name and opp_name not in ("Bye", "(drop)"):
+                opp_pid, resolved = _db.resolve_name_to_player_id(session, opp_name)
+                if opp_pid is None:
+                    opp_pid, resolved = _db.get_or_create_player(session, opp_name)
+                opp_name = resolved or opp_name
+        session.add(
+            MatchupRow(
+                deck_id=deck_id,
+                opponent_player_id=opp_pid,
+                opponent_player=opp_name or "Bye",
+                opponent_deck_id=opp_deck_id,
+                opponent_archetype=m.get("opponent_archetype"),
+                result=(m.get("result") or "loss").strip() or "loss",
+                result_note=(m.get("result_note") or None),
+                round=m.get("round"),
+            )
+        )
+        matchup_count += 1
+
+    # Emails are keyed by the name the player had in the snapshot. Give each to the player its deck
+    # was restored to: looking the old name up again would recreate a player that was renamed since.
+    snapshot_name_to_pid = {
+        (d.get("player") or "").strip(): deck_player[int(d["deck_id"])][0] for d in decks
+    }
+    for name, email in (payload.get("player_emails") or {}).items():
+        pid = snapshot_name_to_pid.get((name or "").strip())
+        if pid is None or not (email or "").strip():
+            continue
+        email_row = session.get(PlayerEmailRow, pid)
+        if email_row is None:
+            session.add(PlayerEmailRow(player_id=pid, email=email.strip()))
+        else:
+            email_row.email = email.strip()
+    session.flush()
+    return {
+        "event_id": event_id,
+        "deck_count": len(decks),
+        "matchup_count": matchup_count,
+        "safety_snapshot_id": safety_id,
+    }

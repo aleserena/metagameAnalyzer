@@ -169,3 +169,165 @@ def test_listing_is_newest_first_and_never_returns_the_payload(db_session_rollba
     }
     assert listed[0]["created_at"].endswith("Z")
     assert "snap.alice@example.com" not in str(listed)
+
+
+# ---- restore -----------------------------------------------------------------------------------
+
+
+def _decks(session, event_id=EID):
+    return {d["deck_id"]: d for d in db.get_decks_by_event(session, event_id)}
+
+
+def _matchups(session, deck_ids):
+    return sorted(
+        (m["deck_id"], m["opponent_deck_id"], m["result"], m["round"])
+        for m in db.list_matchups_by_decks(session, list(deck_ids))
+    )
+
+
+def test_restore_brings_back_a_deleted_event(db_session_rollback):
+    session = db_session_rollback
+    seed(session)
+    before = _matchups(session, [DECK_A, DECK_B])
+    sid = snap.take_snapshot(session, EID, "delete")
+    db.delete_event(session, EID, delete_decks=True)
+    session.flush()
+    assert db.get_event(session, EID) is None
+
+    out = snap.restore_snapshot(session, sid)
+
+    assert out == {"event_id": EID, "deck_count": 2, "matchup_count": 2, "safety_snapshot_id": None}
+    assert set(_decks(session)) == {DECK_A, DECK_B}
+    assert _matchups(session, [DECK_A, DECK_B]) == before
+    assert db.get_player_email(session, "Snap Alice") == "snap.alice@example.com"
+    assert db.get_event(session, EID).name == "Snap Event"
+
+
+def test_restore_undoes_edits_and_takes_a_safety_snapshot(db_session_rollback):
+    session = db_session_rollback
+    seed(session)
+    sid = snap.take_snapshot(session, EID, "hadouken")
+    deck = session.get(db.DeckRow, DECK_A)
+    deck.rank = "99"
+    deck.mainboard = [{"qty": 1, "card": "Island"}]
+    db.upsert_matchups_for_deck(session, DECK_A, [])  # wipes the match
+    db.update_event(session, EID, event_name="Renamed by mistake")
+    session.flush()
+
+    out = snap.restore_snapshot(session, sid)
+    session.expire_all()
+
+    restored = _decks(session)[DECK_A]
+    assert restored["rank"] == "1"
+    assert restored["mainboard"] == [{"qty": 1, "card": "Sol Ring"}]
+    assert len(_matchups(session, [DECK_A, DECK_B])) == 2
+    assert db.get_event(session, EID).name == "Snap Event"
+    safety = session.get(EventSnapshotRow, out["safety_snapshot_id"])
+    assert safety.reason == "before_restore"
+    assert safety.payload["event"]["event_name"] == "Renamed by mistake"
+
+
+def test_restore_can_itself_be_undone(db_session_rollback):
+    session = db_session_rollback
+    seed(session)
+    sid = snap.take_snapshot(session, EID, "hadouken")
+    session.get(db.DeckRow, DECK_A).rank = "99"
+    session.flush()
+    out = snap.restore_snapshot(session, sid)
+    snap.restore_snapshot(session, out["safety_snapshot_id"])
+    session.expire_all()
+    assert _decks(session)[DECK_A]["rank"] == "99"
+
+
+def test_restore_after_merge_moves_decks_back(db_session_rollback):
+    session = db_session_rollback
+    seed(session)
+    db.create_event(session, "Kept Event", "01/01/25", "EDH", event_id="snap_ev_keep", player_count=2)
+    session.flush()
+    sid = snap.take_snapshot(session, EID, "merge")
+    db.reassign_decks_to_event(session, EID, "snap_ev_keep", "Kept Event", "01/01/25")
+    db.delete_event(session, EID)
+    session.flush()
+    assert set(_decks(session, "snap_ev_keep")) == {DECK_A, DECK_B}
+
+    snap.restore_snapshot(session, sid)
+    session.expire_all()
+
+    assert set(_decks(session)) == {DECK_A, DECK_B}
+    assert _decks(session, "snap_ev_keep") == {}
+
+
+def test_restore_removes_decks_added_after_the_snapshot(db_session_rollback):
+    session = db_session_rollback
+    seed(session)
+    sid = snap.take_snapshot(session, EID, "hadouken")
+    db.upsert_deck(session, _deck(987009, EID, "Snap Latecomer"))
+    session.flush()
+    snap.restore_snapshot(session, sid)
+    session.expire_all()
+    assert set(_decks(session)) == {DECK_A, DECK_B}
+
+
+def test_restore_recreates_a_player_that_was_deleted(db_session_rollback):
+    session = db_session_rollback
+    seed(session)
+    sid = snap.take_snapshot(session, EID, "delete")
+    alice_id = _decks(session)[DECK_A]["player_id"]
+    db.delete_event(session, EID, delete_decks=True)
+    session.flush()
+    session.query(db.PlayerEmailRow).filter(db.PlayerEmailRow.player_id == alice_id).delete()
+    session.query(db.PlayerRow).filter(db.PlayerRow.id == alice_id).delete()
+    session.flush()
+
+    snap.restore_snapshot(session, sid)
+    session.expire_all()
+
+    restored = _decks(session)[DECK_A]
+    assert restored["player"] == "Snap Alice"
+    assert restored["player_id"] is not None
+
+
+def test_restore_keeps_a_player_renamed_since(db_session_rollback):
+    """The deck stays attached to the same player; it does not resurrect the old name as a new player."""
+    session = db_session_rollback
+    seed(session)
+    sid = snap.take_snapshot(session, EID, "hadouken")
+    alice_id = _decks(session)[DECK_A]["player_id"]
+    session.get(db.PlayerRow, alice_id).display_name = "Snap Alice Renamed"
+    session.flush()
+
+    snap.restore_snapshot(session, sid)
+    session.expire_all()
+
+    restored = _decks(session)[DECK_A]
+    assert restored["player_id"] == alice_id
+    assert restored["player"] == "Snap Alice Renamed"
+    assert session.query(db.PlayerRow).filter(db.PlayerRow.display_name == "Snap Alice").count() == 0
+
+
+def test_restore_keeps_origin_and_hand_edited_fields(db_session_rollback):
+    session = db_session_rollback
+    seed(session)
+    session.get(db.DeckRow, DECK_A).manual_fields = ["player"]
+    db.get_event(session, EID).manual_fields = ["name"]
+    session.flush()
+    sid = snap.take_snapshot(session, EID, "delete")
+    db.delete_event(session, EID, delete_decks=True)
+    session.flush()
+
+    snap.restore_snapshot(session, sid)
+    session.expire_all()
+
+    assert db.get_event(session, EID).origin == db.ORIGIN_MTGTOP8
+    assert db.get_event(session, EID).manual_fields == ["name"]
+    deck = session.get(db.DeckRow, DECK_A)
+    assert deck.origin == db.ORIGIN_MTGTOP8
+    assert deck.manual_fields == ["player"]
+    assert session.get(db.DeckRow, DECK_B).manual_fields is None
+
+
+def test_restore_of_unknown_snapshot_raises_lookup_error(db_session_rollback):
+    import pytest
+
+    with pytest.raises(LookupError):
+        snap.restore_snapshot(db_session_rollback, 999_999_999)
