@@ -44,6 +44,7 @@ from api.schemas.upload import CreateUploadLinksBody
 from api.services import hadouken as _hadouken
 from api.services.event_export import build_event_export
 from api.services.event_import import import_event_payload
+from api.services.snapshots import REASON_DELETE, REASON_MERGE, take_snapshot
 from api.state import (
     _events_from_decks,
     _get_event_by_id_from_decks,
@@ -505,6 +506,8 @@ def delete_event_endpoint(event_id: str):
     """Delete an event and all its decks (admin-only)."""
     try:
         with _db.session_scope() as session:
+            # Same transaction as the delete: no snapshot, no delete.
+            take_snapshot(session, event_id, REASON_DELETE)
             ok = _db.delete_event(session, event_id, delete_decks=True)
         if not ok:
             raise HTTPException(status_code=404, detail="Event not found")
@@ -638,6 +641,9 @@ def merge_events(body: MergeEventsBody):
         deck_remove_by_id = {d["deck_id"]: d for d in decks_remove}
 
         with _db.session_scope() as session:
+            # Both events as they were, in the same transaction as the merge.
+            take_snapshot(session, keep_row.event_id, REASON_MERGE)
+            take_snapshot(session, remove_row.event_id, REASON_MERGE)
             for (deck_id_keep, deck_id_remove) in all_pairs:
                 d_keep = deck_keep_by_id.get(deck_id_keep)
                 d_remove = deck_remove_by_id.get(deck_id_remove)

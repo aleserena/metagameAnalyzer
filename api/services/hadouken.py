@@ -7,6 +7,7 @@ missing decks and writes the round results through the normal matchup path (both
 
 from api import db as _db
 from api.helpers import _rank_sort_value
+from api.services.snapshots import REASON_HADOUKEN, take_snapshot
 from sqlalchemy import and_, or_
 from src.mtgtop8.hadouken import HadoukenEvent, pairing_results
 from src.mtgtop8.scraper import event_display_name
@@ -249,6 +250,9 @@ def apply_import(
     bad = [d for d in chosen if d not in deck_by_id]
     if bad:
         raise ValueError(f"Decks not in this event: {bad}")
+
+    # The input is valid: record the event as it is before anything is written (same transaction).
+    take_snapshot(session, event_id, REASON_HADOUKEN)
 
     # Everything below is written in bulk: a few queries instead of hundreds of per-row round trips.
     lookup = _PlayerLookup(session)

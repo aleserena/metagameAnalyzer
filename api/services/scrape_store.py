@@ -1,6 +1,7 @@
 """Persist scraped decks without ever deleting rows (match results hang off deck ids)."""
 
 from api import db as _db
+from api.services.snapshots import REASON_RESCRAPE, take_snapshot
 from api.state import _resolve_deck_player
 from sqlalchemy.exc import DBAPIError
 from src.mtgtop8.scraper import parse_event_display
@@ -46,6 +47,9 @@ def persist_scraped_decks(session, deck_dicts: list[dict], *, refresh_events: bo
         if ev_id is None or str(ev_id) in seen_events:
             continue
         seen_events.add(str(ev_id))
+        # An event that already exists is about to be overwritten in part: keep how it was.
+        # (None for a new event; unchanged events are not stored twice.)
+        take_snapshot(session, str(ev_id), REASON_RESCRAPE)
         _ensure_event(session, d, refresh=refresh_events)
 
     saved = 0
