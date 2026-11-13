@@ -7,9 +7,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test": "vitest",
-    "test:run": "vitest run",
-    "test:coverage": "vitest run --coverage",
+    "test": "node scripts/vitest.mjs",
+    "test:run": "node scripts/vitest.mjs run",
+    "test:coverage": "node scripts/vitest.mjs run --coverage",
     "lint": "eslint src"
   },
   "dependencies": {
