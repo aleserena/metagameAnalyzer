@@ -230,12 +230,54 @@ export function phasesToApiMatchups(
     if (!(m.opponent_player || '').trim() && !isBye(m.result) && !isDrop(m.result)) continue
     top8Index += 1
     out.push({
-      opponent_player: (m.opponent_player || '').trim(),
+      opponent_player: isBye(m.result) || isDrop(m.result) ? '' : (m.opponent_player || '').trim(),
       result: m.result || 'draw',
       round: swissRounds + top8Index,
     })
   }
   return out
+}
+
+// --- Single-elimination brackets (mirrors api/brackets.py; keep the two in step) ---
+
+export const BRACKET_SIZES = [2, 4, 8, 16, 32, 64, 128] as const
+
+/** Rounds in a bracket: 16 players -> 4. */
+export function bracketRounds(size: number): number {
+  return size > 0 ? Math.floor(Math.log2(size)) : 0
+}
+
+const RANK_BANDS = [1, 2, 4, 8, 16, 32, 64, 128]
+
+/** Upper bound of the rank's band ('1' -> 1, '3-4' -> 4, '7' -> 8), as analyzer.normalize_rank; null when none. */
+export function rankBandUpper(rank: string | null | undefined): number | null {
+  const r = (rank || '').trim()
+  const band = /^(\d+)-(\d+)$/.exec(r)
+  if (band) {
+    const upper = parseInt(band[2], 10)
+    return RANK_BANDS.includes(upper) && upper > 2 && parseInt(band[1], 10) === upper / 2 + 1 ? upper : null
+  }
+  if (!/^\d+$/.test(r)) return null
+  const n = parseInt(r, 10)
+  return RANK_BANDS.find((u) => n <= u && n >= 1) ?? null
+}
+
+/** Matches a deck with this rank played in the bracket: 0 outside it, 1 when the rank is unknown. */
+export function expectedBracketMatches(rank: string | null | undefined, size: number): number {
+  const upper = rankBandUpper(rank)
+  const rounds = bracketRounds(size)
+  if (upper == null) return 1
+  if (upper > size) return 0
+  return Math.min(rounds, rounds - bracketRounds(upper) + 1)
+}
+
+/** 'Round of 16', 'Quarterfinal', 'Semifinal', 'Final' for bracket round `round` (1-based). */
+export function bracketRoundLabel(round: number, size: number): string {
+  const left = size / 2 ** (round - 1)
+  if (left === 2) return 'Final'
+  if (left === 4) return 'Semifinal'
+  if (left === 8) return 'Quarterfinal'
+  return `Round of ${left}`
 }
 
 /** Win rate 0–100 → heatmap color (red → yellow → green) with opacity for readability. */

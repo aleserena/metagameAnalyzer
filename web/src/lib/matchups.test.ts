@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
   apiMatchupsToPhases,
+  bracketRoundLabel,
+  bracketRounds,
+  BRACKET_SIZES,
+  expectedBracketMatches,
   heatmapColor,
   isTop8Rank,
   phasesToApiMatchups,
+  rankBandUpper,
   swissRoundsForPlayerCount,
   updateMatchupRowField,
   type MatchupRow,
@@ -131,5 +136,63 @@ describe('updateMatchupRowField', () => {
   it('leaves normal edits alone', () => {
     expect(updateMatchupRowField(row('Alice', 'win'), 'result', 'loss')).toMatchObject({ opponent_player: 'Alice', result: 'loss' })
     expect(updateMatchupRowField(row('Alice', 'win'), 'opponent_player', 'Bob')).toMatchObject({ opponent_player: 'Bob', result: 'win' })
+  })
+})
+
+describe('single-elimination brackets (mirrors api/brackets.py)', () => {
+  it('lists the valid bracket sizes', () => {
+    expect([...BRACKET_SIZES]).toEqual([2, 4, 8, 16, 32, 64, 128])
+  })
+
+  it('counts bracket rounds', () => {
+    expect([2, 4, 8, 16, 128].map(bracketRounds)).toEqual([1, 2, 3, 4, 7])
+  })
+
+  it('maps ranks to their band upper bound', () => {
+    expect(['1', '2', '3-4', '5-8', '9-16', '7', '65-128', '', null, 'x'].map(rankBandUpper)).toEqual([
+      1, 2, 4, 8, 16, 8, 128, null, null, null,
+    ])
+  })
+
+  it('expects matches from rank in a 16-player bracket', () => {
+    expect(['1', '2', '3-4', '5-8', '9-16', '17-32', '', '7'].map((r) => expectedBracketMatches(r, 16))).toEqual([
+      4, 4, 3, 2, 1, 0, 1, 2,
+    ])
+  })
+
+  it('expects matches from rank in an 8-player bracket', () => {
+    expect(['1', '2', '3-4', '5-8', '9-16'].map((r) => expectedBracketMatches(r, 8))).toEqual([3, 3, 2, 1, 0])
+  })
+
+  it('labels bracket rounds', () => {
+    expect([1, 2, 3, 4].map((r) => bracketRoundLabel(r, 16))).toEqual(['Round of 16', 'Quarterfinal', 'Semifinal', 'Final'])
+    expect(bracketRoundLabel(1, 32)).toBe('Round of 32')
+    expect(bracketRoundLabel(1, 2)).toBe('Final')
+  })
+
+  it('apiMatchupsToPhases puts null-round rows in bracket order when swissRounds is 0', () => {
+    const { top8 } = apiMatchupsToPhases(
+      [
+        { opponent_player: 'A', result: 'win', round: null },
+        { opponent_player: 'B', result: 'loss', round: null },
+      ],
+      0
+    )
+    expect(top8.map((r) => r.opponent_player)).toEqual(['A', 'B'])
+    expect(phasesToApiMatchups([], top8, 0).map((m) => m.round)).toEqual([1, 2])
+  })
+
+  it('apiMatchupsToPhases keeps stored bracket rounds in order and adds rows reported against me', () => {
+    const { top8 } = apiMatchupsToPhases(
+      [{ opponent_player: 'B', result: 'win', round: 2 }],
+      0,
+      [{ opponent_player: 'A', result: 'win', round: 1 }]
+    )
+    expect(top8.map((r) => r.opponent_player).sort()).toEqual(['A', 'B'])
+  })
+
+  it('phasesToApiMatchups blanks bye opponent in the cut section', () => {
+    const top8: MatchupRow[] = [{ opponent_player: 'Bye', result: 'bye', intentional_draw: false, phase: 'top8' }]
+    expect(phasesToApiMatchups([], top8, 0)).toEqual([{ opponent_player: '', result: 'bye', round: 1 }])
   })
 })
