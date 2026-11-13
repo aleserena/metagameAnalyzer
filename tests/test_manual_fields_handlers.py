@@ -35,6 +35,10 @@ def in_session(db_session_rollback, monkeypatch):
     monkeypatch.setattr(events_router, "_load_decks_from_db", lambda: None)
     monkeypatch.setattr(events_router, "_invalidate_events_cache", lambda: None)
     _seed(session)
+    # Like a real EDH deck from mtgtop8: it has a commander, so the "first card is the commander"
+    # default of the edit handlers does not kick in.
+    session.get(DeckRow, D1).commanders = ["Sol Ring"]
+    session.flush()
     return session
 
 
@@ -53,7 +57,34 @@ def _forced_rescrape(session):
     return session.get(DeckRow, D1)
 
 
-def test_admin_deck_edit_marks_only_the_fields_it_sent(in_session):
+def test_saving_the_deck_form_protects_only_what_changed(in_session):
+    """The deck page sends all seven fields on every save."""
+    from api.routers.decks import update_deck_endpoint
+    from api.schemas.decks import UpdateDeckBody
+
+    stored = db.deck_row_to_dict(in_session.get(DeckRow, D1))
+    update_deck_endpoint(
+        D1,
+        UpdateDeckBody(
+            name=stored["name"],
+            player=stored["player"],
+            rank="2",  # the only real change
+            archetype=stored["archetype"],
+            commanders=stored["commanders"],
+            mainboard=stored["mainboard"],
+            sideboard=stored["sideboard"],
+        ),
+        role="admin",
+        actor="admin",
+    )
+
+    assert _manual(in_session) == ["rank"]
+    row = _forced_rescrape(in_session)
+    assert row.rank == "2"
+    assert row.name == "Scraped name" and row.mainboard == [{"qty": 1, "card": "Scraped Card"}]
+
+
+def test_admin_deck_edit_marks_only_the_fields_it_changed(in_session):
     from api.routers.decks import update_deck_endpoint
     from api.schemas.decks import UpdateDeckBody
 
@@ -89,7 +120,8 @@ def test_player_updating_their_deck_through_a_link_protects_it(in_session):
         SubmitDeckBody(name="My real list", player="Store A", rank="1", mainboard=[{"qty": 1, "card": "Island"}]),
     )
 
-    assert _manual(session) == ["commanders", "mainboard", "name", "player", "rank", "sideboard"]
+    # player, rank and sideboard were resent unchanged; the commander follows the new first card (EDH)
+    assert _manual(session) == ["commanders", "mainboard", "name"]
     row = _forced_rescrape(session)
     assert row.name == "My real list"
     assert row.mainboard == [{"qty": 1, "card": "Island"}]
@@ -106,10 +138,10 @@ def test_feedback_link_protects_the_archetype_and_the_replaced_deck_list(in_sess
     submit_decklist_with_upload_link(
         "tok-manual-feedback", DeckListBody(mainboard=[{"qty": 1, "card": "Forest"}], sideboard=[], commanders=[])
     )
-    assert _manual(session) == ["commanders", "mainboard", "sideboard"]
+    assert _manual(session) == ["commanders", "mainboard"]  # sideboard was resent unchanged
 
     submit_feedback_with_upload_link("tok-manual-feedback", EventFeedbackBody(archetype="Reported Arch", matchups=[]))
-    assert _manual(session) == ["archetype", "commanders", "mainboard", "sideboard"]
+    assert _manual(session) == ["archetype", "commanders", "mainboard"]
 
     row = _forced_rescrape(session)
     assert row.archetype == "Reported Arch"
@@ -138,3 +170,36 @@ def test_event_edit_marks_the_fields_it_sent(in_session):
     _forced_rescrape(session)
     event = db.get_event(session, EID)
     assert (event.name, event.store) == ("Corrected event name", "Corrected store")
+
+
+def test_saving_the_event_form_unchanged_protects_nothing(in_session):
+    """The event page sends every detail on save, then re-saves every deck."""
+    from api.routers.events import update_event_endpoint
+
+    session = in_session
+    event = db.get_event(session, EID)
+    update_event_endpoint(
+        EID,
+        actor="admin",
+        event_name=event.name,
+        date=event.date,
+        format_id=event.format_id,
+        player_count=event.player_count,
+        store=event.store,
+        location=event.location,
+    )
+    session.expire_all()
+    assert db.get_event(session, EID).manual_fields is None
+
+
+def test_a_commander_filled_in_by_the_edit_is_protected_too(in_session):
+    """EDH decks without a commander get their first card as commander on any hand edit."""
+    from api.routers.decks import update_deck_endpoint
+    from api.schemas.decks import UpdateDeckBody
+
+    session = in_session
+    session.get(DeckRow, D1).commanders = []
+    session.flush()
+    update_deck_endpoint(D1, UpdateDeckBody(rank="2"), role="admin", actor="admin")
+    assert _manual(session) == ["commanders", "rank"]
+    assert _forced_rescrape(session).commanders == ["Sol Ring"]

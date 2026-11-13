@@ -227,7 +227,7 @@ def test_snapshot_listing_route_never_returns_the_payload(in_session):
 
     seed(in_session)
     sid = snap.take_snapshot(in_session, EID, "delete")
-    out = get_settings_snapshots(event_id=EID, limit=50)
+    out = get_settings_snapshots(event_id=EID, search=None, limit=50)
     assert [s["id"] for s in out["snapshots"]] == [sid]
     assert "payload" not in out["snapshots"][0]
     assert "snap.alice@example.com" not in str(out)
@@ -273,3 +273,14 @@ def test_change_log_route_lists_newest_first(in_session):
     cl.record(in_session, actor=cl.ADMIN, action="deck.update", summary="two", event_id="cl_route_ev")
     out = get_settings_change_log(event_id="cl_route_ev", limit=50)
     assert [c["summary"] for c in out["changes"]] == ["two", "one"]
+
+
+def test_snapshot_listing_route_searches_by_event_name(in_session):
+    from api.routers.settings import get_settings_snapshots
+    from api.services import snapshots as snap
+    from tests.test_snapshots import EID, seed
+
+    seed(in_session)
+    sid = snap.take_snapshot(in_session, EID, "delete")
+    assert [s["id"] for s in get_settings_snapshots(event_id=None, search="snap ev", limit=50)["snapshots"]] == [sid]
+    assert get_settings_snapshots(event_id=None, search="no such event name", limit=50)["snapshots"] == []

@@ -9,6 +9,12 @@ Two safety nets, for two kinds of accident:
 
 Event snapshots are taken automatically before an event is deleted or merged, before a Hadouken import, before "clear decks", and before a re-scrape of an event that already exists. They live *inside* the database, so they do not protect against losing the database itself. That is what point-in-time recovery is for.
 
+### Restoring after a merge
+
+A merge saves both events first. To undo it, restore **both** "Before merge" snapshots: the removed event and the kept one. Restoring only the removed event takes its decks back out of the kept event (which is saved first, as "Before a restore"), but decks that were merged pairwise keep the matchups they absorbed until the kept event is restored too.
+
+The list shows the newest 200 snapshots; use the search box (event name or ID) to reach older ones.
+
 ## Point-in-time recovery (PITR)
 
 Railway continuously archives the Postgres write log to a Railway storage bucket, with a full backup every week and a differential every day. The database can be restored to any moment in roughly the last **four weeks**. The window starts at the first backup after PITR was enabled; it is not retroactive.

@@ -164,10 +164,11 @@ def test_hand_corrected_card_list_and_archetype_survive(db_session_rollback):
 
 
 def test_field_set_back_to_the_scraped_value_stays_protected(db_session_rollback):
-    """Confirming the scraped value by hand is still a hand edit."""
+    """Once a person has set a field, putting the scraped value back by hand keeps it protected."""
     session = db_session_rollback
     _seed(session)
-    _hand_edit(session, D1, rank="1")  # same value the scrape gave
+    _hand_edit(session, D1, rank="2")
+    _hand_edit(session, D1, rank="1")  # back to the value the scrape gave
     scraped = _deck(D1, "Store A")
     scraped["rank"] = "4"
     _rescrape(session, scraped)
@@ -208,9 +209,55 @@ def test_only_known_field_names_are_marked(db_session_rollback):
     session = db_session_rollback
     _seed(session)
     current = __import__("api.db", fromlist=["x"]).deck_row_to_dict(session.get(DeckRow, D1))
-    upsert_deck(session, current, manual_fields=("rank", "event_id", "nonsense"))
+    current["rank"] = "5"
+    current["event_name"] = "Changed too"
+    upsert_deck(session, current, manual_fields=("rank", "event_id", "event_name", "nonsense"))
     session.flush()
     assert session.get(DeckRow, D1).manual_fields == ["rank"]
+
+
+def test_resending_unchanged_values_protects_nothing(db_session_rollback):
+    """Edit forms resend every field on save; only what actually changed is a hand edit."""
+    from api import db
+
+    session = db_session_rollback
+    _seed(session)
+    current = db.deck_row_to_dict(session.get(DeckRow, D1))
+    upsert_deck(session, current, manual_fields=db.DECK_MANUAL_FIELDS)
+    session.flush()
+    assert session.get(DeckRow, D1).manual_fields is None
+
+    current["rank"] = "3"
+    upsert_deck(session, current, manual_fields=db.DECK_MANUAL_FIELDS)
+    session.flush()
+    assert session.get(DeckRow, D1).manual_fields == ["rank"]
+
+    scraped = _deck(D1, "Store A", name="Fresh from mtgtop8")
+    scraped["mainboard"] = [{"qty": 1, "card": "New Card"}]
+    _rescrape(session, scraped)
+    row = session.get(DeckRow, D1)
+    assert row.rank == "3"
+    assert row.name == "Fresh from mtgtop8" and row.mainboard == [{"qty": 1, "card": "New Card"}]
+
+
+def test_resending_unchanged_event_details_protects_nothing(db_session_rollback):
+    from api import db
+
+    session = db_session_rollback
+    _seed(session)
+    event = db.get_event(session, EID)
+    db.update_event(
+        session,
+        EID,
+        event_name=event.name,
+        date=event.date,
+        format_id=event.format_id,
+        store="Only this changed",
+        location=event.location,
+        manual_fields=db.EVENT_MANUAL_FIELDS,
+    )
+    session.flush()
+    assert db.get_event(session, EID).manual_fields == ["store"]
 
 
 def test_event_details_edited_by_hand_survive_a_forced_rescrape(db_session_rollback):

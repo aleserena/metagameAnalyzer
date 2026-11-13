@@ -474,8 +474,10 @@ def upsert_deck(
     """Insert or update a deck by deck_id. For scrape duplicate protection (re-scrape same event = update).
     If d does not contain player_id, resolves d['player'] to player_id (get_or_create) and sets d['player_id'], d['player'].
 
-    ``manual_fields``: names (from DECK_MANUAL_FIELDS) a person just edited; they are remembered on the row,
-    whether or not the value changed. Pass it from hand-edit paths (admin or link edits).
+    ``manual_fields``: names (from DECK_MANUAL_FIELDS) this hand edit may have set. Those whose value
+    differs from what is stored are remembered on the row; resending an unchanged value marks nothing
+    (edit forms send every field on save). Marks are never removed. Hand-edit paths (admin or link
+    edits) pass ``DECK_MANUAL_FIELDS``.
     ``respect_manual``: leave remembered fields untouched. Pass it from the scrape path, and nowhere else.
     """
     if "player_id" not in d:
@@ -502,6 +504,17 @@ def upsert_deck(
 
     if row:
         kept = set(row.manual_fields or []) if respect_manual else set()
+        # What this write actually changes, for the hand-edit marks (compared before anything is assigned).
+        differs = {
+            "name": d.get("name", row.name) != row.name,
+            "player": "player_id" in d and d["player_id"] != row.player_id,
+            "rank": d.get("rank", row.rank) != row.rank,
+            "commanders": norm_cmd != _normalize_commanders_list(row.commanders),
+            "archetype": (norm_arch or None) != (row.archetype or None),
+            "mainboard": mainboard != (row.mainboard or []),
+            "sideboard": sideboard != (row.sideboard or []),
+        }
+        hand_edited = [f for f in (manual_fields or ()) if differs.get(f)]
         row.event_id = _event_id_str(d.get("event_id", row.event_id))
         row.format_id = d.get("format_id", row.format_id)
         if "name" not in kept:
@@ -523,7 +536,7 @@ def upsert_deck(
             row.mainboard = mainboard
         if "sideboard" not in kept:
             row.sideboard = sideboard
-        _merge_manual_fields(row, manual_fields, DECK_MANUAL_FIELDS)
+        _merge_manual_fields(row, hand_edited, DECK_MANUAL_FIELDS)
         _sync_deck_row_player_denorm(session, row)
         return row
     row = DeckRow(
@@ -543,7 +556,6 @@ def upsert_deck(
         mainboard=mainboard,
         sideboard=sideboard,
     )
-    _merge_manual_fields(row, manual_fields, DECK_MANUAL_FIELDS)
     session.add(row)
     _sync_deck_row_player_denorm(session, row)
     return row
@@ -809,13 +821,19 @@ def update_event(
     """Update the given event fields (None = leave alone) and copy them onto the event's decks.
 
     ``manual_fields`` / ``respect_manual`` work as in :func:`upsert_deck`, over EVENT_MANUAL_FIELDS
-    (the event's name is the field ``"name"``).
+    (the event's name is the field ``"name"``): only details whose value changes are marked.
     """
     eid = _event_id_str(event_id)
     row = session.query(EventRow).filter(EventRow.event_id == eid).first()
     if not row:
         return False
     kept = set(row.manual_fields or []) if respect_manual else set()
+    sent = {"name": (event_name, row.name), "date": (date, row.date), "format_id": (format_id, row.format_id),
+            "store": (store, row.store), "location": (location, row.location)}
+    # Only details whose value really changes count as hand edits (the form resends all of them).
+    hand_edited = [
+        f for f in (manual_fields or ()) if f in sent and sent[f][0] is not None and sent[f][0] != (sent[f][1] or "")
+    ]
     if event_name is not None and "name" not in kept:
         row.name = event_name
     if date is not None and "date" not in kept:
@@ -828,7 +846,7 @@ def update_event(
         row.store = store
     if location is not None and "location" not in kept:
         row.location = location
-    _merge_manual_fields(row, manual_fields, EVENT_MANUAL_FIELDS)
+    _merge_manual_fields(row, hand_edited, EVENT_MANUAL_FIELDS)
     sync_decks_with_event(session, eid)
     return True
 

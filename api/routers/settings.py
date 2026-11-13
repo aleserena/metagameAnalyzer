@@ -179,11 +179,17 @@ def delete_settings_upload_links(
 @router.get("/api/v1/settings/snapshots", dependencies=[Depends(require_admin), Depends(require_database)])
 def get_settings_snapshots(
     event_id: str | None = Query(None, description="Only snapshots of this event"),
+    search: str | None = Query(None, max_length=200, description="Event id, or part of the event name"),
     limit: int = Query(200, ge=1, le=500),
 ):
-    """List event snapshots, newest first (admin-only). Never returns snapshot contents: they hold player emails."""
+    """List event snapshots, newest first (admin-only). Never returns snapshot contents: they hold player emails.
+
+    The list is capped at ``limit``; ``search`` reaches older snapshots of a given event.
+    """
     with _db.session_scope() as session:
-        return {"snapshots": snapshot_service.list_snapshots(session, event_id=event_id, limit=limit)}
+        return {
+            "snapshots": snapshot_service.list_snapshots(session, event_id=event_id, search=search, limit=limit)
+        }
 
 
 @router.post(

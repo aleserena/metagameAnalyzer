@@ -302,8 +302,8 @@ def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
                 session,
                 deck_list[0],
                 origin=current.get("origin", _db.ORIGIN_MANUAL),
-                # The player rewrote the whole deck: a re-scrape must not undo it.
-                manual_fields=("name", "player", "rank", "commanders", "mainboard", "sideboard"),
+                # What the player changed is theirs: a re-scrape must not undo it.
+                manual_fields=_db.DECK_MANUAL_FIELDS,
             )
             _db.mark_upload_link_used(session, token)
             created = False
@@ -357,13 +357,11 @@ def submit_feedback_with_upload_link(token: str, body: EventFeedbackBody):
             deck_dict["name"] = (body.deck_name or "").strip()
         if body.rank is not None:
             deck_dict["rank"] = (body.rank or "").strip()
-        reported = ["archetype"]
-        if body.deck_name is not None:
-            reported.append("name")
-        if body.rank is not None:
-            reported.append("rank")
         _db.upsert_deck(
-            session, deck_dict, origin=deck_dict.get("origin", _db.ORIGIN_MANUAL), manual_fields=reported
+            session,
+            deck_dict,
+            origin=deck_dict.get("origin", _db.ORIGIN_MANUAL),
+            manual_fields=_db.DECK_MANUAL_FIELDS,
         )
         feedback_event_id = _db._event_id_str(deck_dict.get("event_id", ""))
         matchup_rows = []
@@ -444,7 +442,7 @@ def submit_decklist_with_upload_link(token: str, body: DeckListBody):
                 session,
                 current,
                 origin=current.get("origin", _db.ORIGIN_MTGTOP8),
-                manual_fields=("commanders", "mainboard", "sideboard"),
+                manual_fields=_db.DECK_MANUAL_FIELDS,
             )
     except HTTPException:
         raise

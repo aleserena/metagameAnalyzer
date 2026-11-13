@@ -196,7 +196,13 @@ def test_restore_brings_back_a_deleted_event(db_session_rollback):
 
     out = snap.restore_snapshot(session, sid)
 
-    assert out == {"event_id": EID, "deck_count": 2, "matchup_count": 2, "safety_snapshot_id": None}
+    assert out == {
+        "event_id": EID,
+        "deck_count": 2,
+        "matchup_count": 2,
+        "safety_snapshot_id": None,
+        "also_saved_event_ids": [],
+    }
     assert set(_decks(session)) == {DECK_A, DECK_B}
     assert _matchups(session, [DECK_A, DECK_B]) == before
     assert db.get_player_email(session, "Snap Alice") == "snap.alice@example.com"
@@ -331,3 +337,117 @@ def test_restore_of_unknown_snapshot_raises_lookup_error(db_session_rollback):
 
     with pytest.raises(LookupError):
         snap.restore_snapshot(db_session_rollback, 999_999_999)
+
+
+# ---- final-review fixes ---------------------------------------------------------------------------
+
+
+def test_restoring_a_merged_away_event_first_saves_the_event_that_holds_its_decks(db_session_rollback):
+    """Work done on the moved decks after the merge must not vanish without a copy."""
+    session = db_session_rollback
+    seed(session)
+    db.create_event(session, "Kept Event", "01/01/25", "EDH", event_id="snap_ev_keep", player_count=2)
+    session.flush()
+    sid = snap.take_snapshot(session, EID, "merge")
+    db.reassign_decks_to_event(session, EID, "snap_ev_keep", "Kept Event", "01/01/25")
+    db.delete_event(session, EID)
+    session.get(db.DeckRow, DECK_A).rank = "edited after the merge"
+    session.flush()
+
+    out = snap.restore_snapshot(session, sid)
+
+    assert out["also_saved_event_ids"] == ["snap_ev_keep"]
+    kept_copy = _rows(session, "snap_ev_keep")[-1]
+    assert kept_copy.reason == "before_restore"
+    assert next(d for d in kept_copy.payload["decks"] if d["deck_id"] == DECK_A)["rank"] == "edited after the merge"
+
+
+def test_restore_reports_no_other_events_when_none_are_touched(db_session_rollback):
+    session = db_session_rollback
+    seed(session)
+    sid = snap.take_snapshot(session, EID, "hadouken")
+    assert snap.restore_snapshot(session, sid)["also_saved_event_ids"] == []
+
+
+def test_restoring_the_oldest_kept_snapshot_does_not_delete_it(db_session_rollback):
+    session = db_session_rollback
+    seed(session)
+    ids = []
+    for i in range(snap.SNAPSHOT_KEEP_PER_EVENT):
+        session.get(db.DeckRow, DECK_A).rank = str(i + 10)
+        session.flush()
+        ids.append(snap.take_snapshot(session, EID, "rescrape"))
+    session.get(db.DeckRow, DECK_A).rank = "current"
+    session.flush()
+
+    snap.restore_snapshot(session, ids[0])  # the before_restore copy makes 11
+
+    assert session.get(EventSnapshotRow, ids[0]) is not None
+
+
+def test_restoring_a_snapshot_past_the_age_limit_does_not_delete_it(db_session_rollback):
+    session = db_session_rollback
+    seed(session)
+    old = snap.take_snapshot(session, EID, "delete")
+    session.get(EventSnapshotRow, old).created_at = db.utcnow_naive() - timedelta(days=snap.SNAPSHOT_MAX_AGE_DAYS + 5)
+    session.get(db.DeckRow, DECK_A).rank = "current"
+    session.flush()
+
+    snap.restore_snapshot(session, old)
+
+    assert session.get(EventSnapshotRow, old) is not None
+
+
+def test_snapshot_hash_does_not_depend_on_row_order(db_session_rollback, monkeypatch):
+    session = db_session_rollback
+    seed(session)
+    first = snap.build_payload(session, EID)
+    real = db.get_decks_by_event
+    monkeypatch.setattr(db, "get_decks_by_event", lambda s, e: list(reversed(real(s, e))))
+    second = snap.build_payload(session, EID)
+    assert [d["deck_id"] for d in second["decks"]] == sorted(d["deck_id"] for d in second["decks"])
+    assert snap._payload_hash(first) == snap._payload_hash(second)
+
+
+def test_restore_survives_an_outside_opponent_whose_player_was_removed(db_session_rollback):
+    """A matchup against a deck in another event, whose player was merged away since."""
+    session = db_session_rollback
+    seed(session)
+    seed(session, event_id="snap_ev_other", deck_a=987031, deck_b=987032, players=("Snap Out One", "Snap Out Two"))
+    sid = snap.take_snapshot(session, EID, "hadouken")
+    row = session.get(EventSnapshotRow, sid)
+    payload = dict(row.payload)
+    payload["matchups"] = list(payload["matchups"]) + [
+        {
+            "deck_id": DECK_A,
+            "opponent_player_id": 999_999_991,  # no such player any more
+            "opponent_player": "Snap Out One",
+            "opponent_deck_id": 987031,  # still exists, in another event
+            "opponent_archetype": None,
+            "result": "win",
+            "result_note": None,
+            "round": 2,
+        }
+    ]
+    row.payload = payload
+    session.flush()
+
+    out = snap.restore_snapshot(session, sid)
+
+    assert out["matchup_count"] == 3
+    restored = [m for m in db.list_matchups_by_decks(session, [DECK_A]) if m["round"] == 2]
+    assert restored[0]["opponent_player_id"] == session.get(db.DeckRow, 987031).player_id
+
+
+def test_snapshots_can_be_found_by_event_name_or_id(db_session_rollback):
+    session = db_session_rollback
+    seed(session)
+    seed(session, event_id="snap_ev_2", deck_a=987003, deck_b=987004, players=("Snap Carol", "Snap Dave"))
+    db.get_event(session, "snap_ev_2").name = "Liga Hadouken Fecha 9"
+    session.flush()
+    a = snap.take_snapshot(session, EID, "delete")
+    b = snap.take_snapshot(session, "snap_ev_2", "delete")
+    assert [s["id"] for s in snap.list_snapshots(session, search="hadouken")] == [b]
+    assert [s["id"] for s in snap.list_snapshots(session, search="snap_ev_2")] == [b]
+    assert [s["id"] for s in snap.list_snapshots(session, search=EID)] == [a]
+    assert {s["id"] for s in snap.list_snapshots(session, search="  ")} >= {a, b}

@@ -1223,14 +1223,22 @@ export type EventSnapshot = {
   matchup_count: number
 }
 
-export async function getSnapshots(eventId?: string): Promise<{ snapshots: EventSnapshot[] }> {
-  const params = eventId ? `?event_id=${encodeURIComponent(eventId)}` : ''
+/** Newest 200 snapshots; `search` (event id, or part of the event name) reaches older ones. */
+export async function getSnapshots(search?: string): Promise<{ snapshots: EventSnapshot[] }> {
+  const params = search ? `?search=${encodeURIComponent(search)}` : ''
   return fetchApi(`/settings/snapshots${params}`)
 }
 
 export async function restoreSnapshot(
   snapshotId: number
-): Promise<{ event_id: string; deck_count: number; matchup_count: number; safety_snapshot_id: number | null }> {
+): Promise<{
+  event_id: string
+  deck_count: number
+  matchup_count: number
+  safety_snapshot_id: number | null
+  /** Other events that held this event's decks (after a merge); each was saved before the restore. */
+  also_saved_event_ids: string[]
+}> {
   return fetchApi(`/settings/snapshots/${snapshotId}/restore`, { method: 'POST' })
 }
 

@@ -8,6 +8,7 @@ Payloads contain player emails: never return them to anyone but an admin.
 
 import hashlib
 import json
+from collections.abc import Iterable
 from datetime import timedelta
 
 from api import db as _db
@@ -38,6 +39,13 @@ def build_payload(session, event_id: str) -> dict | None:
     if export is None:
         return None
     payload = export.model_dump(mode="json")
+    # A fixed order, so an unchanged event always hashes the same whatever order the rows come back in.
+    payload["decks"] = sorted(payload.get("decks") or [], key=lambda d: d.get("deck_id") or 0)
+    payload["matchups"] = sorted(
+        payload.get("matchups") or [],
+        key=lambda m: (m.get("deck_id") or 0, m.get("round") if m.get("round") is not None else -1, m.get("id") or 0),
+    )
+    payload["players"] = sorted(payload.get("players") or [], key=lambda pl: pl.get("id") or 0)
     eid = _db._event_id_str(event_id)
     deck_rows = session.query(DeckRow.deck_id, DeckRow.origin, DeckRow.manual_fields).filter(DeckRow.event_id == eid)
     deck_origins: dict[str, str] = {}
@@ -55,11 +63,12 @@ def build_payload(session, event_id: str) -> dict | None:
     return payload
 
 
-def take_snapshot(session, event_id: str, reason: str) -> int | None:
+def take_snapshot(session, event_id: str, reason: str, *, protect: Iterable[int] = ()) -> int | None:
     """Store the event as it is now. Returns the snapshot id, or None when the event does not exist.
 
     If the event is unchanged since its newest snapshot, that snapshot's id is returned and nothing
     is written (repeated re-scrapes must not fill the table or push out older snapshots).
+    ``protect``: snapshot ids the retention rule must not delete while making room for this one.
     """
     session.flush()  # the export reads through queries: pending changes must be visible
     payload = build_payload(session, event_id)
@@ -85,13 +94,14 @@ def take_snapshot(session, event_id: str, reason: str) -> int | None:
     )
     session.add(row)
     session.flush()
-    prune_snapshots(session, eid)
+    prune_snapshots(session, eid, protect=protect)
     return row.id
 
 
-def prune_snapshots(session, event_id: str) -> int:
+def prune_snapshots(session, event_id: str, *, protect: Iterable[int] = ()) -> int:
     """Keep the newest SNAPSHOT_KEEP_PER_EVENT snapshots of this event, none older than
-    SNAPSHOT_MAX_AGE_DAYS. Returns how many were deleted."""
+    SNAPSHOT_MAX_AGE_DAYS; ids in ``protect`` are never deleted. Returns how many were deleted."""
+    protected = set(protect)
     eid = _db._event_id_str(event_id)
     rows = (
         session.query(EventSnapshotRow.id, EventSnapshotRow.created_at)
@@ -100,14 +110,23 @@ def prune_snapshots(session, event_id: str) -> int:
         .all()
     )
     cutoff = _db.utcnow_naive() - timedelta(days=SNAPSHOT_MAX_AGE_DAYS)
-    doomed = [r.id for i, r in enumerate(rows) if i >= SNAPSHOT_KEEP_PER_EVENT or r.created_at < cutoff]
+    doomed = [
+        r.id
+        for i, r in enumerate(rows)
+        if (i >= SNAPSHOT_KEEP_PER_EVENT or r.created_at < cutoff) and r.id not in protected
+    ]
     if doomed:
         session.query(EventSnapshotRow).filter(EventSnapshotRow.id.in_(doomed)).delete(synchronize_session=False)
     return len(doomed)
 
 
-def list_snapshots(session, *, event_id: str | None = None, limit: int = 200) -> list[dict]:
-    """Newest first. Never includes the payload (it holds player emails)."""
+def list_snapshots(
+    session, *, event_id: str | None = None, search: str | None = None, limit: int = 200
+) -> list[dict]:
+    """Newest first. Never includes the payload (it holds player emails).
+
+    ``search`` narrows to snapshots whose event id equals it or whose event name contains it.
+    """
     query = session.query(
         EventSnapshotRow.id,
         EventSnapshotRow.event_id,
@@ -119,6 +138,13 @@ def list_snapshots(session, *, event_id: str | None = None, limit: int = 200) ->
     )
     if event_id:
         query = query.filter(EventSnapshotRow.event_id == _db._event_id_str(event_id))
+    term = (search or "").strip()
+    if term:
+        # Literal match: % and _ in the search text must not act as wildcards.
+        escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        query = query.filter(
+            (EventSnapshotRow.event_id == term) | EventSnapshotRow.event_name.ilike(f"%{escaped}%", escape="\\")
+        )
     rows = query.order_by(EventSnapshotRow.id.desc()).limit(limit).all()
     return [
         {
@@ -176,7 +202,20 @@ def restore_snapshot(session, snapshot_id: int) -> dict:
     decks = [d for d in (payload.get("decks") or []) if d.get("deck_id") is not None]
     deck_ids = [int(d["deck_id"]) for d in decks]
 
-    safety_id = take_snapshot(session, event_id, REASON_BEFORE_RESTORE)
+    # Save what is about to be replaced: this event, and any other event that currently holds one of
+    # the snapshot's decks (after a merge they live in the kept event, with later edits on them).
+    # The snapshot being restored must survive the retention rule while we do so.
+    safety_id = take_snapshot(session, event_id, REASON_BEFORE_RESTORE, protect={snapshot_id})
+    other_event_ids: list[str] = []
+    if deck_ids:
+        other_event_ids = sorted(
+            eid
+            for (eid,) in session.query(DeckRow.event_id)
+            .filter(DeckRow.deck_id.in_(deck_ids), DeckRow.event_id != event_id)
+            .distinct()
+        )
+        for other_event_id in other_event_ids:
+            take_snapshot(session, other_event_id, REASON_BEFORE_RESTORE)
 
     # Clear the way: the event's current decks, and the snapshot's decks wherever they are now.
     # Matchups go with their deck (ON DELETE CASCADE).
@@ -231,8 +270,13 @@ def restore_snapshot(session, snapshot_id: int) -> dict:
         if opp_deck_id is not None:
             if opp_deck_id in restored_ids:
                 opp_pid, opp_name = deck_player[opp_deck_id]
-            elif session.get(DeckRow, opp_deck_id) is None:
-                continue  # the opposing deck is gone for good
+            else:
+                outside = session.get(DeckRow, opp_deck_id)
+                if outside is None:
+                    continue  # the opposing deck is gone for good
+                # A deck in another event: trust its current player, not the id stored back then
+                # (that player may have been merged away since).
+                opp_pid, opp_name = outside.player_id, outside.player or opp_name
         elif opp_pid is not None and session.get(PlayerRow, opp_pid) is None:
             opp_pid = None
             if opp_name and opp_name not in ("Bye", "(drop)"):
@@ -274,4 +318,5 @@ def restore_snapshot(session, snapshot_id: int) -> dict:
         "deck_count": len(decks),
         "matchup_count": matchup_count,
         "safety_snapshot_id": safety_id,
+        "also_saved_event_ids": other_event_ids,
     }

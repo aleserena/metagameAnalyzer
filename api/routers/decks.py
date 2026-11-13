@@ -590,10 +590,12 @@ def update_deck_endpoint(
                 _db.sync_matchup_opponent_identity_for_deck(
                     session, deck_id, new_pid, current.get("player", "")
                 )
-            # Remember which fields a person set, so a re-scrape leaves them alone.
-            hand_edited = [f for f in _db.DECK_MANUAL_FIELDS if getattr(body, f, None) is not None]
+            # A hand edit: fields whose value changes are remembered, so a re-scrape leaves them alone.
             _db.upsert_deck(
-                session, current, origin=current.get("origin", _db.ORIGIN_MTGTOP8), manual_fields=hand_edited
+                session,
+                current,
+                origin=current.get("origin", _db.ORIGIN_MTGTOP8),
+                manual_fields=_db.DECK_MANUAL_FIELDS,
             )
         _load_decks_from_db()
         changed = sorted(body.model_fields_set)

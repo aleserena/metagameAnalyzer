@@ -30,15 +30,17 @@ export default function SnapshotsPanel() {
   const [pending, setPending] = useState<EventSnapshot | null>(null)
   const [restoring, setRestoring] = useState(false)
 
-  const load = useCallback(() => {
-    return getSnapshots()
+  const [search, setSearch] = useState('')
+
+  const load = useCallback((term: string) => {
+    return getSnapshots(term.trim() || undefined)
       .then((res) => setSnapshots(res.snapshots))
       .catch((e) => setError(e instanceof Error ? e.message : 'Could not load snapshots.'))
       .finally(() => setLoading(false))
   }, [])
 
   useEffect(() => {
-    load()
+    load('')
   }, [load])
 
   const confirmRestore = async () => {
@@ -47,9 +49,14 @@ export default function SnapshotsPanel() {
     setError(null)
     setNotice(null)
     try {
-      await restoreSnapshot(pending.id)
-      setNotice('Event restored.')
-      await load()
+      const result = await restoreSnapshot(pending.id)
+      const others = result.also_saved_event_ids ?? []
+      setNotice(
+        others.length > 0
+          ? `Event restored. Its decks were taken back from event ${others.join(', ')}, which was saved first.`
+          : 'Event restored.'
+      )
+      await load(search)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not restore the event.')
     } finally {
@@ -99,11 +106,36 @@ export default function SnapshotsPanel() {
         </div>
       )}
 
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          setLoading(true)
+          load(search)
+        }}
+        style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem', alignItems: 'end' }}
+      >
+        <div className="form-group" style={{ margin: 0 }}>
+          <label htmlFor="snapshot-search">Event name or ID</label>
+          <input
+            id="snapshot-search"
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Newest 200 snapshots"
+          />
+        </div>
+        <button type="submit" className="btn" style={{ padding: '0.35rem 0.75rem' }} disabled={loading}>
+          Search
+        </button>
+      </form>
+
       {loading ? (
         <p style={{ color: 'var(--text-muted)' }}>Loading...</p>
       ) : snapshots.length === 0 ? (
         <p style={{ color: 'var(--text-muted)' }}>
-          No snapshots yet. One is saved the next time an event is deleted, merged, imported over or re-scraped.
+          {search.trim()
+            ? 'No snapshots match that event.'
+            : 'No snapshots yet. One is saved the next time an event is deleted, merged, imported over or re-scraped.'}
         </p>
       ) : (
         <div className="table-wrap">

@@ -38,6 +38,7 @@ describe('SnapshotsPanel', () => {
       deck_count: 26,
       matchup_count: 130,
       safety_snapshot_id: 13,
+      also_saved_event_ids: [],
     })
   })
 
@@ -96,5 +97,33 @@ describe('SnapshotsPanel', () => {
     render(<SnapshotsPanel />)
 
     expect(await screen.findByText(/No snapshots yet/)).toBeInTheDocument()
+  })
+
+  it('searches by event name or id, so older snapshots stay reachable', async () => {
+    render(<SnapshotsPanel />)
+    await screen.findByText('Liga Hadouken')
+    expect(api.getSnapshots).toHaveBeenLastCalledWith(undefined)
+
+    fireEvent.change(screen.getByLabelText('Event name or ID'), { target: { value: ' hadouken ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+
+    await waitFor(() => expect(api.getSnapshots).toHaveBeenLastCalledWith('hadouken'))
+  })
+
+  it('says which other events were saved before a restore touched them', async () => {
+    vi.mocked(api.restoreSnapshot).mockResolvedValue({
+      event_id: '92583',
+      deck_count: 26,
+      matchup_count: 130,
+      safety_snapshot_id: null,
+      also_saved_event_ids: ['m7'],
+    })
+    render(<SnapshotsPanel />)
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Restore' }))[0])
+    fireEvent.click(screen.getByRole('button', { name: 'Restore event' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Event restored. Its decks were taken back from event m7, which was saved first.'
+    )
   })
 })

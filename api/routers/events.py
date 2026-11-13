@@ -493,8 +493,7 @@ def update_event_endpoint(
     """Update event metadata (admin-only)."""
     try:
         with _db.session_scope() as session:
-            # Remember which details a person set, so a forced re-scrape leaves them alone.
-            sent = {"name": event_name, "date": date, "format_id": format_id, "store": store, "location": location}
+            # A hand edit: details whose value changes are remembered, so a forced re-scrape leaves them alone.
             ok = _db.update_event(
                 session,
                 event_id,
@@ -504,7 +503,7 @@ def update_event_endpoint(
                 player_count=player_count,
                 store=store,
                 location=location,
-                manual_fields=[field for field, value in sent.items() if value is not None],
+                manual_fields=_db.EVENT_MANUAL_FIELDS,
             )
         if not ok:
             raise HTTPException(status_code=404, detail="Event not found")
