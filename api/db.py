@@ -37,7 +37,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Session, aliased, declarative_base, sessionmaker, validates
 
-from api.brackets import STRUCTURE_SWISS, is_single_elimination
+from api.brackets import STRUCTURE_SWISS, expected_matches_for_rank, is_single_elimination
 from api.dates import format_ddmmyy, parse_ddmmyy
 from api.results import COUNTED_RESULTS, effective_wld, invert_result
 
@@ -654,7 +654,9 @@ def get_all_events(session: Session) -> list[dict]:
 
 
 def list_event_ids_with_missing_decks(session: Session) -> list[str]:
-    """Event IDs where deck count < player_count (and player_count > 0)."""
+    """Event IDs where deck count < player_count (and player_count > 0).
+
+    Single-elimination events compare against their bracket size: the player count there is the whole league."""
     deck_counts = (
         session.query(DeckRow.event_id, func.count(DeckRow.deck_id).label("cnt"))
         .group_by(DeckRow.event_id)
@@ -662,41 +664,45 @@ def list_event_ids_with_missing_decks(session: Session) -> list[str]:
     )
     deck_by_event = {_event_id_str(eid): cnt for (eid, cnt) in deck_counts}
     result = []
-    for (eid, pc) in session.query(EventRow.event_id, EventRow.player_count).all():
+    for (eid, pc, structure, bracket_size) in session.query(
+        EventRow.event_id, EventRow.player_count, EventRow.structure, EventRow.bracket_size
+    ).all():
         if eid is None:
             continue
         eid_str = _event_id_str(eid)
-        pc_val = pc or 0
+        pc_val = (bracket_size or 0) if is_single_elimination(structure) else (pc or 0)
         if pc_val > 0 and deck_by_event.get(eid_str, 0) < pc_val:
             result.append(eid_str)
     return result
 
 
 def list_event_ids_with_complete_matchups(session: Session) -> list[str]:
-    """Event IDs where every deck has the expected number of matchups (Swiss rounds).
+    """Event IDs where every deck has the expected number of matchups (see _expected_matchups_by_deck).
     Frontend uses this set: events NOT in this list have missing matchups.
     Uses bulk queries to avoid N+1 (one query per event)."""
     # All event IDs
-    event_ids = [
-        (r.event_id or "").strip()
-        for r in session.query(EventRow.event_id).all()
-        if (r.event_id or "").strip()
-    ]
+    structure_by_event: dict[str, tuple[str | None, int | None]] = {}
+    for r in session.query(EventRow.event_id, EventRow.structure, EventRow.bracket_size).all():
+        if (r.event_id or "").strip():
+            structure_by_event[(r.event_id or "").strip()] = (r.structure, r.bracket_size)
+    event_ids = list(structure_by_event)
     if not event_ids:
         return []
 
-    # All decks: event_id, deck_id, player_id, player (for events we care about)
+    # All decks: event_id, deck_id, player_id, player, rank (for events we care about)
     deck_rows = (
-        session.query(DeckRow.event_id, DeckRow.deck_id, DeckRow.player_id, DeckRow.player)
+        session.query(DeckRow.event_id, DeckRow.deck_id, DeckRow.player_id, DeckRow.player, DeckRow.rank)
         .filter(DeckRow.event_id.in_(event_ids))
         .all()
     )
     # event_id -> [(deck_id, player_id, player)] and event_id -> set(deck_id)
     decks_by_event: dict[str, list[tuple[int, int, str]]] = {}
+    ranks_by_event: dict[str, list[tuple[int, str]]] = {}
     event_deck_ids: dict[str, set[int]] = {}
-    for eid, deck_id, pid, player in deck_rows:
+    for eid, deck_id, pid, player, rank in deck_rows:
         eid = (eid or "").strip()
         decks_by_event.setdefault(eid, []).append((deck_id, pid, (player or "").strip()))
+        ranks_by_event.setdefault(eid, []).append((deck_id, rank or ""))
         event_deck_ids.setdefault(eid, set()).add(deck_id)
     # Decks that have any result=drop (exempt from expected count)
     all_deck_ids = {did for s in event_deck_ids.values() for did in s}
@@ -735,7 +741,7 @@ def list_event_ids_with_complete_matchups(session: Session) -> list[str]:
             decks,
             matchups_by_event.get(eid, []),
             dropped_deck_ids & event_deck_ids.get(eid, set()),
-            _swiss_rounds_for_players(len(decks)),
+            _expected_matchups_by_deck(ranks_by_event.get(eid, []), len(decks), *structure_by_event[eid]),
         )
         if not missing:
             result.append(eid)
@@ -1462,11 +1468,24 @@ def _swiss_rounds_for_players(n: int) -> int:
     return max(1, math.ceil(math.log2(n)))
 
 
+def _expected_matchups_by_deck(
+    decks: list[tuple[int, str]], n_decks: int, structure: str | None, bracket_size: int | None
+) -> dict[int, int]:
+    """Matches each deck should have; ``decks`` is ``(deck_id, rank)``.
+
+    Swiss: the Swiss rounds for the deck count, for every deck. Single elimination: what the deck's rank
+    implies in its bracket (``api.brackets.expected_matches_for_rank``)."""
+    if is_single_elimination(structure) and bracket_size:
+        return {deck_id: expected_matches_for_rank(rank, bracket_size) for deck_id, rank in decks}
+    rounds = _swiss_rounds_for_players(n_decks)
+    return {deck_id: rounds for deck_id, _ in decks}
+
+
 def _decks_missing_matchups(
     decks: list[tuple[int, int, str]],
     matchup_rows: list[tuple[int, int | None, int | None, str]],
     dropped_deck_ids: set[int],
-    expected: int,
+    expected_by_deck: dict[int, int],
 ) -> list[dict]:
     """Pure completeness rule for one event.
     decks: (deck_id, player_id, player); matchup_rows: (deck_id, opponent_deck_id, opponent_player_id,
@@ -1509,6 +1528,7 @@ def _decks_missing_matchups(
             if (opp_name or "").strip() == "Bye":
                 bye_count += 1
         effective = len(reported_by | against.get(deck_id, set())) + bye_count
+        expected = expected_by_deck.get(deck_id, 0)
         if effective < expected:
             result.append({
                 "deck_id": deck_id,
@@ -1520,18 +1540,19 @@ def _decks_missing_matchups(
 
 
 def list_missing_matchups_for_event(session: Session, event_id: str) -> list[dict]:
-    """Decks in this event that have fewer matchups than expected (expected = Swiss rounds for player count).
+    """Decks in this event that have fewer matchups than expected (see _expected_matchups_by_deck).
     A round is counted as covered for a deck if either that deck reported it or another player reported
     the matchup (opponent reported vs this deck). Byes count as a round. Decks with any result=drop
     are exempt from validation.
     Returns list of { deck_id, player, matchup_count, expected_count }. Uses player_id/opponent_player_id."""
     eid = _event_id_str(event_id)
     decks = (
-        session.query(DeckRow.deck_id, DeckRow.player_id, DeckRow.player)
+        session.query(DeckRow.deck_id, DeckRow.player_id, DeckRow.player, DeckRow.rank)
         .filter(DeckRow.event_id == eid)
         .all()
     )
     n = len(decks)
+    event_row = get_event(session, eid)
     if n == 0:
         return []
     event_deck_ids = {d.deck_id for d in decks}
@@ -1556,7 +1577,12 @@ def list_missing_matchups_for_event(session: Session, event_id: str) -> list[dic
         [(d.deck_id, d.player_id, d.player) for d in decks],
         [tuple(r) for r in matchup_rows],
         dropped_deck_ids,
-        _swiss_rounds_for_players(n),
+        _expected_matchups_by_deck(
+            [(d.deck_id, d.rank or "") for d in decks],
+            n,
+            event_row.structure if event_row else None,
+            event_row.bracket_size if event_row else None,
+        ),
     )
 
 
