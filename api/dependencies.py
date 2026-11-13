@@ -19,14 +19,25 @@ try:
 except ImportError:
     _db = None
 
+_KDF_SALT = b"metagameAnalyzer/jwt-key/v1"
+
+
 def derive_jwt_key(jwt_secret: str, admin_password: str) -> bytes:
-    """Signing key: JWT_SECRET (SHA-256 if < 32 bytes), else from the admin password, else random per process."""
+    """Signing key: JWT_SECRET as-is when it is at least 32 bytes (PyJWT's HS256 minimum), else JWT_SECRET
+    or the admin password stretched with scrypt, else random per process.
+
+    The key also signs the public captcha tokens, so anyone can hold a token signed with it. A slow
+    derivation stops those tokens being used to guess a short secret or the admin password offline.
+    """
+    raw = jwt_secret.encode("utf-8")
+    if len(raw) >= 32:
+        return raw
     secret = jwt_secret or admin_password
     if not secret:
         return secrets.token_bytes(32)
-    raw = secret.encode("utf-8")
-    # PyJWT recommends at least 32 bytes for HS256; derive a 32-byte key if shorter
-    return raw if len(raw) >= 32 else hashlib.sha256(raw).digest()
+    return hashlib.scrypt(
+        secret.encode("utf-8"), salt=_KDF_SALT, n=2**15, r=8, p=1, maxmem=64 * 1024 * 1024, dklen=32
+    )
 
 
 # Admin auth: single user, password from env, JWT for session

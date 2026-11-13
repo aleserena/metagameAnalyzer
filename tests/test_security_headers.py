@@ -16,7 +16,8 @@ def test_headers_when_deployed():
     assert "default-src 'self'" in csp
     assert "frame-ancestors 'none'" in csp
     assert "object-src 'none'" in csp
-    assert "https://cards.scryfall.io" in csp
+    img_src = next(d.split()[1:] for d in csp.split(";") if d.split()[:1] == ["img-src"])
+    assert img_src.count("https://cards.scryfall.io") == 1
 
 
 def test_csp_does_not_allow_inline_or_eval_scripts():

@@ -39,9 +39,9 @@ import EventStructureFields from '../components/event/EventStructureFields'
 import HadoukenImportModal from '../components/event/HadoukenImportModal'
 import PageError from '../components/PageError'
 import PageSkeleton from '../components/PageSkeleton'
-import CardSearchInput from '../components/CardSearchInput'
 import { parseMoxfieldDeckList, formatMoxfieldDeckList } from '../lib/deckListParser'
-import { defaultDeckEdit, getEDHArchetype, normalizeDeckListByLookup, type BulkDeckEdit } from '../lib/deckUtils'
+import { deckEditCommanders, defaultDeckEdit, getEDHArchetype, normalizeDeckListByLookup, type BulkDeckEdit } from '../lib/deckUtils'
+import CommanderPairFields from '../components/event/CommanderPairFields'
 import { cellStr } from '../lib/eventTable'
 import {
   apiMatchupsToBracketSlots,
@@ -204,9 +204,15 @@ export default function EventDetail() {
       (editStructure === 'single_elimination' && editBracketSize !== (event.bracket_size ?? null))
     ) return true
     return decks.some((d) => {
-      const current = bulkDeckEdits[d.deck_id] ?? defaultDeckEdit(d)
-      const def = defaultDeckEdit(d)
-      return current.name !== def.name || current.player !== def.player || current.rank !== def.rank || current.archetype !== def.archetype
+      const current = bulkDeckEdits[d.deck_id] ?? defaultDeckEdit(d, isEDH)
+      const def = defaultDeckEdit(d, isEDH)
+      return (
+        current.name !== def.name ||
+        current.player !== def.player ||
+        current.rank !== def.rank ||
+        current.archetype !== def.archetype ||
+        current.commander2 !== def.commander2
+      )
     })
   }, [editing, event, editName, editStore, editLocation, editDate, editFormatId, editPlayerCount, editStructure, editBracketSize, decks, bulkDeckEdits])
 
@@ -244,7 +250,7 @@ export default function EventDetail() {
     return () => window.removeEventListener('beforeunload', handler)
   }, [hasUnsavedEdits])
 
-  const getDeckEdit = (d: Deck): BulkDeckEdit => bulkDeckEdits[d.deck_id] ?? defaultDeckEdit(d)
+  const getDeckEdit = (d: Deck): BulkDeckEdit => bulkDeckEdits[d.deck_id] ?? defaultDeckEdit(d, isEDH)
 
   const setDeckEditField = (deckId: number, field: keyof BulkDeckEdit, value: string, fallback: BulkDeckEdit) => {
     setBulkDeckEdits((prev) => ({
@@ -274,12 +280,16 @@ export default function EventDetail() {
 
   const saveEdit = async () => {
     if (!eventId) return
+    // EDH: every commander named in the form (primary and partner), looked up once to validate them
+    // and to derive each partner deck's "Partner {colors}" archetype.
+    let commanderLookup: Awaited<ReturnType<typeof getCardLookup>> | null = null
     if (isEDH && decks.length > 0) {
-      const commanderNames = [...new Set(decks.map((d) => getDeckEdit(d).archetype.trim()).filter(Boolean))]
+      const commanderNames = [...new Set(decks.flatMap((d) => deckEditCommanders(getDeckEdit(d))))]
       if (commanderNames.length > 0) {
         setSaving(true)
         try {
           const lookup = await getCardLookup(commanderNames)
+          commanderLookup = lookup
           const invalid = commanderNames.filter((n) => !lookup[n] || (lookup[n] as { error?: string }).error)
           if (invalid.length > 0) {
             toast.error(`Commander(s) not found: ${invalid.join(', ')}. Please correct before saving.`)
@@ -314,8 +324,10 @@ export default function EventDetail() {
             rank: edit.rank.trim() || undefined,
             archetype: edit.archetype.trim() || undefined,
           }
-          if (isEDH && edit.archetype.trim()) {
-            payload.commanders = [edit.archetype.trim()]
+          const commanders = isEDH ? deckEditCommanders(edit) : []
+          if (commanders.length) {
+            payload.commanders = commanders
+            payload.archetype = getEDHArchetype(commanders, commanderLookup) || commanders[0]
           }
           return updateDeck(d.deck_id, payload)
         })
@@ -1090,7 +1102,7 @@ export default function EventDetail() {
                     <th scope="col">Deck</th>
                     <th scope="col">Player</th>
                     <th scope="col">Rank</th>
-                    <th scope="col">{editing && isEDH ? 'Archetype (commander)' : 'Archetype'}</th>
+                    <th scope="col">{editing && isEDH ? 'Commanders' : 'Archetype'}</th>
                     {canEditEvent && !editing && <th scope="col">Actions</th>}
                   </tr>
                 </thead>
@@ -1103,7 +1115,7 @@ export default function EventDetail() {
                             <input
                               type="text"
                               value={getDeckEdit(d).name}
-                              onChange={(e) => setDeckEditField(d.deck_id, 'name', e.target.value, defaultDeckEdit(d))}
+                              onChange={(e) => setDeckEditField(d.deck_id, 'name', e.target.value, defaultDeckEdit(d, isEDH))}
                               placeholder="Deck name"
                               style={{ width: '100%', minWidth: 120, boxSizing: 'border-box' }}
                               aria-label={`Deck name for deck ${d.deck_id}`}
@@ -1113,7 +1125,7 @@ export default function EventDetail() {
                             <input
                               type="text"
                               value={getDeckEdit(d).player}
-                              onChange={(e) => setDeckEditField(d.deck_id, 'player', e.target.value, defaultDeckEdit(d))}
+                              onChange={(e) => setDeckEditField(d.deck_id, 'player', e.target.value, defaultDeckEdit(d, isEDH))}
                               placeholder="Player"
                               style={{ width: '100%', minWidth: 100, boxSizing: 'border-box' }}
                               aria-label={`Player for deck ${d.deck_id}`}
@@ -1123,7 +1135,7 @@ export default function EventDetail() {
                             <input
                               type="text"
                               value={getDeckEdit(d).rank}
-                              onChange={(e) => setDeckEditField(d.deck_id, 'rank', e.target.value, defaultDeckEdit(d))}
+                              onChange={(e) => setDeckEditField(d.deck_id, 'rank', e.target.value, defaultDeckEdit(d, isEDH))}
                               placeholder="e.g. 1, 2, 3-4"
                               style={{ width: '100%', minWidth: 70, boxSizing: 'border-box' }}
                               aria-label={`Rank for deck ${d.deck_id}`}
@@ -1131,18 +1143,23 @@ export default function EventDetail() {
                           </td>
                           <td>
                             {isEDH ? (
-                              <CardSearchInput
-                                id={`bulk-archetype-${d.deck_id}`}
-                                value={getDeckEdit(d).archetype}
-                                onChange={(val) => setDeckEditField(d.deck_id, 'archetype', val, defaultDeckEdit(d))}
-                                placeholder="Search commander..."
-                                aria-label={`Archetype (commander) for deck ${d.deck_id}`}
-                              />
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                                <CommanderPairFields
+                                  id1={`bulk-commander1-${d.deck_id}`}
+                                  id2={`bulk-commander2-${d.deck_id}`}
+                                  commander1={getDeckEdit(d).archetype}
+                                  commander2={getDeckEdit(d).commander2}
+                                  onCommander1Change={(val) => setDeckEditField(d.deck_id, 'archetype', val, defaultDeckEdit(d, isEDH))}
+                                  onCommander2Change={(val) => setDeckEditField(d.deck_id, 'commander2', val, defaultDeckEdit(d, isEDH))}
+                                  label1="Commander"
+                                  label2="Partner / Background"
+                                />
+                              </div>
                             ) : (
                               <input
                                 type="text"
                                 value={getDeckEdit(d).archetype}
-                                onChange={(e) => setDeckEditField(d.deck_id, 'archetype', e.target.value, defaultDeckEdit(d))}
+                                onChange={(e) => setDeckEditField(d.deck_id, 'archetype', e.target.value, defaultDeckEdit(d, isEDH))}
                                 placeholder="Archetype"
                                 style={{ width: '100%', minWidth: 100, boxSizing: 'border-box' }}
                                 aria-label={`Archetype for deck ${d.deck_id}`}

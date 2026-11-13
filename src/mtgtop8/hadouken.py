@@ -7,7 +7,7 @@ so it is used to complete events that were first scraped from MTGTop8 (which has
 import re
 import unicodedata
 from dataclasses import dataclass, field
-from urllib.parse import urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup, Tag
@@ -208,12 +208,31 @@ def parse_hadouken_event(html: str, url: str = "") -> HadoukenEvent:
     )
 
 
+_MAX_REDIRECTS = 5
+
+
+def _tournament_page_url(url: str) -> str:
+    """The URL we request for a checked Hadouken URL: our fixed scheme and host, the user's path only."""
+    return f"https://{HADOUKEN_HOST}{quote(urlparse(url.strip()).path, safe='/%')}"
+
+
 def fetch_hadouken_event(url: str, session: requests.Session | None = None) -> HadoukenEvent:
-    """Download and parse a Hadouken tournament page. Only hadoleague.vercel.app/torneos/ URLs are allowed."""
+    """Download and parse a Hadouken tournament page. Only hadoleague.vercel.app/torneos/ URLs are allowed,
+    and redirects are followed only while they stay on such URLs."""
     if not is_hadouken_url(url):
         raise ValueError(f"Not a Hadouken tournament URL: {url!r}")
     http = session or requests.Session()
-    r = http.get(url.strip(), timeout=30, headers={"User-Agent": "MTGTop8Scraper/1.0"})
+    target = _tournament_page_url(url)
+    for _ in range(_MAX_REDIRECTS + 1):
+        r = http.get(target, timeout=30, headers={"User-Agent": "MTGTop8Scraper/1.0"}, allow_redirects=False)
+        if not r.is_redirect:
+            break
+        location = urljoin(target, r.headers.get("Location", ""))
+        if not is_hadouken_url(location):
+            raise ValueError("The Hadouken page redirected away from the tournament site")
+        target = _tournament_page_url(location)
+    else:
+        raise ValueError("Too many redirects from the Hadouken page")
     r.raise_for_status()
     r.encoding = "utf-8"
     return parse_hadouken_event(r.text, url=url.strip())

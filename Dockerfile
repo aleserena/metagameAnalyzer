@@ -7,7 +7,7 @@ COPY web/ ./
 RUN npm run build
 
 # Stage 2: run backend and serve static frontend
-FROM python:3.12-slim
+FROM python:3.15-slim
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

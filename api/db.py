@@ -1745,8 +1745,9 @@ def _normalize_archetype_or_commander_display(name: str | None) -> str | None:
     t = str(name).strip()
     if not t:
         return None
-    if " // " not in t and re.search(r"\s/\s", t):
-        t = re.sub(r"\s+/\s+", " // ", t)
+    from src.mtgtop8.normalize import double_split_separators
+
+    t = double_split_separators(t)
     if " // " in t:
         front = t.split(" // ", 1)[0].strip()
         return front or t

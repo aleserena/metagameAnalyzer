@@ -3,7 +3,7 @@
 The security risks identified for this project, how each is treated, and what remains. It follows the ISO 31000 cycle: identify, analyse, evaluate, treat, then monitor and review.
 
 - **First assessment:** 2026-11-11 (static review of the code and the Railway setup).
-- **Last updated:** 2026-11-13, after the hardening and recovery work.
+- **Last updated:** 2026-11-13, after the hardening and recovery work, and again after clearing the Dependabot and CodeQL alerts.
 - **Owner:** the site maintainer (the only admin).
 - **Review:** after any release that touches authentication, one-time links, the public endpoints or how data is stored, and at least once a year. Re-rate each risk, add new ones, and record the date above.
 
@@ -30,7 +30,7 @@ Ratings are Low / Medium / High for likelihood (L) and consequence (C). "Level b
 
 One password grants every destructive action.
 
-- **Done:** session shortened from 7 days to 12 hours; a "session expired" notice; the login throttle verified against a forged visitor address on Railway (2026-11-12); changing `JWT_SECRET` documented as the way to log everyone out; the app refuses to start on Railway without `JWT_SECRET` and `ADMIN_PASSWORD`.
+- **Done:** session shortened from 7 days to 12 hours; a "session expired" notice; the login throttle verified against a forged visitor address on Railway (2026-11-12); changing `JWT_SECRET` documented as the way to log everyone out; the app refuses to start on Railway without `JWT_SECRET` and `ADMIN_PASSWORD`; a `JWT_SECRET` shorter than 32 bytes, or the admin password when it is unset, is stretched with scrypt into the signing key, so the public captcha tokens (signed with the same key) cannot be used to guess either offline (2026-11-13).
 - **Accepted residual:** a single shared password with no second factor and no per-person accounts. Reasonable while there is one admin using one computer. Revisit if a second person needs admin access.
 - **Accepted residual:** the session token is kept in the browser's `localStorage`; the content security policy (R7) is what limits a script from reading it.
 
@@ -43,7 +43,7 @@ Upload, feedback and event-edit links are bearer secrets carried in the URL.
 
 ### R3 — Resource exhaustion
 
-- **Done:** card lookup capped at 200 names per request; anonymous callers get the card table and cache plus a small budgeted Scryfall fallback (5 names per request, 6 requests per minute per address, 30 per minute site-wide); per-address rate limits on the public upload and lookup endpoints.
+- **Done:** card lookup capped at 200 names per request; anonymous callers get the card table and cache plus a small budgeted Scryfall fallback (5 names per request, 6 requests per minute per address, 30 per minute site-wide); per-address rate limits on the public upload and lookup endpoints; card-name and archetype normalisation rewritten without backtracking regexes, so a crafted name cannot stall a request (CodeQL polynomial-ReDoS, 2026-11-13).
 - **Residual:** deck, player and metagame analysis pages still use the unlimited fallback for card names stored in decks. Exposure is low: it needs a valid link to store an unknown name, and misses are cached for 7 days.
 - **Residual:** the limiters live in process memory, so the app must run as one replica.
 
@@ -62,7 +62,7 @@ Player names and results come from public tournament pages; emails are added by 
 
 ### R6 — Supply chain and change control
 
-- **Done:** Dependabot for Python, the frontend, GitHub Actions and Docker; `pip-audit` and `npm audit` in CI; dependencies pinned.
+- **Done:** Dependabot for Python, the frontend, GitHub Actions and Docker; `pip-audit` and `npm audit` in CI; dependencies pinned. On 2026-11-13 every open Dependabot and CodeQL alert was fixed on `staging` (`npm audit`: 0; react-router 7, vite 8, vitest 5, a `minimatch` override until eslint allows 11.x); the alerts close once `master` is updated.
 - **Open (maintainer action):** turn on GitHub secret scanning, push protection and Dependabot alerts in the repository settings.
 - **Accepted residual:** work is committed directly to `staging` without a second reviewer, and git hooks can be bypassed; CI is the gate. The container runs as root because Railway mounts volumes as root.
 - **Watch:** Railway stops reading `railway.json` on 2026-12-01. The deploy settings were copied onto the Railway service on 2026-11-13; confirm the first deploy after the cutoff still runs the migration and the health check.
@@ -84,7 +84,7 @@ The site depends on scraping mtgtop8.com, on Moxfield's unofficial API, on Scryf
 
 ### R10 — Minor information exposure
 
-- **Done:** interactive API docs are not served when deployed; the feedback form no longer echoes GitHub's error text; a startup warning if `PUBLIC_APP_URL` is missing.
+- **Done:** interactive API docs are not served when deployed; the feedback form no longer echoes GitHub's error text; a startup warning if `PUBLIC_APP_URL` is missing; the admin-only Hadouken import requests only the league host with the given path and follows redirects only to other league tournament pages (CodeQL SSRF, 2026-11-13).
 
 ## Opportunities noted in the assessment
 

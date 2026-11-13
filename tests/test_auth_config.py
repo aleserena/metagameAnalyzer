@@ -40,11 +40,23 @@ def test_key_is_never_the_old_hardcoded_default():
     assert deps.derive_jwt_key("", "") != deps.derive_jwt_key("", "")
 
 
-def test_short_secret_keeps_sha256_derivation():
-    assert deps.derive_jwt_key("short", "pw") == hashlib.sha256(b"short").digest()
+def test_long_secret_is_used_as_is():
     long_secret = "s" * 40
     assert deps.derive_jwt_key(long_secret, "pw") == long_secret.encode()
-    assert deps.derive_jwt_key("", "pw") == hashlib.sha256(b"pw").digest()
+
+
+def test_short_secret_and_password_are_stretched_with_a_slow_kdf():
+    def scrypt(value: bytes) -> bytes:
+        return hashlib.scrypt(
+            value, salt=deps._KDF_SALT, n=2**15, r=8, p=1, maxmem=64 * 1024 * 1024, dklen=32
+        )
+
+    assert deps.derive_jwt_key("short", "pw") == scrypt(b"short")
+    assert deps.derive_jwt_key("", "pw") == scrypt(b"pw")
+    assert deps.derive_jwt_key("", "pw") != hashlib.sha256(b"pw").digest()
+    # an admin password is never used as the key directly, however long
+    assert deps.derive_jwt_key("", "p" * 40) == scrypt(b"p" * 40)
+    assert len(deps.derive_jwt_key("", "pw")) == 32
 
 
 def test_tokens_are_rejected_while_admin_login_is_disabled():

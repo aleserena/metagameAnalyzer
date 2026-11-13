@@ -94,7 +94,7 @@ async function fetchApi<T>(path: string, options?: RequestInit & { timeoutMs?: n
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     const detail = err.detail ?? res.statusText
     const message = typeof detail === 'string' ? detail : JSON.stringify(detail)
-    console.error(`[API] ${res.status} ${path}`, detail, err)
+    console.error('[API] %d %s', res.status, path, detail, err)
     throw new ApiError(message, res.status)
   }
   return res.json()
