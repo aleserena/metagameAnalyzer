@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { CardLookupResult } from '../api'
 import {
   canonicalCardNameForCompare,
+  deckEditCommanders,
   defaultDeckEdit,
   getEDHArchetype,
   getPartnerMode,
@@ -144,7 +145,7 @@ describe('normalizeDeckListByLookup', () => {
 describe('defaultDeckEdit', () => {
   it('copies name/player/rank/archetype from the deck', () => {
     const d = { name: 'Boros Aggro', player: 'Jeremy', rank: '1', archetype: 'Aggro' } as Parameters<typeof defaultDeckEdit>[0]
-    expect(defaultDeckEdit(d)).toEqual({ name: 'Boros Aggro', player: 'Jeremy', rank: '1', archetype: 'Aggro' })
+    expect(defaultDeckEdit(d)).toEqual({ name: 'Boros Aggro', player: 'Jeremy', rank: '1', archetype: 'Aggro', commander2: '' })
   })
 
   it('falls back to the first commander when archetype is missing (EDH)', () => {
@@ -154,6 +155,37 @@ describe('defaultDeckEdit', () => {
 
   it('uses empty strings for missing fields', () => {
     const d = {} as Parameters<typeof defaultDeckEdit>[0]
-    expect(defaultDeckEdit(d)).toEqual({ name: '', player: '', rank: '', archetype: '' })
+    expect(defaultDeckEdit(d)).toEqual({ name: '', player: '', rank: '', archetype: '', commander2: '' })
+  })
+
+  it('EDH partner deck: edits both commanders, not the derived "Partner {colors}" archetype', () => {
+    const d = { archetype: 'Partner BR', commanders: ['Tymna the Weaver', 'Thrasios, Triton Hero'] } as Parameters<
+      typeof defaultDeckEdit
+    >[0]
+    const edit = defaultDeckEdit(d, true)
+    expect(edit.archetype).toBe('Tymna the Weaver')
+    expect(edit.commander2).toBe('Thrasios, Triton Hero')
+  })
+
+  it('EDH single commander: the commander, not a differently spelled archetype', () => {
+    const d = { archetype: 'Krenko', commanders: ['Krenko, Mob Boss'] } as Parameters<typeof defaultDeckEdit>[0]
+    expect(defaultDeckEdit(d, true)).toMatchObject({ archetype: 'Krenko, Mob Boss', commander2: '' })
+  })
+
+  it('non-EDH keeps the free-text archetype', () => {
+    const d = { archetype: 'Aggro', commanders: ['Something'] } as Parameters<typeof defaultDeckEdit>[0]
+    expect(defaultDeckEdit(d, false)).toMatchObject({ archetype: 'Aggro', commander2: '' })
+  })
+})
+
+describe('deckEditCommanders', () => {
+  it('returns the filled commander slots, trimmed', () => {
+    const base = { name: '', player: '', rank: '' }
+    expect(deckEditCommanders({ ...base, archetype: ' Tymna the Weaver ', commander2: 'Thrasios, Triton Hero' })).toEqual([
+      'Tymna the Weaver',
+      'Thrasios, Triton Hero',
+    ])
+    expect(deckEditCommanders({ ...base, archetype: 'Krenko, Mob Boss', commander2: '  ' })).toEqual(['Krenko, Mob Boss'])
+    expect(deckEditCommanders({ ...base, archetype: '', commander2: '' })).toEqual([])
   })
 })

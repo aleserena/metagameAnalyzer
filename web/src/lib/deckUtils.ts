@@ -6,16 +6,29 @@ import { formatMoxfieldDeckList } from './deckListParser'
 export const WUBRG_ORDER = ['W', 'U', 'B', 'R', 'G'] as const
 
 /** Editable fields for a deck in the Event detail bulk-edit form. */
-export type BulkDeckEdit = { name: string; player: string; rank: string; archetype: string }
+/**
+ * One deck row in the event edit form. For EDH, ``archetype`` holds the primary commander and
+ * ``commander2`` the partner/background (the stored archetype of a partner deck is the derived
+ * "Partner {colors}", which is not a card). For other formats ``archetype`` is free text.
+ */
+export type BulkDeckEdit = { name: string; player: string; rank: string; archetype: string; commander2: string }
 
 /** Seed a bulk-edit row from a deck; archetype falls back to the first commander (EDH). */
-export function defaultDeckEdit(d: Deck): BulkDeckEdit {
+export function defaultDeckEdit(d: Deck, isEDH = false): BulkDeckEdit {
+  const commanders = d.commanders ?? []
   return {
     name: d.name ?? '',
     player: d.player ?? '',
     rank: d.rank ?? '',
-    archetype: d.archetype ?? (d.commanders?.length ? d.commanders[0] ?? '' : ''),
+    archetype:
+      isEDH && commanders.length ? commanders[0] ?? '' : d.archetype ?? (commanders.length ? commanders[0] ?? '' : ''),
+    commander2: isEDH ? commanders[1] ?? '' : '',
   }
+}
+
+/** EDH: the commanders a deck row names (primary, then partner), trimmed, empty slots dropped. */
+export function deckEditCommanders(edit: BulkDeckEdit): string[] {
+  return [edit.archetype, edit.commander2].map((c) => (c || '').trim()).filter(Boolean)
 }
 
 /**
