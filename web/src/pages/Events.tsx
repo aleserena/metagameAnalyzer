@@ -14,6 +14,8 @@ import {
 import type { EventWithOrigin } from '../api'
 import type { MergePreviewResponse, PlayerMergePair } from '../api'
 import { useAuth } from '../contexts/AuthContext'
+import EventStructureFields from '../components/event/EventStructureFields'
+import type { EventStructure } from '../types'
 import { useFetch } from '../hooks/useFetch'
 import { canonicalCardNameForCompare } from '../lib/deckUtils'
 import { cellStr, normalizeForSort, type EventSortKey } from '../lib/eventTable'
@@ -30,6 +32,8 @@ export default function Events() {
   const [newDate, setNewDate] = useState('')
   const [newFormatId, setNewFormatId] = useState('EDH')
   const [newPlayerCount, setNewPlayerCount] = useState(0)
+  const [newStructure, setNewStructure] = useState<EventStructure>('swiss')
+  const [newBracketSize, setNewBracketSize] = useState<number | null>(null)
   const [filterName, setFilterName] = useState('')
   const [filterDateIso, setFilterDateIso] = useState('') // YYYY-MM-DD for date picker
   const [filterFormat, setFilterFormat] = useState('')
@@ -146,6 +150,8 @@ export default function Events() {
       player_count: newPlayerCount,
       store: newStore.trim(),
       location: newLocation.trim(),
+      structure: newStructure,
+      bracket_size: newStructure === 'single_elimination' ? newBracketSize : null,
     })
       .then(() => {
         refetch()
@@ -155,6 +161,8 @@ export default function Events() {
         setNewDate('')
         setNewFormatId('EDH')
         setNewPlayerCount(0)
+        setNewStructure('swiss')
+        setNewBracketSize(null)
         refetch()
         toast.success('Event created')
       })
@@ -479,6 +487,15 @@ export default function Events() {
                 required
               />
             </label>
+            <EventStructureFields
+              structure={newStructure}
+              bracketSize={newBracketSize}
+              onChange={(structure, size) => {
+                setNewStructure(structure)
+                setNewBracketSize(size)
+              }}
+              disabled={creating}
+            />
             <button type="button" className="btn btn-primary" onClick={handleCreate} disabled={creating}>
               {creating ? 'Creating…' : 'Create event'}
             </button>

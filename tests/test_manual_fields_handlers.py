@@ -162,6 +162,8 @@ def test_event_edit_marks_the_fields_it_sent(in_session):
         player_count=16,
         store="Corrected store",
         location=None,
+        structure=None,
+        bracket_size=None,
     )
     session.expire_all()
     event = db.get_event(session, EID)
@@ -187,6 +189,8 @@ def test_saving_the_event_form_unchanged_protects_nothing(in_session):
         player_count=event.player_count,
         store=event.store,
         location=event.location,
+        structure=None,
+        bracket_size=None,
     )
     session.expire_all()
     assert db.get_event(session, EID).manual_fields is None
