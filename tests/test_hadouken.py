@@ -7,6 +7,7 @@ import pytest
 from src.mtgtop8.hadouken import (
     HadoukenBye,
     HadoukenPairing,
+    fetch_hadouken_event,
     is_hadouken_url,
     pairing_results,
     parse_hadouken_event,
@@ -124,3 +125,63 @@ class TestIsHadoukenUrl:
         assert not is_hadouken_url("https://hadoleague.vercel.app.evil.com/torneos/x")
         assert not is_hadouken_url("https://hadoleague.vercel.app/jugadores/x")
         assert not is_hadouken_url("http://localhost:8000/torneos/x")
+
+
+class _FakeResponse:
+    def __init__(self, status=200, text="", location=None):
+        self.status_code = status
+        self.text = text
+        self.encoding = None
+        self.headers = {"Location": location} if location else {}
+        self.is_redirect = location is not None
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(self.status_code)
+
+
+class _FakeSession:
+    """Answers each requested URL from a dict and records what was requested."""
+
+    def __init__(self, responses):
+        self.responses = responses
+        self.requested = []
+
+    def get(self, url, **kwargs):
+        assert kwargs.get("allow_redirects") is False
+        self.requested.append(url)
+        return self.responses[url]
+
+
+class TestFetchHadoukenEvent:
+    def test_fetches_only_the_path_on_the_fixed_host(self):
+        html = FIXTURE.read_text(encoding="utf-8")
+        http = _FakeSession({URL: _FakeResponse(text=html)})
+        ev = fetch_hadouken_event(URL + "?next=https://evil.example/", session=http)
+        assert http.requested == [URL]
+        assert ev.name == "Fecha 6 / T2 - Duel Commander"
+
+    def test_follows_redirects_that_stay_on_tournament_pages(self):
+        html = FIXTURE.read_text(encoding="utf-8")
+        http = _FakeSession({
+            URL + "/": _FakeResponse(status=308, location=URL),
+            URL: _FakeResponse(text=html),
+        })
+        fetch_hadouken_event(URL + "/", session=http)
+        assert http.requested == [URL + "/", URL]
+
+    @pytest.mark.parametrize("location", [
+        "http://169.254.169.254/latest/meta-data/",
+        "https://hadoleague.vercel.app.evil.example/torneos/x",
+        "/admin",
+    ])
+    def test_refuses_redirects_off_tournament_pages(self, location):
+        http = _FakeSession({URL: _FakeResponse(status=302, location=location)})
+        with pytest.raises(ValueError, match="redirected away"):
+            fetch_hadouken_event(URL, session=http)
+        assert http.requested == [URL]
+
+    def test_refuses_endless_redirects(self):
+        http = _FakeSession({URL: _FakeResponse(status=302, location=URL)})
+        with pytest.raises(ValueError, match="Too many redirects"):
+            fetch_hadouken_event(URL, session=http)

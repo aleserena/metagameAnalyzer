@@ -11,9 +11,7 @@ _URL = "postgresql://admin:sup3rs3cret@trolley.proxy.rlwy.net:50358/railway"
 
 
 def test_describe_target_names_the_environment_and_host():
-    out = describe_target(_URL, "prod")
-    assert "prod" in out
-    assert "trolley.proxy.rlwy.net:50358" in out
+    assert describe_target(_URL, "prod") == "prod (trolley.proxy.rlwy.net:50358/railway)"
 
 
 def test_describe_target_never_leaks_credentials():

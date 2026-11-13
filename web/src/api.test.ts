@@ -62,8 +62,11 @@ describe('api', () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     await expect(getDecks()).rejects.toThrow('Deck not found')
+    // the request path is an argument, never part of the format string
     expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining('[API]'),
+      '[API] %d %s',
+      404,
+      expect.stringContaining('/decks'),
       'Deck not found',
       expect.any(Object)
     )
