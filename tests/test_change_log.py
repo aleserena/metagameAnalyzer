@@ -199,3 +199,77 @@ def test_current_actor_is_admin_for_an_admin_token_and_the_link_otherwise(in_ses
     assert deps.current_actor(f"Bearer {deps._create_admin_token()}", None) == "admin"
     assert deps.current_actor(None, "tok-cl-actor") == "link:event_edit:Luis"
     assert deps.current_actor("Bearer not-a-real-token", None) == "unknown"
+
+
+# ---- Settings routes: snapshots and change log --------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "method, path",
+    [
+        ("get", "/api/v1/settings/snapshots"),
+        ("post", "/api/v1/settings/snapshots/1/restore"),
+        ("get", "/api/v1/settings/change-log"),
+    ],
+)
+def test_recovery_routes_require_admin(method, path):
+    from fastapi.testclient import TestClient
+
+    from api.main import app
+
+    assert getattr(TestClient(app), method)(path).status_code == 401
+
+
+def test_snapshot_listing_route_never_returns_the_payload(in_session):
+    from api.routers.settings import get_settings_snapshots
+    from api.services import snapshots as snap
+    from tests.test_snapshots import EID, seed
+
+    seed(in_session)
+    sid = snap.take_snapshot(in_session, EID, "delete")
+    out = get_settings_snapshots(event_id=EID, limit=50)
+    assert [s["id"] for s in out["snapshots"]] == [sid]
+    assert "payload" not in out["snapshots"][0]
+    assert "snap.alice@example.com" not in str(out)
+
+
+def test_restore_route_restores_reloads_and_logs(in_session, monkeypatch):
+    from api.routers import settings as settings_router
+    from api.services import snapshots as snap
+    from tests.test_snapshots import DECK_A, DECK_B, EID, seed
+
+    session = in_session
+    reloads = []
+    monkeypatch.setattr(settings_router, "_load_decks_from_db", lambda: reloads.append("decks"))
+    seed(session)
+    sid = snap.take_snapshot(session, EID, "delete")
+    db.delete_event(session, EID, delete_decks=True)
+    session.flush()
+
+    out = settings_router.post_restore_snapshot(sid)
+
+    assert out["event_id"] == EID and out["deck_count"] == 2
+    assert {d["deck_id"] for d in db.get_decks_by_event(session, EID)} == {DECK_A, DECK_B}
+    assert reloads == ["decks"]
+    (row,) = _rows(session, "event.restore")
+    assert (row.actor, row.event_id) == ("admin", EID)
+
+
+def test_restore_route_returns_404_for_an_unknown_snapshot(in_session):
+    from fastapi import HTTPException
+
+    from api.routers.settings import post_restore_snapshot
+
+    with pytest.raises(HTTPException) as exc:
+        post_restore_snapshot(999_999_999)
+    assert exc.value.status_code == 404
+    assert _rows(in_session, "event.restore") == []
+
+
+def test_change_log_route_lists_newest_first(in_session):
+    from api.routers.settings import get_settings_change_log
+
+    cl.record(in_session, actor=cl.ADMIN, action="deck.update", summary="one", event_id="cl_route_ev")
+    cl.record(in_session, actor=cl.ADMIN, action="deck.update", summary="two", event_id="cl_route_ev")
+    out = get_settings_change_log(event_id="cl_route_ev", limit=50)
+    assert [c["summary"] for c in out["changes"]] == ["two", "one"]

@@ -1211,6 +1211,45 @@ export async function clearUploadLinks(usedOnly: boolean): Promise<{ deleted: nu
   return fetchApi(`/settings/upload-links${params}`, { method: 'DELETE' })
 }
 
+/** An event as it was before a destructive action (contents are never sent to the browser). */
+export type EventSnapshot = {
+  id: number
+  event_id: string
+  event_name: string
+  created_at: string | null
+  /** delete | merge | hadouken | clear_decks | rescrape | before_restore */
+  reason: string
+  deck_count: number
+  matchup_count: number
+}
+
+export async function getSnapshots(eventId?: string): Promise<{ snapshots: EventSnapshot[] }> {
+  const params = eventId ? `?event_id=${encodeURIComponent(eventId)}` : ''
+  return fetchApi(`/settings/snapshots${params}`)
+}
+
+export async function restoreSnapshot(
+  snapshotId: number
+): Promise<{ event_id: string; deck_count: number; matchup_count: number; safety_snapshot_id: number | null }> {
+  return fetchApi(`/settings/snapshots/${snapshotId}/restore`, { method: 'POST' })
+}
+
+/** One recorded data change. `actor` is "admin" or "link:<type>:<label>". */
+export type ChangeLogEntry = {
+  id: number
+  at: string | null
+  actor: string
+  action: string
+  event_id: string | null
+  deck_id: number | null
+  summary: string
+}
+
+export async function getChangeLog(eventId?: string): Promise<{ changes: ChangeLogEntry[] }> {
+  const params = eventId ? `?event_id=${encodeURIComponent(eventId)}` : ''
+  return fetchApi(`/settings/change-log${params}`)
+}
+
 export async function getSimilarPlayers(name: string, limit = 10): Promise<{ similar: string[] }> {
   return fetchApi(`/players/similar?name=${encodeURIComponent(name)}&limit=${limit}`)
 }

@@ -19,6 +19,8 @@ import {
 } from '../api'
 import type { UploadLinkRow, MtgjsonSyncStatus } from '../api'
 import { reportError } from '../utils'
+import SnapshotsPanel from '../components/settings/SnapshotsPanel'
+import ChangeLogPanel from '../components/settings/ChangeLogPanel'
 
 const RANK_KEYS = ['1', '2', '3-4', '5-8', '9-16', '17-32', '33-64', '65-128'] as const
 const DEFAULT_RANK_WEIGHTS: Record<string, number> = {
@@ -556,6 +558,10 @@ export default function Settings() {
           </>
         )}
       </div>
+
+      <SnapshotsPanel />
+
+      <ChangeLogPanel />
 
       <div className="chart-container" style={{ maxWidth: 600 }}>
         <h2 style={{ margin: '0 0 1rem', fontSize: '1.25rem' }}>Cards ignored by &quot;Ignore lands&quot;</h2>

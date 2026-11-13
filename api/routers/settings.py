@@ -16,8 +16,10 @@ from api.schemas.settings import (
 from api.services import change_log
 from api.services import mtgjson as mtgjson_service
 from api.services import settings as settings_service
+from api.services import snapshots as snapshot_service
 from api.state import (
     _clear_decks_in_db,
+    _load_decks_from_db,
     state,
 )
 
@@ -169,3 +171,50 @@ def delete_settings_upload_links(
         change_log.ADMIN, "settings.update", f"Cleared {deleted} {'used ' if used_only else ''}upload link(s)"
     )
     return {"deleted": deleted, "message": f"Cleared {deleted} link(s)"}
+
+
+# --- Recovery: event snapshots and the change log (see docs/BACKUP_RESTORE.md) ---
+
+
+@router.get("/api/v1/settings/snapshots", dependencies=[Depends(require_admin), Depends(require_database)])
+def get_settings_snapshots(
+    event_id: str | None = Query(None, description="Only snapshots of this event"),
+    limit: int = Query(200, ge=1, le=500),
+):
+    """List event snapshots, newest first (admin-only). Never returns snapshot contents: they hold player emails."""
+    with _db.session_scope() as session:
+        return {"snapshots": snapshot_service.list_snapshots(session, event_id=event_id, limit=limit)}
+
+
+@router.post(
+    "/api/v1/settings/snapshots/{snapshot_id}/restore",
+    dependencies=[Depends(require_admin), Depends(require_database)],
+)
+def post_restore_snapshot(snapshot_id: int):
+    """Put an event back as a snapshot recorded it (admin-only). The current state is snapshotted first."""
+    try:
+        with _db.session_scope() as session:
+            result = snapshot_service.restore_snapshot(session, snapshot_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+    except Exception as e:
+        logger.exception("Snapshot restore failed: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to restore the snapshot. Nothing was changed.")
+    _load_decks_from_db()  # also clears the metagame and events caches
+    change_log.log(
+        change_log.ADMIN,
+        "event.restore",
+        f"Restored from snapshot {snapshot_id}: {result['deck_count']} deck(s), {result['matchup_count']} matchup(s)",
+        event_id=result["event_id"],
+    )
+    return result
+
+
+@router.get("/api/v1/settings/change-log", dependencies=[Depends(require_admin), Depends(require_database)])
+def get_settings_change_log(
+    event_id: str | None = Query(None, description="Only changes to this event"),
+    limit: int = Query(200, ge=1, le=500),
+):
+    """List recorded data changes, newest first (admin-only)."""
+    with _db.session_scope() as session:
+        return {"changes": change_log.list_changes(session, event_id=event_id, limit=limit)}
