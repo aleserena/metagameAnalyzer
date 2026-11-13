@@ -437,7 +437,7 @@ export default function Metagame() {
                 cx="50%"
                 cy="50%"
                 outerRadius={90}
-                label={({ color, pct }) => `${color} (${pct}%)`}
+                label={({ payload }) => `${payload?.color} (${payload?.pct}%)`}
               >
                 {colorDistribution.map((entry) => (
                   <Cell key={entry.color} fill={MTG_COLOR_FILL[entry.color] ?? COLORS[0]} />
@@ -500,7 +500,8 @@ export default function Metagame() {
               outerRadius={90}
               style={{ cursor: 'pointer' }}
               onClick={(data) => {
-                if (data?.archetype) navigate(`/decks?archetype=${encodeURIComponent(data.archetype)}`)
+                const archetype = (data?.payload as { archetype?: string } | undefined)?.archetype
+                if (archetype) navigate(`/decks?archetype=${encodeURIComponent(archetype)}`)
               }}
             >
               {archetypes.slice(0, 8).map((_, i) => (
@@ -543,7 +544,7 @@ export default function Metagame() {
                 cx="50%"
                 cy="50%"
                 outerRadius={90}
-                label={({ label, pct }) => `${label} (${pct}%)`}
+                label={({ payload }) => `${payload?.label} (${payload?.pct}%)`}
               >
                 {colorCountDistribution.map((entry, i) => (
                   <Cell key={entry.label} fill={COLORS[i % COLORS.length]} />
