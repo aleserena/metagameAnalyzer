@@ -13,6 +13,7 @@ from api.schemas.settings import (
     MatchupsMinMatchesBody,
     RankWeightsBody,
 )
+from api.services import change_log
 from api.services import mtgjson as mtgjson_service
 from api.services import settings as settings_service
 from api.state import (
@@ -39,7 +40,9 @@ def get_ignore_lands_cards(_: str = Depends(require_admin)):
 @router.put("/api/v1/settings/ignore-lands-cards")
 def put_ignore_lands_cards(body: IgnoreLandsCardsBody, _: str = Depends(require_admin)):
     """Update list of cards excluded when 'Ignore lands' is checked (admin-only)."""
-    return {"cards": settings_service.set_ignore_lands_cards(body.cards)}
+    cards = settings_service.set_ignore_lands_cards(body.cards)
+    change_log.log(change_log.ADMIN, "settings.update", f"Ignore-lands list set ({len(cards)} card(s))")
+    return {"cards": cards}
 
 
 @router.get("/api/v1/settings/rank-weights")
@@ -51,7 +54,9 @@ def get_rank_weights(_: str = Depends(require_admin)):
 @router.put("/api/v1/settings/rank-weights")
 def put_rank_weights(body: RankWeightsBody, _: str = Depends(require_admin)):
     """Update points per placement (admin-only)."""
-    return {"weights": settings_service.set_rank_weights(body.weights)}
+    weights = settings_service.set_rank_weights(body.weights)
+    change_log.log(change_log.ADMIN, "settings.update", "Rank weights changed")
+    return {"weights": weights}
 
 
 @router.get("/api/v1/settings/matchups-min-matches", dependencies=[Depends(require_admin), Depends(require_database)])
@@ -139,6 +144,7 @@ def post_clear_decks(_: str = Depends(require_admin)):
         _clear_decks_in_db()
     except Exception as e:
         raise HTTPException(status_code=500, detail="Failed to clear decks") from e
+    change_log.log(change_log.ADMIN, "data.clear_decks", "Cleared all decks (each event was snapshotted first)")
     return {"message": "Decks cleared"}
 
 
@@ -159,4 +165,7 @@ def delete_settings_upload_links(
     """Clear one-time upload links (admin-only). used_only=true clears only used links. Requires database."""
     with _db.session_scope() as session:
         deleted = _db.delete_all_upload_links(session, used_only=used_only)
+    change_log.log(
+        change_log.ADMIN, "settings.update", f"Cleared {deleted} {'used ' if used_only else ''}upload link(s)"
+    )
     return {"deleted": deleted, "message": f"Cleared {deleted} link(s)"}

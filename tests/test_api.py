@@ -1745,7 +1745,8 @@ def test_submit_reloads_decks_after_the_transaction_commits(client_with_override
     ):
         r = client_with_overrides.post("/api/v1/upload/tok", json=body)
     assert r.status_code == 201
-    assert events == ["open", "closed", "reload"]
+    # The change-log entry is written afterwards, in a transaction of its own.
+    assert events == ["open", "closed", "reload", "open", "closed"]
 
 
 # --- Link emails are sent after the transaction commits ---

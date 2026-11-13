@@ -13,6 +13,7 @@ from src.mtgtop8.models import Deck
 from src.mtgtop8.scraper import event_display_name
 
 from api.dependencies import (
+    current_actor,
     optional_admin,
     require_admin,
     require_admin_or_event_edit_deck,
@@ -30,7 +31,7 @@ from api.helpers import (
 )
 from api.schemas.decks import ImportMoxfieldBody, UpdateDeckBody
 from api.schemas.matchups import AdminMatchupsBody
-from api.services import deck_index
+from api.services import change_log, deck_index
 from api.state import (
     _get_deck_by_id,
     _load_decks_from_db,
@@ -506,6 +507,7 @@ def update_deck_endpoint(
     deck_id: int,
     body: UpdateDeckBody,
     role: str = Depends(require_admin_or_event_edit_deck),
+    actor: str = Depends(current_actor),
 ):
     """Update deck metadata. Moving a deck to another event is admin-only."""
     deck_dict = _get_deck_by_id(deck_id)
@@ -590,6 +592,14 @@ def update_deck_endpoint(
                 )
             _db.upsert_deck(session, current, origin=current.get("origin", _db.ORIGIN_MTGTOP8))
         _load_decks_from_db()
+        changed = sorted(body.model_fields_set)
+        change_log.log(
+            actor,
+            "deck.update",
+            f"Edited deck of {current.get('player') or '?'}: {', '.join(changed) or 'no fields'}",
+            event_id=current.get("event_id"),
+            deck_id=deck_id,
+        )
         return {"deck_id": deck_id, "message": "updated"}
     except HTTPException:
         raise
@@ -599,7 +609,8 @@ def update_deck_endpoint(
 
 
 @router.delete("/api/v1/decks/{deck_id}", dependencies=[Depends(require_admin_or_event_edit_deck), Depends(require_database)])
-def delete_deck_endpoint(deck_id: int):
+def delete_deck_endpoint(deck_id: int, actor: str = Depends(current_actor)):
+    deleted_deck = _get_deck_by_id(deck_id) or {}
     """Delete a single deck (admin-only)."""
     try:
         with _db.session_scope() as session:
@@ -607,6 +618,13 @@ def delete_deck_endpoint(deck_id: int):
         if not ok:
             raise HTTPException(status_code=404, detail="Deck not found")
         _load_decks_from_db()
+        change_log.log(
+            actor,
+            "deck.delete",
+            f"Deleted deck of {deleted_deck.get('player') or '?'}",
+            event_id=deleted_deck.get("event_id"),
+            deck_id=deck_id,
+        )
         return {"deck_id": deck_id, "message": "deleted"}
     except HTTPException:
         raise
@@ -639,7 +657,7 @@ def get_deck_matchups(deck_id: int):
 
 
 @router.put("/api/v1/decks/{deck_id}/matchups", dependencies=[Depends(require_admin_or_event_edit_deck), Depends(require_database)])
-def update_deck_matchups(deck_id: int, body: AdminMatchupsBody):
+def update_deck_matchups(deck_id: int, body: AdminMatchupsBody, actor: str = Depends(current_actor)):
     """Replace all matchups for a deck (admin or event-edit)."""
     deck_dict = _get_deck_by_id(deck_id)
     if not deck_dict:
@@ -687,6 +705,13 @@ def update_deck_matchups(deck_id: int, body: AdminMatchupsBody):
             })
         _db.upsert_matchups_for_deck(session, deck_id, matchup_rows)
     _load_decks_from_db()
+    change_log.log(
+        actor,
+        "deck.matchups",
+        f"Replaced matchups of {deck_dict.get('player') or '?'} ({len(body.matchups or [])} row(s))",
+        event_id=deck_dict.get("event_id"),
+        deck_id=deck_id,
+    )
     return {"deck_id": deck_id, "message": "Matchups updated"}
 
 

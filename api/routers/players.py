@@ -34,6 +34,7 @@ from api.schemas.players import (
     PlayerAnalysisResponse,
     PlayerEmailBody,
 )
+from api.services import change_log
 from api.services import settings as settings_service
 from api.state import (
     _load_decks_from_db,
@@ -66,6 +67,12 @@ def put_player_email(body: PlayerEmailBody):
     canonical = _normalize_player(player)
     with _db.session_scope() as session:
         _db.set_player_email(session, canonical, body.email or "")
+    # The address itself is personal data and stays out of the log.
+    change_log.log(
+        change_log.ADMIN,
+        "player.email",
+        f"Email {'set' if (body.email or '').strip() else 'removed'} for {canonical}",
+    )
     return {"ok": True}
 
 

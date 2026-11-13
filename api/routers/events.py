@@ -14,6 +14,7 @@ from src.mtgtop8.normalize import (
 from src.mtgtop8.scraper import event_display_name
 
 from api.dependencies import (
+    current_actor,
     require_admin,
     require_admin_or_event_edit,
     require_database,
@@ -41,6 +42,7 @@ from api.schemas.settings import (
     SendFeedbackLinkToPlayerBody,
 )
 from api.schemas.upload import CreateUploadLinksBody
+from api.services import change_log
 from api.services import hadouken as _hadouken
 from api.services.event_export import build_event_export
 from api.services.event_import import import_event_payload
@@ -111,7 +113,9 @@ def create_event(body: CreateEventBody):
                 location=(body.location or "").strip(),
             )
             _invalidate_events_cache()
-            return EventResponse(**_db.event_row_to_dict(row))
+            created = EventResponse(**_db.event_row_to_dict(row))
+        change_log.log(change_log.ADMIN, "event.create", f"Created event {created.event_name!r}", event_id=created.event_id)
+        return created
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -478,6 +482,7 @@ def export_event(event_id: str, role: str = Depends(require_admin_or_event_edit)
 @router.put("/api/v1/events/{event_id}", dependencies=[Depends(require_admin_or_event_edit), Depends(require_database)])
 def update_event_endpoint(
     event_id: str,
+    actor: str = Depends(current_actor),
     event_name: str | None = Query(None),
     date: str | None = Query(None),
     format_id: str | None = Query(None),
@@ -493,6 +498,7 @@ def update_event_endpoint(
             raise HTTPException(status_code=404, detail="Event not found")
         _load_decks_from_db()
         _invalidate_events_cache()
+        change_log.log(actor, "event.update", "Edited event details", event_id=event_id)
         return {"event_id": event_id, "message": "updated"}
     except HTTPException:
         raise
@@ -513,6 +519,7 @@ def delete_event_endpoint(event_id: str):
             raise HTTPException(status_code=404, detail="Event not found")
         _load_decks_from_db()
         _invalidate_events_cache()
+        change_log.log(change_log.ADMIN, "event.delete", "Deleted event and its decks", event_id=event_id)
         return {"event_id": event_id, "message": "deleted"}
     except HTTPException:
         raise
@@ -541,6 +548,12 @@ def import_event(body: EventExportData):
 
         _load_decks_from_db()
         _invalidate_events_cache()
+        change_log.log(
+            change_log.ADMIN,
+            "event.import",
+            f"Imported event from file with {result['deck_count']} deck(s)",
+            event_id=result["event_id"],
+        )
         return {"event_id": result["event_id"], "message": "imported", "deck_count": result["deck_count"]}
     except HTTPException:
         raise
@@ -711,6 +724,12 @@ def merge_events(body: MergeEventsBody):
         _invalidate_events_cache()
         decks_merged = len(all_pairs)
         decks_moved = len(unpaired_remove_ids)
+        change_log.log(
+            change_log.ADMIN,
+            "event.merge",
+            f"Merged event {remove_row.event_id} into this one ({decks_merged} deck(s) merged, {decks_moved} moved)",
+            event_id=keep_row.event_id,
+        )
         return {
             "message": "Events merged.",
             "keep_event_id": keep_row.event_id,
@@ -770,6 +789,7 @@ async def upload_decks_to_event(
                 _resolve_deck_player(session, d)
                 _db.upsert_deck(session, d, origin=_db.ORIGIN_MANUAL)
         _load_decks_from_db()
+        change_log.log(change_log.ADMIN, "deck.create", f"Uploaded {len(out)} deck(s) from a file", event_id=event_id)
         return {"event_id": event_id, "loaded": len(out), "message": f"Uploaded {len(out)} decks"}
     except Exception as e:
         logger.exception("Upload decks to event failed: %s", e)
@@ -777,7 +797,7 @@ async def upload_decks_to_event(
 
 
 @router.post("/api/v1/events/{event_id}/decks/add", dependencies=[Depends(require_admin_or_event_edit), Depends(require_database)])
-def add_blank_deck_to_event(event_id: str):
+def add_blank_deck_to_event(event_id: str, actor: str = Depends(current_actor)):
     """Add one blank deck to an event (admin-only). One deck per player per event; placeholder player used if blank."""
     with _db.session_scope() as session:
         ev = _db.get_event(session, event_id)
@@ -823,6 +843,7 @@ def add_blank_deck_to_event(event_id: str):
         }
         _db.upsert_deck(session, blank, origin=_db.ORIGIN_MANUAL)
     _load_decks_from_db()
+    change_log.log(actor, "deck.create", "Added a blank deck", event_id=event_id, deck_id=deck_id)
     return {"event_id": event_id, "deck_id": deck_id, "message": "Deck added"}
 
 
@@ -871,6 +892,12 @@ def apply_hadouken_import(event_id: str, body: HadoukenApplyBody):
         raise HTTPException(status_code=400, detail=str(e))
     _load_decks_from_db()
     _invalidate_events_cache()
+    change_log.log(
+        change_log.ADMIN,
+        "event.hadouken",
+        f"Hadouken import: {result.get('decks_created', 0)} deck(s) created, {result.get('matches_imported', 0)} match(es)",
+        event_id=event_id,
+    )
     return result
 
 

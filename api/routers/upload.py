@@ -33,6 +33,7 @@ from api.route_helpers import (
     _is_intentional_draw_result,
     opponent_report_to_prefill,
 )
+from api.services import change_log
 from api.services.rate_limit import RateLimiter, rate_limited
 
 logger = logging.getLogger(__name__)
@@ -272,6 +273,7 @@ def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
         )
         event_name = event_display_name(ev.name, ev.store or "", ev.location or "")
 
+        actor, link_event_id = change_log.link_actor(row), row.event_id
         deck_id = getattr(row, "deck_id", None)
         if deck_id is not None:
             # Update existing deck
@@ -306,6 +308,13 @@ def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
             created = True
     # Reload only after the transaction has committed, so the new deck is visible and the link lock is released.
     _load_decks_from_db()
+    change_log.log(
+        actor,
+        "upload.deck",
+        f"{'Submitted a new deck' if created else 'Updated a deck'} for {(body.player or '').strip() or '?'} through an upload link",
+        event_id=link_event_id,
+        deck_id=deck_id,
+    )
     if not created:
         return {"deck_id": deck_id, "message": "Deck updated successfully"}
     return Response(
@@ -331,6 +340,7 @@ def submit_feedback_with_upload_link(token: str, body: EventFeedbackBody):
             missing_deck_detail="Feedback link has no deck",
             lock=True,
         )
+        actor = change_log.link_actor(row)
         deck_id = row.deck_id
         deck_dict = _get_deck_by_id(deck_id)
         if not deck_dict:
@@ -374,6 +384,13 @@ def submit_feedback_with_upload_link(token: str, body: EventFeedbackBody):
         _db.upsert_matchups_for_deck(session, deck_id, matchup_rows)
         _db.mark_upload_link_used(session, token)
     _load_decks_from_db()
+    change_log.log(
+        actor,
+        "upload.feedback",
+        f"Feedback for {deck_dict.get('player') or '?'}: archetype and {len(matchup_rows)} matchup(s)",
+        event_id=deck_dict.get("event_id"),
+        deck_id=deck_id,
+    )
     return {"deck_id": deck_id, "message": "Feedback submitted successfully"}
 
 
@@ -395,6 +412,7 @@ def submit_decklist_with_upload_link(token: str, body: DeckListBody):
                 missing_deck_detail="No deck linked",
                 lock=True,
             )
+            actor = change_log.link_actor(row)
             deck_id = row.deck_id
             deck_dict = _get_deck_by_id(deck_id)
             if not deck_dict:
@@ -416,4 +434,11 @@ def submit_decklist_with_upload_link(token: str, body: DeckListBody):
         logger.exception("Deck list update failed: %s", e)
         raise HTTPException(status_code=500, detail="Failed to update deck list")
     _load_decks_from_db()
+    change_log.log(
+        actor,
+        "upload.decklist",
+        f"Deck list of {current.get('player') or '?'} replaced through a feedback link",
+        event_id=current.get("event_id"),
+        deck_id=deck_id,
+    )
     return {"deck_id": deck_id, "message": "Deck list updated"}
