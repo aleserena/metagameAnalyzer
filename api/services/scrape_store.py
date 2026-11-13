@@ -35,6 +35,7 @@ def _ensure_event(session, sample: dict, *, refresh: bool) -> None:
             player_count=max(int(sample.get("player_count", 0) or 0), existing.player_count or 0),
             store=store or existing.store,
             location=location or existing.location,
+            respect_manual=True,
         )
 
 
@@ -58,7 +59,8 @@ def persist_scraped_decks(session, deck_dicts: list[dict], *, refresh_events: bo
         try:
             with session.begin_nested():
                 _resolve_deck_player(session, d)
-                _db.upsert_deck(session, d, origin=_db.ORIGIN_MTGTOP8)
+                # Fields a person corrected by hand are left alone, even on a forced re-scrape.
+                _db.upsert_deck(session, d, origin=_db.ORIGIN_MTGTOP8, respect_manual=True)
                 session.flush()
             saved += 1
         except DBAPIError as e:

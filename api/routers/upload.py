@@ -298,7 +298,13 @@ def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
             current["commanders"] = commanders
             deck_list = _normalize_split_cards([current])
             _resolve_deck_player(session, deck_list[0])
-            _db.upsert_deck(session, deck_list[0], origin=current.get("origin", _db.ORIGIN_MANUAL))
+            _db.upsert_deck(
+                session,
+                deck_list[0],
+                origin=current.get("origin", _db.ORIGIN_MANUAL),
+                # The player rewrote the whole deck: a re-scrape must not undo it.
+                manual_fields=("name", "player", "rank", "commanders", "mainboard", "sideboard"),
+            )
             _db.mark_upload_link_used(session, token)
             created = False
         else:
@@ -351,7 +357,14 @@ def submit_feedback_with_upload_link(token: str, body: EventFeedbackBody):
             deck_dict["name"] = (body.deck_name or "").strip()
         if body.rank is not None:
             deck_dict["rank"] = (body.rank or "").strip()
-        _db.upsert_deck(session, deck_dict, origin=deck_dict.get("origin", _db.ORIGIN_MANUAL))
+        reported = ["archetype"]
+        if body.deck_name is not None:
+            reported.append("name")
+        if body.rank is not None:
+            reported.append("rank")
+        _db.upsert_deck(
+            session, deck_dict, origin=deck_dict.get("origin", _db.ORIGIN_MANUAL), manual_fields=reported
+        )
         feedback_event_id = _db._event_id_str(deck_dict.get("event_id", ""))
         matchup_rows = []
         for m in body.matchups or []:
@@ -427,7 +440,12 @@ def submit_decklist_with_upload_link(token: str, body: DeckListBody):
                 and current.get("mainboard")
             ):
                 current["commanders"] = [current["mainboard"][0]["card"]]
-            _db.upsert_deck(session, current, origin=current.get("origin", _db.ORIGIN_MTGTOP8))
+            _db.upsert_deck(
+                session,
+                current,
+                origin=current.get("origin", _db.ORIGIN_MTGTOP8),
+                manual_fields=("commanders", "mainboard", "sideboard"),
+            )
     except HTTPException:
         raise
     except Exception as e:

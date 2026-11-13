@@ -11,6 +11,7 @@ import math
 import os
 import re
 import unicodedata
+from collections.abc import Iterable
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -450,9 +451,33 @@ def _sync_deck_row_player_denorm(session: Session, row: DeckRow) -> None:
         row.player = (prow.display_name or "").strip()
 
 
-def upsert_deck(session: Session, d: dict, origin: str = ORIGIN_MTGTOP8) -> DeckRow:
+# Fields a person can correct by hand; a re-scrape leaves the ones listed in ``manual_fields`` alone.
+DECK_MANUAL_FIELDS = ("name", "player", "rank", "archetype", "commanders", "mainboard", "sideboard")
+EVENT_MANUAL_FIELDS = ("name", "date", "format_id", "store", "location")
+
+
+def _merge_manual_fields(row, new_fields, allowed: tuple[str, ...]) -> None:
+    """Add ``new_fields`` (only names in ``allowed``) to ``row.manual_fields``, kept sorted."""
+    marked = set(row.manual_fields or []) | {f for f in (new_fields or ()) if f in allowed}
+    if marked != set(row.manual_fields or []):
+        row.manual_fields = sorted(marked)
+
+
+def upsert_deck(
+    session: Session,
+    d: dict,
+    origin: str = ORIGIN_MTGTOP8,
+    *,
+    manual_fields: Iterable[str] = (),
+    respect_manual: bool = False,
+) -> DeckRow:
     """Insert or update a deck by deck_id. For scrape duplicate protection (re-scrape same event = update).
-    If d does not contain player_id, resolves d['player'] to player_id (get_or_create) and sets d['player_id'], d['player']."""
+    If d does not contain player_id, resolves d['player'] to player_id (get_or_create) and sets d['player_id'], d['player'].
+
+    ``manual_fields``: names (from DECK_MANUAL_FIELDS) a person just edited; they are remembered on the row,
+    whether or not the value changed. Pass it from hand-edit paths (admin or link edits).
+    ``respect_manual``: leave remembered fields untouched. Pass it from the scrape path, and nowhere else.
+    """
     if "player_id" not in d:
         name = (d.get("player") or "").strip() or "(unknown)"
         pid, display = resolve_name_to_player_id(session, name)
@@ -476,20 +501,29 @@ def upsert_deck(session: Session, d: dict, origin: str = ORIGIN_MTGTOP8) -> Deck
         norm_arch = _normalize_archetype_or_commander_display(str(arch_src))
 
     if row:
+        kept = set(row.manual_fields or []) if respect_manual else set()
         row.event_id = _event_id_str(d.get("event_id", row.event_id))
         row.format_id = d.get("format_id", row.format_id)
-        row.name = d.get("name", row.name)
-        if "player_id" in d:
-            row.player_id = d["player_id"]
-        row.player = d.get("player", row.player)
+        if "name" not in kept:
+            row.name = d.get("name", row.name)
+        if "player" not in kept:
+            if "player_id" in d:
+                row.player_id = d["player_id"]
+            row.player = d.get("player", row.player)
         row.event_name = d.get("event_name", row.event_name)
         row.date = d.get("date", row.date)
-        row.rank = d.get("rank", row.rank)
+        if "rank" not in kept:
+            row.rank = d.get("rank", row.rank)
         row.player_count = int(d.get("player_count", row.player_count))
-        row.commanders = norm_cmd
-        row.archetype = norm_arch
-        row.mainboard = mainboard
-        row.sideboard = sideboard
+        if "commanders" not in kept:
+            row.commanders = norm_cmd
+        if "archetype" not in kept:
+            row.archetype = norm_arch
+        if "mainboard" not in kept:
+            row.mainboard = mainboard
+        if "sideboard" not in kept:
+            row.sideboard = sideboard
+        _merge_manual_fields(row, manual_fields, DECK_MANUAL_FIELDS)
         _sync_deck_row_player_denorm(session, row)
         return row
     row = DeckRow(
@@ -509,6 +543,7 @@ def upsert_deck(session: Session, d: dict, origin: str = ORIGIN_MTGTOP8) -> Deck
         mainboard=mainboard,
         sideboard=sideboard,
     )
+    _merge_manual_fields(row, manual_fields, DECK_MANUAL_FIELDS)
     session.add(row)
     _sync_deck_row_player_denorm(session, row)
     return row
@@ -767,23 +802,33 @@ def update_event(
     player_count: int | None = None,
     store: str | None = None,
     location: str | None = None,
+    *,
+    manual_fields: Iterable[str] = (),
+    respect_manual: bool = False,
 ) -> bool:
+    """Update the given event fields (None = leave alone) and copy them onto the event's decks.
+
+    ``manual_fields`` / ``respect_manual`` work as in :func:`upsert_deck`, over EVENT_MANUAL_FIELDS
+    (the event's name is the field ``"name"``).
+    """
     eid = _event_id_str(event_id)
     row = session.query(EventRow).filter(EventRow.event_id == eid).first()
     if not row:
         return False
-    if event_name is not None:
+    kept = set(row.manual_fields or []) if respect_manual else set()
+    if event_name is not None and "name" not in kept:
         row.name = event_name
-    if date is not None:
+    if date is not None and "date" not in kept:
         row.date = date
-    if format_id is not None:
+    if format_id is not None and "format_id" not in kept:
         row.format_id = format_id
     if player_count is not None:
         row.player_count = player_count
-    if store is not None:
+    if store is not None and "store" not in kept:
         row.store = store
-    if location is not None:
+    if location is not None and "location" not in kept:
         row.location = location
+    _merge_manual_fields(row, manual_fields, EVENT_MANUAL_FIELDS)
     sync_decks_with_event(session, eid)
     return True
 
