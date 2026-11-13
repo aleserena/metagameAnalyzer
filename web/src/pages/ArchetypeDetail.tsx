@@ -360,10 +360,10 @@ export default function ArchetypeDetail() {
                   <YAxis width={30} fontSize={11} tick={{ fill: 'var(--text-muted)' }} domain={[0, 'auto']} />
                   <Tooltip
                     contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)' }}
-                    formatter={(value: number, _name, ctx: { payload?: { archetype_decks?: number; total_decks?: number } }) => [
-                      `${value}% (${ctx.payload?.archetype_decks ?? 0}/${ctx.payload?.total_decks ?? 0})`,
-                      'Share',
-                    ]}
+                    formatter={(value, _name, ctx) => {
+                      const p = ctx.payload as { archetype_decks?: number; total_decks?: number } | undefined
+                      return [`${value}% (${p?.archetype_decks ?? 0}/${p?.total_decks ?? 0})`, 'Share']
+                    }}
                     labelFormatter={(l) => `Week of ${l}`}
                   />
                   <Line type="monotone" dataKey="share_pct" stroke="var(--accent)" strokeWidth={2} dot={{ r: 2 }} name="Share %" />
@@ -380,10 +380,10 @@ export default function ArchetypeDetail() {
                   <YAxis width={30} fontSize={11} tick={{ fill: 'var(--text-muted)' }} domain={[0, 100]} />
                   <Tooltip
                     contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)' }}
-                    formatter={(value: number, _name, ctx: { payload?: { archetype_top8?: number; archetype_decks?: number } }) => [
-                      `${value}% (${ctx.payload?.archetype_top8 ?? 0}/${ctx.payload?.archetype_decks ?? 0})`,
-                      'Top-8 rate',
-                    ]}
+                    formatter={(value, _name, ctx) => {
+                      const p = ctx.payload as { archetype_top8?: number; archetype_decks?: number } | undefined
+                      return [`${value}% (${p?.archetype_top8 ?? 0}/${p?.archetype_decks ?? 0})`, 'Top-8 rate']
+                    }}
                     labelFormatter={(l) => `Week of ${l}`}
                   />
                   <Line type="monotone" dataKey="top8_rate_pct" stroke="#22c55e" strokeWidth={2} dot={{ r: 2 }} name="Top-8 %" />
@@ -621,7 +621,7 @@ export default function ArchetypeDetail() {
                 <YAxis width={28} tick={{ fill: 'var(--text-muted)' }} />
                 <Tooltip
                   contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)' }}
-                  formatter={(value: number, _name, ctx: { payload?: { label?: string } }) => [`${value} pips`, ctx.payload?.label ?? '']}
+                  formatter={(value, _name, ctx) => [`${value} pips`, (ctx.payload as { label?: string } | undefined)?.label ?? '']}
                 />
                 <Bar dataKey="pips" name="Avg pips">
                   {manaPipsData.map((d) => (
