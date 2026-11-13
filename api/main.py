@@ -251,22 +251,33 @@ def get_info():
 # data changes.
 
 
-# Serve built frontend (production); static dir is populated by Dockerfile
-STATIC_DIR = _project_root / "static"
-if STATIC_DIR.exists():
-    app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
-    _index_path = STATIC_DIR / "index.html"
+# Serve built frontend (production); static dir is populated by Dockerfile.
+# index.html names the hashed chunk files of the current build; the previous
+# build's chunks are gone after a deploy, so the browser must revalidate
+# index.html on every load instead of reusing a stale copy (the frontend also
+# reloads once when a lazy chunk 404s, see web/src/lib/chunkReload.ts).
+_INDEX_HEADERS = {"Cache-Control": "no-cache"}
+
+
+def mount_spa(app: FastAPI, static_dir: Path) -> None:
+    app.mount("/assets", StaticFiles(directory=static_dir / "assets"), name="assets")
+    index_path = static_dir / "index.html"
 
     @app.get("/", include_in_schema=False)
     def serve_index():
-        if _index_path.exists():
-            return FileResponse(_index_path)
+        if index_path.exists():
+            return FileResponse(index_path, headers=_INDEX_HEADERS)
         raise StarletteHTTPException(status_code=404)
 
     @app.get("/{full_path:path}", include_in_schema=False)
     def serve_spa(full_path: str):
         if full_path.startswith("api/") or full_path.startswith("assets/"):
             raise StarletteHTTPException(status_code=404)
-        if _index_path.exists():
-            return FileResponse(_index_path)
+        if index_path.exists():
+            return FileResponse(index_path, headers=_INDEX_HEADERS)
         raise StarletteHTTPException(status_code=404)
+
+
+STATIC_DIR = _project_root / "static"
+if STATIC_DIR.exists():
+    mount_spa(app, STATIC_DIR)

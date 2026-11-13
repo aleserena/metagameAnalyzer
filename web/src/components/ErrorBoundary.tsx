@@ -1,6 +1,7 @@
 import { Component, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { getErrorMessage } from '../utils'
+import { isChunkLoadError } from '../lib/chunkReload'
 
 interface Props {
   children: ReactNode
@@ -27,6 +28,21 @@ export default class ErrorBoundary extends Component<Props, State> {
 
   render() {
     if (this.state.hasError && this.state.error) {
+      if (isChunkLoadError(this.state.error)) {
+        // The page was opened before a deploy and its code files are gone;
+        // re-rendering cannot help (React.lazy keeps the failed import), a reload can.
+        return (
+          <div className="chart-container" style={{ textAlign: 'center', padding: '3rem 2rem', maxWidth: 520, margin: '2rem auto' }}>
+            <h2 style={{ margin: '0 0 1rem', color: 'var(--text)' }}>A new version is available</h2>
+            <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem', fontSize: '0.95rem' }}>
+              The site was updated since this page was opened. Reload to continue.
+            </p>
+            <button type="button" className="btn" onClick={() => window.location.reload()}>
+              Reload
+            </button>
+          </div>
+        )
+      }
       return (
         <div className="chart-container" style={{ textAlign: 'center', padding: '3rem 2rem', maxWidth: 520, margin: '2rem auto' }}>
           <h2 style={{ margin: '0 0 1rem', color: 'var(--text)' }}>Something went wrong</h2>

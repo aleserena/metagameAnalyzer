@@ -3,26 +3,27 @@ import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import Layout from './components/Layout'
 import ErrorBoundary from './components/ErrorBoundary'
 import AdminGuard from './components/AdminGuard'
+import { importWithReload } from './lib/chunkReload'
 
-const Dashboard = lazy(() => import('./pages/Dashboard'))
-const Events = lazy(() => import('./pages/Events'))
-const EventDetail = lazy(() => import('./pages/EventDetail'))
-const Metagame = lazy(() => import('./pages/Metagame'))
-const Decks = lazy(() => import('./pages/Decks'))
-const DeckDetail = lazy(() => import('./pages/DeckDetail'))
-const DeckCompare = lazy(() => import('./pages/DeckCompare'))
-const Archetypes = lazy(() => import('./pages/Archetypes'))
-const ArchetypeDetail = lazy(() => import('./pages/ArchetypeDetail'))
-const Matchups = lazy(() => import('./pages/Matchups'))
-const Players = lazy(() => import('./pages/Players'))
-const PlayerDetail = lazy(() => import('./pages/PlayerDetail'))
-const Scrape = lazy(() => import('./pages/Scrape'))
-const Settings = lazy(() => import('./pages/Settings'))
-const Login = lazy(() => import('./pages/Login'))
-const UploadDeck = lazy(() => import('./pages/UploadDeck'))
-const Feedback = lazy(() => import('./pages/Feedback'))
-const Privacy = lazy(() => import('./pages/Privacy'))
-const CommanderDetail = lazy(() => import('./pages/CommanderDetail'))
+const Dashboard = lazy(() => importWithReload(() => import('./pages/Dashboard')))
+const Events = lazy(() => importWithReload(() => import('./pages/Events')))
+const EventDetail = lazy(() => importWithReload(() => import('./pages/EventDetail')))
+const Metagame = lazy(() => importWithReload(() => import('./pages/Metagame')))
+const Decks = lazy(() => importWithReload(() => import('./pages/Decks')))
+const DeckDetail = lazy(() => importWithReload(() => import('./pages/DeckDetail')))
+const DeckCompare = lazy(() => importWithReload(() => import('./pages/DeckCompare')))
+const Archetypes = lazy(() => importWithReload(() => import('./pages/Archetypes')))
+const ArchetypeDetail = lazy(() => importWithReload(() => import('./pages/ArchetypeDetail')))
+const Matchups = lazy(() => importWithReload(() => import('./pages/Matchups')))
+const Players = lazy(() => importWithReload(() => import('./pages/Players')))
+const PlayerDetail = lazy(() => importWithReload(() => import('./pages/PlayerDetail')))
+const Scrape = lazy(() => importWithReload(() => import('./pages/Scrape')))
+const Settings = lazy(() => importWithReload(() => import('./pages/Settings')))
+const Login = lazy(() => importWithReload(() => import('./pages/Login')))
+const UploadDeck = lazy(() => importWithReload(() => import('./pages/UploadDeck')))
+const Feedback = lazy(() => importWithReload(() => import('./pages/Feedback')))
+const Privacy = lazy(() => importWithReload(() => import('./pages/Privacy')))
+const CommanderDetail = lazy(() => importWithReload(() => import('./pages/CommanderDetail')))
 
 function routeElement(element: ReactElement) {
   return <Suspense fallback={<div className="loading">Loading...</div>}>{element}</Suspense>
