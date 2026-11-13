@@ -37,6 +37,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Session, aliased, declarative_base, sessionmaker, validates
 
+from api.brackets import STRUCTURE_SWISS, is_single_elimination
 from api.dates import format_ddmmyy, parse_ddmmyy
 from api.results import COUNTED_RESULTS, effective_wld, invert_result
 
@@ -85,6 +86,9 @@ class EventRow(_TextDateMixin, Base):
     location = Column(String(512), nullable=False, default="")
     event_date = Column(Date, nullable=True, index=True)  # the only stored date; `date` is its DD/MM/YY view
     player_count = Column(Integer, nullable=False, default=0)  # number of players in the event
+    # 'swiss' (or NULL: Swiss + Top 8) | 'single_elimination' (bracket only); see api/brackets.py
+    structure = Column(String(32), nullable=True)
+    bracket_size = Column(Integer, nullable=True)  # players in the bracket; only used for single elimination
     # Field names edited by hand (see EVENT_MANUAL_FIELDS); a re-scrape leaves them alone. NULL = never edited.
     manual_fields = Column(JSONB, nullable=True)
 
@@ -626,6 +630,8 @@ def event_row_to_dict(row: EventRow) -> dict:
         "format_id": row.format_id,
         "player_count": row.player_count or 0,
         "origin": row.origin or ORIGIN_MTGTOP8,
+        "structure": row.structure or STRUCTURE_SWISS,
+        "bracket_size": row.bracket_size if is_single_elimination(row.structure) else None,
     }
 
 
@@ -781,7 +787,10 @@ def create_event(
     player_count: int = 0,
     store: str = "",
     location: str = "",
+    structure: str | None = None,
+    bracket_size: int | None = None,
 ) -> EventRow:
+    """Create an event. ``structure``/``bracket_size`` are stored as given (callers validate them)."""
     if event_id is None and origin == ORIGIN_MANUAL:
         event_id = next_manual_event_id(session)
     elif event_id is None:
@@ -796,6 +805,8 @@ def create_event(
         location=location or "",
         date=date or "",
         player_count=player_count or 0,
+        structure=structure,
+        bracket_size=bracket_size,
     )
     session.add(row)
     return row
@@ -815,6 +826,8 @@ def update_event(
     store: str | None = None,
     location: str | None = None,
     *,
+    structure: str | None = None,
+    bracket_size: int | None = None,
     manual_fields: Iterable[str] = (),
     respect_manual: bool = False,
 ) -> bool:
@@ -822,6 +835,8 @@ def update_event(
 
     ``manual_fields`` / ``respect_manual`` work as in :func:`upsert_deck`, over EVENT_MANUAL_FIELDS
     (the event's name is the field ``"name"``): only details whose value changes are marked.
+    When ``structure`` is given, ``structure`` and ``bracket_size`` are both set (validate them first
+    with ``api.brackets.validate_structure``); when it is None both are left alone.
     """
     eid = _event_id_str(event_id)
     row = session.query(EventRow).filter(EventRow.event_id == eid).first()
@@ -846,6 +861,9 @@ def update_event(
         row.store = store
     if location is not None and "location" not in kept:
         row.location = location
+    if structure is not None:
+        row.structure = structure
+        row.bracket_size = bracket_size
     _merge_manual_fields(row, hand_edited, EVENT_MANUAL_FIELDS)
     sync_decks_with_event(session, eid)
     return True
