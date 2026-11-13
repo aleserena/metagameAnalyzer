@@ -70,3 +70,29 @@ def test_renumber_is_idempotent(db_session_rollback):
     seed_bracket(session, EID, 8, BASE, structure=None, stored_round=_scrambled)
     apply_renumber(session, EID, 8, plan_renumber(session, EID, 8))
     assert plan_renumber(session, EID, 8).changes == []
+
+
+def test_second_apply_writes_nothing(db_session_rollback):
+    """A second run on an already-fixed event takes no snapshot and does not touch the event."""
+    from scripts.renumber_single_elim_rounds import needs_renumber
+
+    session = db_session_rollback
+    seed_bracket(session, EID, 8, BASE, structure=None, stored_round=_scrambled)
+    plan = plan_renumber(session, EID, 8)
+    assert needs_renumber(session, EID, 8, plan)
+    apply_renumber(session, EID, 8, plan)
+    snapshots = session.query(EventSnapshotRow).filter(EventSnapshotRow.event_id == EID).count()
+    again = plan_renumber(session, EID, 8)
+    assert not needs_renumber(session, EID, 8, again)
+    assert apply_renumber(session, EID, 8, again) == 0
+    assert session.query(EventSnapshotRow).filter(EventSnapshotRow.event_id == EID).count() == snapshots
+
+
+def test_already_renumbered_rounds_but_swiss_event_still_needs_the_structure(db_session_rollback):
+    from scripts.renumber_single_elim_rounds import needs_renumber
+
+    session = db_session_rollback
+    seed_bracket(session, EID, 8, BASE, structure=None)  # rounds already right, structure still Swiss
+    plan = plan_renumber(session, EID, 8)
+    assert plan.changes == []
+    assert needs_renumber(session, EID, 8, plan)

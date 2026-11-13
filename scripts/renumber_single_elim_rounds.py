@@ -102,15 +102,26 @@ def plan_renumber(session, event_id: str, bracket_size: int) -> RenumberPlan:
     return plan
 
 
+def needs_renumber(session, event_id: str, bracket_size: int, plan: RenumberPlan) -> bool:
+    """True when applying the plan would change something: rounds to write, or the structure not yet set."""
+    if plan.changes:
+        return True
+    row = _db.get_event(session, event_id)
+    return row is None or row.structure != STRUCTURE_SINGLE_ELIM or row.bracket_size != bracket_size
+
+
 def apply_renumber(session, event_id: str, bracket_size: int, plan: RenumberPlan) -> int:
     """Snapshot the event, mark it single elimination and write the planned rounds. Returns rows changed.
 
-    Raises ValueError (changing nothing) when the plan has errors. The caller commits."""
+    Does nothing (no snapshot, returns 0) when the event is already in that state. Raises ValueError
+    (changing nothing) when the plan has errors. The caller commits."""
     from api.services.snapshots import REASON_RENUMBER_ROUNDS, take_snapshot
 
     if plan.errors:
         raise ValueError(f"Event {event_id}: not renumbered, the data contradicts the bracket: " + "; ".join(plan.errors))
     eid = _db._event_id_str(event_id)
+    if not needs_renumber(session, eid, bracket_size, plan):
+        return 0
     take_snapshot(session, eid, REASON_RENUMBER_ROUNDS)
     structure, size = validate_structure(STRUCTURE_SINGLE_ELIM, bracket_size)
     _db.update_event(session, eid, structure=structure, bracket_size=size)
@@ -165,6 +176,10 @@ def main() -> None:
             if plan.errors:
                 print("  Nothing changed for this event.")
                 session.rollback()
+                continue
+            if not needs_renumber(session, event_id, args.bracket_size, plan):
+                session.rollback()
+                print("  Already single elimination with these rounds: nothing to do.")
                 continue
             if args.dry_run:
                 session.rollback()
