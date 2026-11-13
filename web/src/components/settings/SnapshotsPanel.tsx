@@ -10,6 +10,7 @@ const REASON_LABELS: Record<string, string> = {
   clear_decks: 'Before clearing all decks',
   rescrape: 'Before re-scrape',
   before_restore: 'Before a restore',
+  renumber_rounds: 'Before renumbering bracket rounds',
 }
 
 function when(iso: string | null): string {

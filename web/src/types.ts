@@ -242,7 +242,13 @@ export interface Event {
   player_count?: number  // number of players in the event
   /** 'mtgtop8' | 'manual' — used for merge rules (cannot merge two mtgtop8) */
   origin?: 'mtgtop8' | 'manual'
+  /** 'swiss' = Swiss rounds + Top 8; 'single_elimination' = bracket only (see api/brackets.py) */
+  structure?: EventStructure
+  /** Players in the bracket; set only for single elimination */
+  bracket_size?: number | null
 }
+
+export type EventStructure = 'swiss' | 'single_elimination'
 
 /** How a Hadouken player was matched to an event deck: 'none' means a blank deck will be created. */
 export type HadoukenMatchKind = 'player' | 'reordered' | 'partial' | 'none'

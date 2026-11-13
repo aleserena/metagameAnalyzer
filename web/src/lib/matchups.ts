@@ -230,11 +230,103 @@ export function phasesToApiMatchups(
     if (!(m.opponent_player || '').trim() && !isBye(m.result) && !isDrop(m.result)) continue
     top8Index += 1
     out.push({
-      opponent_player: (m.opponent_player || '').trim(),
+      opponent_player: isBye(m.result) || isDrop(m.result) ? '' : (m.opponent_player || '').trim(),
       result: m.result || 'draw',
       round: swissRounds + top8Index,
     })
   }
+  return out
+}
+
+// --- Single-elimination brackets (mirrors api/brackets.py; keep the two in step) ---
+
+export const BRACKET_SIZES = [2, 4, 8, 16, 32, 64, 128] as const
+
+/** Rounds in a bracket: 16 players -> 4. */
+export function bracketRounds(size: number): number {
+  return size > 0 ? Math.floor(Math.log2(size)) : 0
+}
+
+const RANK_BANDS = [1, 2, 4, 8, 16, 32, 64, 128]
+
+/** Upper bound of the rank's band ('1' -> 1, '3-4' -> 4, '7' -> 8), as analyzer.normalize_rank; null when none. */
+export function rankBandUpper(rank: string | null | undefined): number | null {
+  const r = (rank || '').trim()
+  const band = /^(\d+)-(\d+)$/.exec(r)
+  if (band) {
+    const upper = parseInt(band[2], 10)
+    return RANK_BANDS.includes(upper) && upper > 2 && parseInt(band[1], 10) === upper / 2 + 1 ? upper : null
+  }
+  if (!/^\d+$/.test(r)) return null
+  const n = parseInt(r, 10)
+  return RANK_BANDS.find((u) => n <= u && n >= 1) ?? null
+}
+
+/** Matches a deck with this rank played in the bracket: 0 outside it, 1 when the rank is unknown. */
+export function expectedBracketMatches(rank: string | null | undefined, size: number): number {
+  const upper = rankBandUpper(rank)
+  const rounds = bracketRounds(size)
+  if (upper == null) return 1
+  if (upper > size) return 0
+  return Math.min(rounds, rounds - bracketRounds(upper) + 1)
+}
+
+/** 'Round of 16', 'Quarterfinal', 'Semifinal', 'Final' for bracket round `round` (1-based). */
+export function bracketRoundLabel(round: number, size: number): string {
+  const left = size / 2 ** (round - 1)
+  if (left === 2) return 'Final'
+  if (left === 4) return 'Semifinal'
+  if (left === 8) return 'Quarterfinal'
+  return `Round of ${left}`
+}
+
+function emptyBracketRow(): MatchupRow {
+  return { opponent_player: '', result: 'draw', intentional_draw: false, phase: 'top8' }
+}
+
+/**
+ * Bracket editor rows: slot i is round i + 1. A stored row goes to its round's slot; rows without a usable
+ * round (byes or upload-link rows saved without one, clashes) fill the free slots in API order. Reports
+ * against me are added only for opponents I have not reported myself. Rows that do not fit stay as extra
+ * rows after the last round, so nothing stored is dropped. Always at least `rounds` rows.
+ */
+export function apiMatchupsToBracketSlots(
+  ourMatchups: ApiMatchupItem[],
+  rounds: number,
+  reportedAgainstMe: ApiMatchupItem[] = []
+): MatchupRow[] {
+  const slots: (MatchupRow | null)[] = Array.from({ length: rounds }, () => null)
+  const unplaced: MatchupRow[] = []
+  const place = (row: MatchupRow, round: number | null | undefined) => {
+    if (round != null && round >= 1 && round <= rounds && slots[round - 1] == null) slots[round - 1] = row
+    else unplaced.push(row)
+  }
+  const ownNames = new Set<string>()
+  for (const m of ourMatchups) {
+    const row = { ...matchupItemToRow(m), phase: 'top8' as const }
+    if (row.opponent_player && !isBye(row.result) && !isDrop(row.result)) ownNames.add(row.opponent_player.toLowerCase())
+    place(row, m.round)
+  }
+  for (const m of reportedAgainstMe) {
+    const row = { ...matchupItemToRow(m), phase: 'top8' as const }
+    if (!row.opponent_player || isBye(row.result) || isDrop(row.result)) continue
+    const key = row.opponent_player.toLowerCase()
+    if (ownNames.has(key)) continue
+    ownNames.add(key)
+    place(row, m.round)
+  }
+  const filled = slots.map((s) => s ?? unplaced.shift() ?? emptyBracketRow())
+  return [...filled, ...unplaced]
+}
+
+/** Bracket rows to API payload: row i is round i + 1; blank rows are skipped (gaps stay gaps). */
+export function bracketSlotsToApiMatchups(rows: MatchupRow[]): ApiMatchupPayload[] {
+  const out: ApiMatchupPayload[] = []
+  rows.forEach((m, i) => {
+    const special = isBye(m.result) || isDrop(m.result)
+    if (!(m.opponent_player || '').trim() && !special) return
+    out.push({ opponent_player: special ? '' : (m.opponent_player || '').trim(), result: m.result || 'draw', round: i + 1 })
+  })
   return out
 }
 

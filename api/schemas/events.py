@@ -10,6 +10,8 @@ class EventResponse(BaseModel):
     format_id: str
     player_count: int = 0
     origin: str = "mtgtop8"  # 'mtgtop8' | 'manual' for merge rules and UI
+    structure: str = "swiss"  # 'swiss' | 'single_elimination' (see api/brackets.py)
+    bracket_size: int | None = None  # bracket players; set only for single elimination
 
 
 class CreateEventBody(BaseModel):
@@ -20,6 +22,8 @@ class CreateEventBody(BaseModel):
     event_id: int | str | None = None  # optional; manual gets m1, m2, ... if omitted
     store: str = ""
     location: str = ""
+    structure: str = "swiss"
+    bracket_size: int | None = None
 
 
 class UploadDecksBody(BaseModel):

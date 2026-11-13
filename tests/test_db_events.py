@@ -233,3 +233,43 @@ def test_migration_018_refuses_to_drop_an_unparseable_or_out_of_range_date(db_se
     assert "cannot be parsed" in message and "'junk'" in message
     assert "outside 2000-2099" in message
     assert date(1999, 3, 5) == mod._parse("05/03/1999")
+
+
+def test_event_structure_defaults_to_swiss(db_session_rollback):
+    from api.db import event_row_to_dict
+
+    session = db_session_rollback
+    row = create_event(session, "Plain", "01/01/25", "EDH", event_id="test_ev_struct_1", player_count=8)
+    session.flush()
+    d = event_row_to_dict(row)
+    assert d["structure"] == "swiss"
+    assert d["bracket_size"] is None
+
+
+def test_update_event_sets_structure(db_session_rollback):
+    from api.db import event_row_to_dict, get_event
+
+    session = db_session_rollback
+    create_event(session, "Bracket", "01/01/25", "EDH", event_id="test_ev_struct_2", player_count=44)
+    session.flush()
+    update_event(session, "test_ev_struct_2", structure="single_elimination", bracket_size=16)
+    session.flush()
+    d = event_row_to_dict(get_event(session, "test_ev_struct_2"))
+    assert (d["structure"], d["bracket_size"]) == ("single_elimination", 16)
+    update_event(session, "test_ev_struct_2", event_name="Renamed")
+    session.flush()
+    d = event_row_to_dict(get_event(session, "test_ev_struct_2"))
+    assert (d["structure"], d["bracket_size"]) == ("single_elimination", 16)
+
+
+def test_create_event_with_structure(db_session_rollback):
+    from api.db import event_row_to_dict
+
+    session = db_session_rollback
+    row = create_event(
+        session, "SE", "01/01/25", "EDH", event_id="test_ev_struct_3", player_count=39,
+        structure="single_elimination", bracket_size=16,
+    )
+    session.flush()
+    d = event_row_to_dict(row)
+    assert (d["structure"], d["bracket_size"], d["player_count"]) == ("single_elimination", 16, 39)

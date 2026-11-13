@@ -28,13 +28,14 @@ import {
   getCardLookup,
 } from '../api'
 import type { EventWithOrigin } from '../api'
-import type { Deck } from '../types'
+import type { Deck, EventStructure } from '../types'
 import { useAuth } from '../contexts/AuthContext'
 import { useFetch } from '../hooks/useFetch'
 import Modal from '../components/Modal'
 import UpdateDeckForm from '../components/event/UpdateDeckForm'
 import UploadDeckForm from '../components/event/UploadDeckForm'
 import MatchupsForm from '../components/event/MatchupsForm'
+import EventStructureFields from '../components/event/EventStructureFields'
 import HadoukenImportModal from '../components/event/HadoukenImportModal'
 import PageError from '../components/PageError'
 import PageSkeleton from '../components/PageSkeleton'
@@ -43,7 +44,11 @@ import { parseMoxfieldDeckList, formatMoxfieldDeckList } from '../lib/deckListPa
 import { defaultDeckEdit, getEDHArchetype, normalizeDeckListByLookup, type BulkDeckEdit } from '../lib/deckUtils'
 import { cellStr } from '../lib/eventTable'
 import {
+  apiMatchupsToBracketSlots,
   apiMatchupsToPhases,
+  bracketRounds,
+  bracketSlotsToApiMatchups,
+  expectedBracketMatches,
   isTop8Rank,
   MAX_MATCHUPS_TOTAL,
   MAX_TOP8_MATCHUP_ROWS,
@@ -76,6 +81,7 @@ export default function EventDetail() {
     [eventId ?? '']
   )
   const event = data?.event ?? null
+  const isSingleElim = event?.structure === 'single_elimination' && !!event?.bracket_size
   const decks = data?.decks ?? []
   const isEDH = (event?.format_id ?? '').toLowerCase() === 'edh' || (event?.format_id ?? '').toLowerCase() === 'commander'
   const [editing, setEditing] = useState(false)
@@ -85,6 +91,8 @@ export default function EventDetail() {
   const [editDate, setEditDate] = useState('')
   const [editFormatId, setEditFormatId] = useState('')
   const [editPlayerCount, setEditPlayerCount] = useState(0)
+  const [editStructure, setEditStructure] = useState<EventStructure>('swiss')
+  const [editBracketSize, setEditBracketSize] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
   const [addDecksCount, setAddDecksCount] = useState(1)
   const [addingDecks, setAddingDecks] = useState(false)
@@ -191,14 +199,16 @@ export default function EventDetail() {
       editLocation !== (event.location ?? '') ||
       editDate !== (event.date || '') ||
       editFormatId !== (event.format_id || '') ||
-      editPlayerCount !== (event.player_count ?? 0)
+      editPlayerCount !== (event.player_count ?? 0) ||
+      editStructure !== (event.structure ?? 'swiss') ||
+      (editStructure === 'single_elimination' && editBracketSize !== (event.bracket_size ?? null))
     ) return true
     return decks.some((d) => {
       const current = bulkDeckEdits[d.deck_id] ?? defaultDeckEdit(d)
       const def = defaultDeckEdit(d)
       return current.name !== def.name || current.player !== def.player || current.rank !== def.rank || current.archetype !== def.archetype
     })
-  }, [editing, event, editName, editStore, editLocation, editDate, editFormatId, editPlayerCount, decks, bulkDeckEdits])
+  }, [editing, event, editName, editStore, editLocation, editDate, editFormatId, editPlayerCount, editStructure, editBracketSize, decks, bulkDeckEdits])
 
   const deckBeingEdited = editingDeckId != null ? decks.find((d) => d.deck_id === editingDeckId) : null
   const deckModalDirty = useMemo(() => {
@@ -251,6 +261,8 @@ export default function EventDetail() {
       setEditDate(event.date || '')
       setEditFormatId(event.format_id || '')
       setEditPlayerCount(event.player_count ?? 0)
+      setEditStructure(event.structure ?? 'swiss')
+      setEditBracketSize(event.bracket_size ?? null)
       setEditing(true)
     }
   }
@@ -290,6 +302,8 @@ export default function EventDetail() {
         player_count: editPlayerCount,
         store: editStore,
         location: editLocation,
+        structure: editStructure,
+        bracket_size: editStructure === 'single_elimination' ? editBracketSize : null,
       })
       if (decks.length > 0) {
         const deckPromises = decks.map((d) => {
@@ -527,10 +541,14 @@ export default function EventDetail() {
     }
   }
 
+  /** Single-elimination event: matchups are bracket rounds 1..n, no Swiss rounds. */
+  const bracketSize = isSingleElim ? event?.bracket_size ?? null : null
+
   const matchupsSwissRounds = useMemo(() => {
+    if (bracketSize) return 0
     const n = event?.player_count ?? decks.length
     return swissRoundsForPlayerCount(n)
-  }, [event?.player_count, decks.length])
+  }, [bracketSize, event?.player_count, decks.length])
 
   const matchupsShowTop8 = useMemo(() => {
     if (matchupsDeckId == null) return false
@@ -538,15 +556,28 @@ export default function EventDetail() {
     return deck ? isTop8Rank(deck.rank) : false
   }, [matchupsDeckId, decks])
 
+  const matchupsExpected = useMemo(() => {
+    if (!bracketSize || matchupsDeckId == null) return null
+    const deck = decks.find((d) => d.deck_id === matchupsDeckId)
+    return deck ? expectedBracketMatches(deck.rank, bracketSize) : null
+  }, [bracketSize, matchupsDeckId, decks])
+
   const openUpdateMatchupsModal = (deckId: number) => {
     setMatchupsDeckId(deckId)
     setSwissMatchups([])
     setTop8Matchups([])
     setLoadingMatchups(true)
-    const playerCount = event?.player_count ?? decks.length
-    const swissRounds = swissRoundsForPlayerCount(playerCount)
+    const swissRounds = matchupsSwissRounds
     getDeckMatchups(deckId)
       .then((res) => {
+        if (bracketSize) {
+          // Bracket only: one fixed row per round, each stored row in the round it was saved in.
+          setSwissMatchups([])
+          setTop8Matchups(
+            apiMatchupsToBracketSlots(res.matchups || [], bracketRounds(bracketSize), res.opponent_reported_matchups || [])
+          )
+          return
+        }
         const { swiss, top8 } = apiMatchupsToPhases(
           res.matchups || [],
           swissRounds,
@@ -590,22 +621,30 @@ export default function EventDetail() {
     setSwissMatchups((prev) => (prev.length <= 1 ? prev : prev.filter((_, j) => j !== i)))
 
   const addTop8MatchupRow = () =>
-    setTop8Matchups((prev) =>
-      prev.length >= MAX_TOP8_MATCHUP_ROWS || prev.length + swissMatchups.length >= MAX_MATCHUPS_TOTAL
+    setTop8Matchups((prev) => {
+      const cap = bracketSize ? bracketRounds(bracketSize) : MAX_TOP8_MATCHUP_ROWS
+      return prev.length >= cap || prev.length + swissMatchups.length >= MAX_MATCHUPS_TOTAL
         ? prev
         : [...prev, emptyRow('top8')]
-    )
+    })
   const updateTop8MatchupRow = (
     i: number,
     field: 'opponent_player' | 'result' | 'intentional_draw',
     value: string | boolean
   ) => setTop8Matchups((prev) => prev.map((m, j) => (j === i ? updateMatchupRowField(m, field, value) : m)))
-  const removeTop8MatchupRow = (i: number) => setTop8Matchups((prev) => prev.filter((_, j) => j !== i))
+  const removeTop8MatchupRow = (i: number) =>
+    setTop8Matchups((prev) =>
+      bracketSize && i < bracketRounds(bracketSize)
+        ? prev.map((m, j) => (j === i ? { opponent_player: '', result: 'draw', intentional_draw: false, phase: 'top8' } : m))
+        : prev.filter((_, j) => j !== i)
+    )
 
   const handleSaveMatchups = () => {
     if (matchupsDeckId == null) return
     const payload = {
-      matchups: phasesToApiMatchups(swissMatchups, top8Matchups, matchupsSwissRounds),
+      matchups: bracketSize
+        ? bracketSlotsToApiMatchups(top8Matchups)
+        : phasesToApiMatchups(swissMatchups, top8Matchups, matchupsSwissRounds),
     }
     setSavingMatchups(true)
     updateDeckMatchups(matchupsDeckId, payload)
@@ -835,6 +874,15 @@ export default function EventDetail() {
                   style={{ width: 70 }}
                 />
               </label>
+              <EventStructureFields
+                structure={editStructure}
+                bracketSize={editBracketSize}
+                onChange={(structure, size) => {
+                  setEditStructure(structure)
+                  setEditBracketSize(size)
+                }}
+                disabled={saving}
+              />
             </div>
             <div style={{ display: 'flex', gap: '0.5rem' }}>
               <button type="button" className="btn btn-primary" onClick={saveEdit} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
@@ -850,6 +898,12 @@ export default function EventDetail() {
               <dd style={{ margin: 0 }}>{cellStr(event.format_id)}</dd>
               <dt style={{ color: 'var(--text-muted)' }}>Players</dt>
               <dd style={{ margin: 0 }}>{typeof event.player_count === 'number' ? event.player_count : cellStr(event.player_count)}</dd>
+              {isSingleElim && (
+                <>
+                  <dt style={{ color: 'var(--text-muted)' }}>Structure</dt>
+                  <dd style={{ margin: 0 }}>Single elimination · {event.bracket_size}-player bracket</dd>
+                </>
+              )}
               <dt style={{ color: 'var(--text-muted)' }}>Store</dt>
               <dd style={{ margin: 0 }}>{cellStr(event.store) || '—'}</dd>
               <dt style={{ color: 'var(--text-muted)' }}>Location</dt>
@@ -1284,6 +1338,8 @@ export default function EventDetail() {
             top8Matchups={top8Matchups}
             showTop8Section={matchupsShowTop8}
             swissRounds={matchupsSwissRounds}
+            bracketSize={bracketSize}
+            expectedMatches={matchupsExpected}
             opponentOptions={matchupsOpponentOptions}
             loading={loadingMatchups}
             saving={savingMatchups}

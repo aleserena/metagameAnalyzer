@@ -1,4 +1,4 @@
-import type { Deck, MetagameReport, Event, PlayerStats, SimilarDeck, ArchetypeDetail, ArchetypeWeeklyStats, CardHeatmap, ChurnReport, HealthReport, H2HSummary, H2HDetail, CommanderSynergy, HadoukenPreview, HadoukenApplyResult, ScrapeJobSnapshot } from './types'
+import type { Deck, MetagameReport, Event, EventStructure, PlayerStats, SimilarDeck, ArchetypeDetail, ArchetypeWeeklyStats, CardHeatmap, ChurnReport, HealthReport, H2HSummary, H2HDetail, CommanderSynergy, HadoukenPreview, HadoukenApplyResult, ScrapeJobSnapshot } from './types'
 import { getToken } from './contexts/AuthContext'
 import { fetchWithTimeout } from './utils'
 
@@ -340,7 +340,9 @@ export async function createEvent(body: {
   event_id?: number | string
   store?: string
   location?: string
-}): Promise<{ event_id: string; event_name: string; store: string; location: string; date: string; format_id: string; player_count: number }> {
+  structure?: EventStructure
+  bracket_size?: number | null
+}): Promise<EventWithOrigin> {
   return fetchApi('/events', { method: 'POST', body: JSON.stringify(body) })
 }
 
@@ -383,7 +385,16 @@ export async function applyHadoukenImport(
 
 export async function updateEvent(
   eventId: number | string,
-  params: { event_name?: string; date?: string; format_id?: string; player_count?: number; store?: string; location?: string }
+  params: {
+    event_name?: string
+    date?: string
+    format_id?: string
+    player_count?: number
+    store?: string
+    location?: string
+    structure?: EventStructure
+    bracket_size?: number | null
+  }
 ): Promise<{ event_id: string; message: string }> {
   const search = new URLSearchParams()
   if (params.event_name != null) search.set('event_name', params.event_name)
@@ -392,6 +403,8 @@ export async function updateEvent(
   if (params.player_count != null) search.set('player_count', String(params.player_count))
   if (params.store != null) search.set('store', params.store)
   if (params.location != null) search.set('location', params.location)
+  if (params.structure != null) search.set('structure', params.structure)
+  if (params.bracket_size != null) search.set('bracket_size', String(params.bracket_size))
   const q = search.toString()
   return fetchApi(`/events/${encodeURIComponent(String(eventId))}${q ? `?${q}` : ''}`, { method: 'PUT' })
 }
@@ -1217,7 +1230,7 @@ export type EventSnapshot = {
   event_id: string
   event_name: string
   created_at: string | null
-  /** delete | merge | hadouken | clear_decks | rescrape | before_restore */
+  /** delete | merge | hadouken | clear_decks | rescrape | before_restore | renumber_rounds */
   reason: string
   deck_count: number
   matchup_count: number

@@ -13,6 +13,7 @@ from src.mtgtop8.normalize import (
 )
 from src.mtgtop8.scraper import event_display_name
 
+from api.brackets import is_single_elimination, validate_structure
 from api.dependencies import (
     current_actor,
     require_admin,
@@ -100,6 +101,10 @@ def create_event(body: CreateEventBody):
     if not body.player_count or body.player_count < 1:
         raise HTTPException(status_code=400, detail="Number of players is required and must be at least 1")
     try:
+        structure, bracket_size = validate_structure(body.structure, body.bracket_size)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    try:
         with _db.session_scope() as session:
             row = _db.create_event(
                 session,
@@ -111,6 +116,8 @@ def create_event(body: CreateEventBody):
                 player_count=body.player_count,
                 store=(body.store or "").strip(),
                 location=(body.location or "").strip(),
+                structure=structure,
+                bracket_size=bracket_size,
             )
             _invalidate_events_cache()
             created = EventResponse(**_db.event_row_to_dict(row))
@@ -166,6 +173,14 @@ def _event_row_to_merge_dict(row) -> dict:
         "format_id": row.format_id or "",
         "player_count": row.player_count or 0,
     }
+
+
+def _merge_structure(keep_row, remove_row) -> tuple[str, int | None]:
+    """Structure of the merged event: a single-elimination side wins (keep first), else Swiss."""
+    for row in (keep_row, remove_row):
+        if is_single_elimination(row.structure) and row.bracket_size:
+            return row.structure, row.bracket_size
+    return validate_structure(None, None)
 
 
 def _normalize_board_for_compare(board: list) -> list[tuple[str, int]]:
@@ -346,6 +361,7 @@ def merge_preview(
         "format_id": merged["format_id"],
         "player_count": merged["player_count"],
     }
+    merged_preview["structure"], merged_preview["bracket_size"] = _merge_structure(keep, remove)
 
     # Player/deck pairing: same player_id in both events -> merge decks
     deck_pairs: list[DeckPairPreview] = []
@@ -489,10 +505,24 @@ def update_event_endpoint(
     player_count: int | None = Query(None),
     store: str | None = Query(None),
     location: str | None = Query(None),
+    structure: str | None = Query(None, description="'swiss' | 'single_elimination'"),
+    bracket_size: int | None = Query(None, description="Bracket players (single elimination): 2, 4, 8 ... 128"),
 ):
     """Update event metadata (admin-only)."""
     try:
         with _db.session_scope() as session:
+            new_structure = new_bracket_size = None
+            if structure is not None or bracket_size is not None:
+                current = _db.get_event(session, event_id)
+                if current is None:
+                    raise HTTPException(status_code=404, detail="Event not found")
+                try:
+                    new_structure, new_bracket_size = validate_structure(
+                        structure if structure is not None else current.structure,
+                        bracket_size if bracket_size is not None else current.bracket_size,
+                    )
+                except ValueError as e:
+                    raise HTTPException(status_code=422, detail=str(e))
             # A hand edit: details whose value changes are remembered, so a forced re-scrape leaves them alone.
             ok = _db.update_event(
                 session,
@@ -503,6 +533,8 @@ def update_event_endpoint(
                 player_count=player_count,
                 store=store,
                 location=location,
+                structure=new_structure,
+                bracket_size=new_bracket_size,
                 manual_fields=_db.EVENT_MANUAL_FIELDS,
             )
         if not ok:
@@ -652,6 +684,7 @@ def merge_events(body: MergeEventsBody):
             merged[field] = v_keep if field != "player_count" else 0
     event_name = merged.get("event_name") or ""
     date = merged.get("date") or ""
+    merged_structure, merged_bracket_size = _merge_structure(keep_row, remove_row)
     try:
         with _db.session_scope() as session:
             decks_keep = _db.get_decks_by_event(session, keep_row.event_id)
@@ -728,6 +761,8 @@ def merge_events(body: MergeEventsBody):
                 player_count=merged.get("player_count"),
                 store=merged.get("store"),
                 location=merged.get("location"),
+                structure=merged_structure,
+                bracket_size=merged_bracket_size,
             )
             _db.reassign_upload_links_to_event(session, remove_row.event_id, keep_row.event_id)
             _db.delete_event(session, remove_row.event_id, delete_decks=False)

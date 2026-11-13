@@ -687,7 +687,8 @@ def update_deck_matchups(deck_id: int, body: AdminMatchupsBody, actor: str = Dep
                     "opponent_archetype": None,
                     "result": result_raw,
                     "result_note": None,
-                    "round": None,
+                    # Keep the round: a bracket bye belongs to a specific round (Swiss byes are numbered too).
+                    "round": getattr(m, "round", None),
                 })
                 continue
             opp_player = _normalize_player((m.opponent_player or "").strip())

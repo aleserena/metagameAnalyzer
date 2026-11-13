@@ -481,3 +481,80 @@ def test_byes_count_in_the_bulk_completeness_check(db_session_rollback):
     session.flush()
     assert list_missing_matchups_for_event(session, eid) == []
     assert eid in list_event_ids_with_complete_matchups(session)
+
+
+# --- Single-elimination events: expected matches come from each deck's rank ---
+
+from tests._bracket_fixture import rank_for_seed, seed_bracket  # noqa: E402
+
+_SE_BASE = _TEST_DECK_ID_BASE + 500
+
+
+def test_bracket_fixture_ranks():
+    assert [rank_for_seed(s, 16) for s in (0, 1, 2, 3, 4, 7, 8, 15)] == ["1", "2", "3-4", "3-4", "5-8", "5-8", "9-16", "9-16"]
+
+
+def test_single_elim_complete_bracket_not_missing(db_session_rollback):
+    session = db_session_rollback
+    eid = _TEST_EVENT_PREFIX + "se_ok"
+    seed_bracket(session, eid, 16, _SE_BASE, player_count=44)
+    assert list_missing_matchups_for_event(session, eid) == []
+    assert eid in list_event_ids_with_complete_matchups(session)
+
+
+def test_single_elim_semifinalist_missing_one(db_session_rollback):
+    session = db_session_rollback
+    eid = _TEST_EVENT_PREFIX + "se_semi"
+    ids = seed_bracket(session, eid, 16, _SE_BASE, player_count=44, skip=frozenset({(0, 2)}))
+    missing = {m["deck_id"]: m for m in list_missing_matchups_for_event(session, eid)}
+    assert (missing[ids[2]]["matchup_count"], missing[ids[2]]["expected_count"]) == (2, 3)
+    assert (missing[ids[0]]["matchup_count"], missing[ids[0]]["expected_count"]) == (3, 4)
+    assert set(missing) == {ids[0], ids[2]}
+    assert eid not in list_event_ids_with_complete_matchups(session)
+
+
+def test_single_elim_outside_bracket_not_missing(db_session_rollback):
+    session = db_session_rollback
+    eid = _TEST_EVENT_PREFIX + "se_out"
+    seed_bracket(session, eid, 8, _SE_BASE, player_count=30)
+    extra = _make_deck(_SE_BASE + 100, eid, "League only")
+    extra["rank"] = "17-32"
+    upsert_deck(session, extra, origin="manual")
+    session.flush()
+    assert list_missing_matchups_for_event(session, eid) == []
+    assert eid in list_event_ids_with_complete_matchups(session)
+
+
+def test_single_elim_bye_counts_as_match(db_session_rollback):
+    from api.db import MatchupRow
+
+    session = db_session_rollback
+    eid = _TEST_EVENT_PREFIX + "se_bye"
+    ids = seed_bracket(session, eid, 8, _SE_BASE, skip=frozenset({(3, 7)}))
+    # Seed 7 (5-8) never played: give it a first-round bye; seed 3 then lacks its first-round match too.
+    session.add(MatchupRow(deck_id=ids[7], opponent_player="Bye", result="bye", round=1))
+    session.add(MatchupRow(deck_id=ids[3], opponent_player="Bye", result="bye", round=1))
+    session.flush()
+    assert list_missing_matchups_for_event(session, eid) == []
+
+
+def test_swiss_event_with_same_bracket_still_uses_swiss_rule(db_session_rollback):
+    """Same data, Swiss structure: 16 decks -> 4 rounds expected from every deck, so early losers are missing."""
+    session = db_session_rollback
+    eid = _TEST_EVENT_PREFIX + "se_swiss"
+    ids = seed_bracket(session, eid, 16, _SE_BASE, structure=None)
+    missing = {m["deck_id"]: m["expected_count"] for m in list_missing_matchups_for_event(session, eid)}
+    assert missing[ids[15]] == 4
+    assert ids[0] not in missing
+
+
+def test_missing_decks_uses_bracket_size(db_session_rollback):
+    from api.db import list_event_ids_with_missing_decks, update_event
+
+    session = db_session_rollback
+    eid = _TEST_EVENT_PREFIX + "se_decks"
+    seed_bracket(session, eid, 16, _SE_BASE, player_count=44)
+    assert eid not in list_event_ids_with_missing_decks(session)
+    update_event(session, eid, structure="swiss", bracket_size=None)
+    session.flush()
+    assert eid in list_event_ids_with_missing_decks(session)
