@@ -1,4 +1,6 @@
 import {
+  bracketRoundLabel,
+  bracketRounds,
   MATCHUP_RESULT_OPTIONS,
   MAX_MATCHUPS_TOTAL,
   MAX_TOP8_MATCHUP_ROWS,
@@ -12,6 +14,10 @@ export interface MatchupsFormProps {
   top8Matchups: MatchupRow[]
   showTop8Section: boolean
   swissRounds: number
+  /** Single-elimination event: only the bracket section (from top8Matchups), one row per round. */
+  bracketSize?: number | null
+  /** Matches this deck's rank implies in the bracket (shown as a hint). */
+  expectedMatches?: number | null
   opponentOptions: string[]
   loading: boolean
   saving: boolean
@@ -32,12 +38,14 @@ function MatchupRows({
   saving,
   maxRows,
   totalCount,
+  rowLabel,
   onUpdateRow,
   onRemoveRow,
   onAddRow,
 }: {
   rows: MatchupRow[]
   phaseLabel: string
+  rowLabel?: (i: number) => string
   opponentOptions: string[]
   saving: boolean
   maxRows: number
@@ -51,6 +59,7 @@ function MatchupRows({
       <h3 style={{ fontSize: '0.95rem', margin: '0 0 0.5rem' }}>{phaseLabel}</h3>
       {rows.map((m, i) => (
         <div key={i} style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center', marginBottom: '0.5rem' }}>
+          {rowLabel && <span style={{ minWidth: 100, fontSize: '0.875rem', color: 'var(--text-muted)' }}>{rowLabel(i)}</span>}
           <select
             value={m.opponent_player}
             onChange={(e) => onUpdateRow(i, 'opponent_player', e.target.value)}
@@ -98,6 +107,8 @@ export default function MatchupsForm({
   top8Matchups,
   showTop8Section,
   swissRounds,
+  bracketSize,
+  expectedMatches,
   opponentOptions,
   loading,
   saving,
@@ -111,6 +122,44 @@ export default function MatchupsForm({
   onCancel,
 }: MatchupsFormProps) {
   const totalCount = swissMatchups.length + top8Matchups.length
+
+  if (bracketSize) {
+    return (
+      <>
+        <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+          Result is for <strong>this deck (you)</strong> vs the selected opponent. Single elimination,{' '}
+          {bracketSize}-player bracket: enter the rounds in order, first round first.
+          {expectedMatches != null && <> Expected for this deck (from its rank): {expectedMatches}.</>}
+        </p>
+        {loading ? (
+          <p>Loading…</p>
+        ) : (
+          <>
+            <MatchupRows
+              rows={top8Matchups}
+              phaseLabel="Bracket"
+              opponentOptions={opponentOptions}
+              saving={saving}
+              maxRows={bracketRounds(bracketSize)}
+              totalCount={top8Matchups.length}
+              rowLabel={(i) => bracketRoundLabel(i + 1, bracketSize)}
+              onUpdateRow={onUpdateTop8Row}
+              onRemoveRow={onRemoveTop8Row}
+              onAddRow={onAddTop8Row}
+            />
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button type="button" className="btn btn-primary" onClick={onSave} disabled={saving}>
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+              <button type="button" className="btn" onClick={onCancel} disabled={saving}>
+                Cancel
+              </button>
+            </div>
+          </>
+        )}
+      </>
+    )
+  }
 
   return (
     <>
