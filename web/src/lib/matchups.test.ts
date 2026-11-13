@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  apiMatchupsToBracketSlots,
   apiMatchupsToPhases,
   bracketRoundLabel,
+  bracketSlotsToApiMatchups,
   bracketRounds,
   BRACKET_SIZES,
   expectedBracketMatches,
@@ -182,17 +184,73 @@ describe('single-elimination brackets (mirrors api/brackets.py)', () => {
     expect(phasesToApiMatchups([], top8, 0).map((m) => m.round)).toEqual([1, 2])
   })
 
-  it('apiMatchupsToPhases keeps stored bracket rounds in order and adds rows reported against me', () => {
-    const { top8 } = apiMatchupsToPhases(
-      [{ opponent_player: 'B', result: 'win', round: 2 }],
-      0,
-      [{ opponent_player: 'A', result: 'win', round: 1 }]
-    )
-    expect(top8.map((r) => r.opponent_player).sort()).toEqual(['A', 'B'])
-  })
 
   it('phasesToApiMatchups blanks bye opponent in the cut section', () => {
     const top8: MatchupRow[] = [{ opponent_player: 'Bye', result: 'bye', intentional_draw: false, phase: 'top8' }]
     expect(phasesToApiMatchups([], top8, 0)).toEqual([{ opponent_player: '', result: 'bye', round: 1 }])
+  })
+})
+
+describe('bracket slots: rows stay in the round they were stored in', () => {
+  const names = (rows: MatchupRow[]) => rows.map((r) => r.opponent_player)
+
+  it('puts stored rows in their round and a null-round bye in the first free slot; re-saving changes nothing', () => {
+    const slots = apiMatchupsToBracketSlots(
+      [
+        { opponent_player: 'Bye', result: 'bye', round: null },
+        { opponent_player: 'X', result: 'win', round: 2 },
+        { opponent_player: 'Y', result: 'loss', round: 3 },
+      ],
+      4
+    )
+    expect(names(slots)).toEqual(['Bye', 'X', 'Y', ''])
+    expect(bracketSlotsToApiMatchups(slots)).toEqual([
+      { opponent_player: '', result: 'bye', round: 1 },
+      { opponent_player: 'X', result: 'win', round: 2 },
+      { opponent_player: 'Y', result: 'loss', round: 3 },
+    ])
+  })
+
+  it('keeps a stored round when a null-round row (upload link) comes first in the list', () => {
+    const slots = apiMatchupsToBracketSlots(
+      [
+        { opponent_player: 'C', result: 'win', round: 2 },
+        { opponent_player: 'B', result: 'win', round: null },
+      ],
+      4
+    )
+    expect(names(slots)).toEqual(['B', 'C', '', ''])
+    expect(bracketSlotsToApiMatchups(slots).map((m) => [m.opponent_player, m.round])).toEqual([
+      ['B', 1],
+      ['C', 2],
+    ])
+  })
+
+  it('a blank earlier slot stays a gap on save', () => {
+    const slots = apiMatchupsToBracketSlots([], 4)
+    expect(slots).toHaveLength(4)
+    slots[1] = { ...slots[1], opponent_player: 'X', result: 'win' }
+    expect(bracketSlotsToApiMatchups(slots)).toEqual([{ opponent_player: 'X', result: 'win', round: 2 }])
+  })
+
+  it('a report against me is not added twice when I already have that opponent', () => {
+    const slots = apiMatchupsToBracketSlots(
+      [{ opponent_player: 'A', result: 'win', round: null }],
+      3,
+      [
+        { opponent_player: 'a', result: 'win', round: 1 },
+        { opponent_player: 'D', result: 'loss', round: 2 },
+      ]
+    )
+    expect(names(slots)).toEqual(['A', 'D', ''])
+  })
+
+  it('keeps rows beyond the bracket as extra rows instead of dropping them', () => {
+    const slots = apiMatchupsToBracketSlots(
+      [1, 2, 3].map((round) => ({ opponent_player: `P${round}`, result: 'win', round })),
+      2
+    )
+    expect(names(slots)).toEqual(['P1', 'P2', 'P3'])
+    expect(bracketSlotsToApiMatchups(slots).map((m) => m.round)).toEqual([1, 2, 3])
   })
 })

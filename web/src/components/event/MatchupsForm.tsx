@@ -39,6 +39,7 @@ function MatchupRows({
   maxRows,
   totalCount,
   rowLabel,
+  fixedRows,
   onUpdateRow,
   onRemoveRow,
   onAddRow,
@@ -46,6 +47,8 @@ function MatchupRows({
   rows: MatchupRow[]
   phaseLabel: string
   rowLabel?: (i: number) => string
+  /** Rows are fixed slots (bracket rounds): no "Add matchup", and the row button clears instead of removing. */
+  fixedRows?: boolean
   opponentOptions: string[]
   saving: boolean
   maxRows: number
@@ -85,11 +88,11 @@ function MatchupRows({
             ))}
           </select>
           <button type="button" className="btn" style={{ padding: '0.2rem 0.5rem' }} onClick={() => onRemoveRow(i)} disabled={saving}>
-            Remove
+            {fixedRows ? 'Clear' : 'Remove'}
           </button>
         </div>
       ))}
-      <button
+      {!fixedRows && <button
         type="button"
         className="btn"
         style={{ marginTop: '0.35rem' }}
@@ -97,7 +100,7 @@ function MatchupRows({
         disabled={saving || rows.length >= maxRows || totalCount >= MAX_MATCHUPS_TOTAL}
       >
         Add matchup
-      </button>
+      </button>}
     </div>
   )
 }
@@ -128,7 +131,7 @@ export default function MatchupsForm({
       <>
         <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
           Result is for <strong>this deck (you)</strong> vs the selected opponent. Single elimination,{' '}
-          {bracketSize}-player bracket: enter the rounds in order, first round first.
+          {bracketSize}-player bracket: one row per round; leave rounds this deck did not play empty.
           {expectedMatches != null && <> Expected for this deck (from its rank): {expectedMatches}.</>}
         </p>
         {loading ? (
@@ -142,7 +145,8 @@ export default function MatchupsForm({
               saving={saving}
               maxRows={bracketRounds(bracketSize)}
               totalCount={top8Matchups.length}
-              rowLabel={(i) => bracketRoundLabel(i + 1, bracketSize)}
+              fixedRows
+              rowLabel={(i) => (i < bracketRounds(bracketSize) ? bracketRoundLabel(i + 1, bracketSize) : 'Extra (not a bracket round)')}
               onUpdateRow={onUpdateTop8Row}
               onRemoveRow={onRemoveTop8Row}
               onAddRow={onAddTop8Row}

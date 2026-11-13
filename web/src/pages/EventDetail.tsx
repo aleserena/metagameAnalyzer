@@ -44,8 +44,10 @@ import { parseMoxfieldDeckList, formatMoxfieldDeckList } from '../lib/deckListPa
 import { defaultDeckEdit, getEDHArchetype, normalizeDeckListByLookup, type BulkDeckEdit } from '../lib/deckUtils'
 import { cellStr } from '../lib/eventTable'
 import {
+  apiMatchupsToBracketSlots,
   apiMatchupsToPhases,
   bracketRounds,
+  bracketSlotsToApiMatchups,
   expectedBracketMatches,
   isTop8Rank,
   MAX_MATCHUPS_TOTAL,
@@ -568,19 +570,19 @@ export default function EventDetail() {
     const swissRounds = matchupsSwissRounds
     getDeckMatchups(deckId)
       .then((res) => {
+        if (bracketSize) {
+          // Bracket only: one fixed row per round, each stored row in the round it was saved in.
+          setSwissMatchups([])
+          setTop8Matchups(
+            apiMatchupsToBracketSlots(res.matchups || [], bracketRounds(bracketSize), res.opponent_reported_matchups || [])
+          )
+          return
+        }
         const { swiss, top8 } = apiMatchupsToPhases(
           res.matchups || [],
           swissRounds,
           res.opponent_reported_matchups || []
         )
-        if (bracketSize) {
-          // Bracket only: every stored row is a bracket round; start with one empty row.
-          setSwissMatchups([])
-          setTop8Matchups(
-            top8.length > 0 ? top8 : [{ opponent_player: '', result: 'draw', intentional_draw: false, phase: 'top8' }]
-          )
-          return
-        }
         setSwissMatchups(swiss)
         setTop8Matchups(top8)
       })
@@ -630,12 +632,19 @@ export default function EventDetail() {
     field: 'opponent_player' | 'result' | 'intentional_draw',
     value: string | boolean
   ) => setTop8Matchups((prev) => prev.map((m, j) => (j === i ? updateMatchupRowField(m, field, value) : m)))
-  const removeTop8MatchupRow = (i: number) => setTop8Matchups((prev) => prev.filter((_, j) => j !== i))
+  const removeTop8MatchupRow = (i: number) =>
+    setTop8Matchups((prev) =>
+      bracketSize && i < bracketRounds(bracketSize)
+        ? prev.map((m, j) => (j === i ? { opponent_player: '', result: 'draw', intentional_draw: false, phase: 'top8' } : m))
+        : prev.filter((_, j) => j !== i)
+    )
 
   const handleSaveMatchups = () => {
     if (matchupsDeckId == null) return
     const payload = {
-      matchups: phasesToApiMatchups(swissMatchups, top8Matchups, matchupsSwissRounds),
+      matchups: bracketSize
+        ? bracketSlotsToApiMatchups(top8Matchups)
+        : phasesToApiMatchups(swissMatchups, top8Matchups, matchupsSwissRounds),
     }
     setSavingMatchups(true)
     updateDeckMatchups(matchupsDeckId, payload)

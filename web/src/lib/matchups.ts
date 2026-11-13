@@ -280,6 +280,56 @@ export function bracketRoundLabel(round: number, size: number): string {
   return `Round of ${left}`
 }
 
+function emptyBracketRow(): MatchupRow {
+  return { opponent_player: '', result: 'draw', intentional_draw: false, phase: 'top8' }
+}
+
+/**
+ * Bracket editor rows: slot i is round i + 1. A stored row goes to its round's slot; rows without a usable
+ * round (byes or upload-link rows saved without one, clashes) fill the free slots in API order. Reports
+ * against me are added only for opponents I have not reported myself. Rows that do not fit stay as extra
+ * rows after the last round, so nothing stored is dropped. Always at least `rounds` rows.
+ */
+export function apiMatchupsToBracketSlots(
+  ourMatchups: ApiMatchupItem[],
+  rounds: number,
+  reportedAgainstMe: ApiMatchupItem[] = []
+): MatchupRow[] {
+  const slots: (MatchupRow | null)[] = Array.from({ length: rounds }, () => null)
+  const unplaced: MatchupRow[] = []
+  const place = (row: MatchupRow, round: number | null | undefined) => {
+    if (round != null && round >= 1 && round <= rounds && slots[round - 1] == null) slots[round - 1] = row
+    else unplaced.push(row)
+  }
+  const ownNames = new Set<string>()
+  for (const m of ourMatchups) {
+    const row = { ...matchupItemToRow(m), phase: 'top8' as const }
+    if (row.opponent_player && !isBye(row.result) && !isDrop(row.result)) ownNames.add(row.opponent_player.toLowerCase())
+    place(row, m.round)
+  }
+  for (const m of reportedAgainstMe) {
+    const row = { ...matchupItemToRow(m), phase: 'top8' as const }
+    if (!row.opponent_player || isBye(row.result) || isDrop(row.result)) continue
+    const key = row.opponent_player.toLowerCase()
+    if (ownNames.has(key)) continue
+    ownNames.add(key)
+    place(row, m.round)
+  }
+  const filled = slots.map((s) => s ?? unplaced.shift() ?? emptyBracketRow())
+  return [...filled, ...unplaced]
+}
+
+/** Bracket rows to API payload: row i is round i + 1; blank rows are skipped (gaps stay gaps). */
+export function bracketSlotsToApiMatchups(rows: MatchupRow[]): ApiMatchupPayload[] {
+  const out: ApiMatchupPayload[] = []
+  rows.forEach((m, i) => {
+    const special = isBye(m.result) || isDrop(m.result)
+    if (!(m.opponent_player || '').trim() && !special) return
+    out.push({ opponent_player: special ? '' : (m.opponent_player || '').trim(), result: m.result || 'draw', round: i + 1 })
+  })
+  return out
+}
+
 /** Win rate 0–100 → heatmap color (red → yellow → green) with opacity for readability. */
 export function heatmapColor(pct: number): string {
   const t = Math.max(0, Math.min(100, pct)) / 100

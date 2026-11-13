@@ -163,3 +163,27 @@ def test_snapshot_restore_old_payload_is_swiss(in_session):
     restore_snapshot(in_session, snap_id)
     in_session.flush()
     assert _structure(in_session, "test_es_snap_old") == ("swiss", None)
+
+
+def test_saving_matchups_keeps_the_round_of_a_bye(in_session, monkeypatch):
+    """A first-round bye in a bracket must keep its round, or the editor can't put it back in its slot."""
+    from api.db import DeckRow, MatchupRow
+    from api.routers import decks as decks_router
+    from api.schemas.matchups import AdminMatchupsBody, MatchupItem
+
+    _create(in_session, "test_es_bye", structure="single_elimination", bracket_size=8)
+    db.upsert_deck(in_session, {
+        "deck_id": 989950, "event_id": "test_es_bye", "format_id": "EDH", "name": "D", "player": "Bye Taker",
+        "event_name": "Ev", "date": "01/01/25", "rank": "5-8", "player_count": 16,
+        "mainboard": [], "sideboard": [], "commanders": [], "archetype": None,
+    }, origin="manual")
+    in_session.flush()
+    monkeypatch.setattr(decks_router, "_get_deck_by_id",
+                        lambda deck_id: db.deck_row_to_dict(in_session.get(DeckRow, deck_id)))
+    monkeypatch.setattr(decks_router, "_load_decks_from_db", lambda: None)
+    decks_router.update_deck_matchups(
+        989950, AdminMatchupsBody(matchups=[MatchupItem(opponent_player="", result="bye", round=1)]), actor="admin"
+    )
+    in_session.expire_all()
+    rows = in_session.query(MatchupRow).filter(MatchupRow.deck_id == 989950).all()
+    assert [(r.opponent_player, r.result, r.round) for r in rows] == [("Bye", "bye", 1)]
