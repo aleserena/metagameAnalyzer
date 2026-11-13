@@ -117,6 +117,8 @@ with _db.session_scope() as session:
 - *Hand edits survive a re-scrape:* `DeckRow.manual_fields` / `EventRow.manual_fields` list the fields a person set. `upsert_deck(..., manual_fields=DECK_MANUAL_FIELDS)` and `update_event(..., manual_fields=EVENT_MANUAL_FIELDS)` mark the fields whose value differs from what is stored (edit forms resend every field, so an unchanged value marks nothing; marks are never removed) — pass them from hand-edit paths only (deck edit, upload-link update/feedback/decklist, event edit). The scrape path passes `respect_manual=True` (and nobody else should), which leaves marked fields alone even on a forced re-scrape. Edits made before migration 019 are not marked.
 - *Whole database:* Railway point-in-time recovery is enabled on the staging and production `postgres` services (about four weeks of history).
 
+**Security and privacy docs:** `SECURITY.md` (reporting), `docs/RISK_REGISTER.md` (risks R1–R10, treatment and status — update it after any release that touches auth, links, public endpoints or data storage), `docs/SECURITY_OPERATIONS.md` (sessions, links, limits), `docs/PRIVACY_REQUESTS.md` (what the admin does for a correction/removal request). The public Privacy page is `web/src/pages/Privacy.tsx`; keep it in step with `docs/PRIVACY_REQUESTS.md` and with what the app really stores.
+
 **Player aliases:** stored in the database when available (`_db.get_player_aliases`), with `player_aliases.json` in `DATA_DIR` as the JSON fallback. Managed via the `/api/v1/player-aliases` endpoints in `api/routers/players.py`. (The JSON fallback only applies when no database is configured, which the app does not support in normal operation.)
 
 ## Frontend Patterns
