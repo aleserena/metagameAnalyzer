@@ -236,6 +236,9 @@ def restore_snapshot(session, snapshot_id: int) -> dict:
     row.date = event.get("date") or ""
     row.format_id = event.get("format_id") or ""
     row.player_count = int(event.get("player_count") or 0)
+    # Snapshots taken before migration 020 have neither key: the event goes back to Swiss.
+    row.structure = event.get("structure") or None
+    row.bracket_size = event.get("bracket_size")
     row.manual_fields = list(extras.get("event_manual_fields") or []) or None
     session.flush()
 

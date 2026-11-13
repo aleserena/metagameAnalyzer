@@ -1,6 +1,7 @@
 """Import a manual event from an exported JSON payload."""
 
 from api import db as _db
+from api.brackets import validate_structure
 from api.db import DeckRow, MatchupRow
 from api.schemas.events import EventExportData
 from api.state import _resolve_deck_player
@@ -15,6 +16,7 @@ def import_event_payload(session, body: EventExportData) -> dict:
     # Create new manual event with a fresh ID
     new_event_id = _db.next_manual_event_id(session)
     ev = body.event
+    structure, bracket_size = validate_structure(ev.structure, ev.bracket_size)
     row = _db.create_event(
         session,
         event_name=(ev.event_name or "").strip() or "Unnamed",
@@ -25,6 +27,8 @@ def import_event_payload(session, body: EventExportData) -> dict:
         player_count=ev.player_count or 0,
         store=(ev.store or "").strip(),
         location=(ev.location or "").strip(),
+        structure=structure,
+        bracket_size=bracket_size,
     )
     event_dict = _db.event_row_to_dict(row)
 
