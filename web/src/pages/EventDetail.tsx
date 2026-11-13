@@ -9,6 +9,7 @@ import {
   deleteEvent,
   createEventEditLink,
   getEventEditLinkInfo,
+  errorStatus,
   updateDeck,
   deleteDeck,
   setEventEditToken,
@@ -164,9 +165,17 @@ export default function EventDetail() {
           setEventEditTokenError('This link is for a different event.')
         }
       })
-      .catch(() => {
-        toast.error('Link invalid or already used.')
-        navigate('/', { replace: true })
+      .catch((e) => {
+        // Only a 404 means the link is dead; a busy server or a timeout must not eject the organiser.
+        if (errorStatus(e) === 404) {
+          toast.error('Link invalid or already used.')
+          navigate('/', { replace: true })
+          return
+        }
+        eventEditValidatedRef.current = false
+        setEventEditTokenError(
+          `${e instanceof Error && e.message ? e.message : 'Could not check the edit link.'} Reload the page to try again.`
+        )
       })
   }, [urlToken, eventId, navigate])
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { getDecks, getMetagame, clearScryfallCache, clearDecks } from './api'
+import { getDecks, getMetagame, clearScryfallCache, clearDecks, getCardLookup, getUploadLinkInfo, getEventEditLinkInfo } from './api'
 
 describe('api', () => {
   beforeEach(() => {
@@ -100,5 +100,116 @@ describe('api', () => {
       expect.objectContaining({ method: 'POST' })
     )
     expect(result).toEqual({ message: 'Decks cleared' })
+  })
+
+  describe('expired admin session', () => {
+    beforeEach(() => {
+      localStorage.clear()
+      sessionStorage.clear()
+    })
+
+    const unauthorized = () =>
+      ({ ok: false, status: 401, statusText: 'Unauthorized', json: async () => ({ detail: 'Invalid or expired token' }) }) as Response
+
+    it('flags the session as expired when a 401 arrives while logged in', async () => {
+      localStorage.setItem('admin_token', 'stale-token')
+      vi.mocked(fetch).mockResolvedValueOnce(unauthorized())
+
+      await expect(getDecks({})).rejects.toThrow()
+
+      expect(localStorage.getItem('admin_token')).toBeNull()
+      expect(sessionStorage.getItem('session_expired')).toBe('1')
+    })
+
+    it('does not flag an expired session for a visitor who was never logged in', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(unauthorized())
+
+      await expect(getDecks({})).rejects.toThrow()
+
+      expect(sessionStorage.getItem('session_expired')).toBeNull()
+    })
+
+    it('flags the session as expired on the authenticated fetch path too', async () => {
+      localStorage.setItem('admin_token', 'stale-token')
+      vi.mocked(fetch).mockResolvedValueOnce(unauthorized())
+
+      await expect(clearDecks()).rejects.toThrow()
+
+      expect(sessionStorage.getItem('session_expired')).toBe('1')
+    })
+  })
+
+  describe('getCardLookup batching', () => {
+    const echoNames = async (_url: unknown, init?: RequestInit) => {
+      const { names } = JSON.parse(String(init?.body)) as { names: string[] }
+      return { ok: true, status: 200, json: async () => Object.fromEntries(names.map((n) => [n, { name: n }])) } as Response
+    }
+    const batchSizes = () =>
+      vi.mocked(fetch).mock.calls.map((call) => (JSON.parse(String((call[1] as RequestInit).body)) as { names: string[] }).names.length)
+
+    it('splits a large request into batches of 200 and merges the results', async () => {
+      vi.mocked(fetch).mockImplementation(echoNames as typeof fetch)
+      const names = Array.from({ length: 450 }, (_, i) => `Card ${i}`)
+
+      const result = await getCardLookup(names)
+
+      expect(batchSizes().sort((a, b) => b - a)).toEqual([200, 200, 50])
+      expect(Object.keys(result)).toHaveLength(450)
+      expect(result['Card 449']).toEqual({ name: 'Card 449' })
+    })
+
+    it('sends a small request in one call', async () => {
+      vi.mocked(fetch).mockImplementation(echoNames as typeof fetch)
+
+      await getCardLookup(Array.from({ length: 10 }, (_, i) => `Card ${i}`))
+
+      expect(batchSizes()).toEqual([10])
+    })
+
+    it('makes no call for an empty list', async () => {
+      expect(await getCardLookup([])).toEqual({})
+      expect(fetch).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('error status', () => {
+    const failure = (status: number, detail: string) =>
+      ({ ok: false, status, statusText: 'x', json: async () => ({ detail }) }) as Response
+
+    it('lets callers tell a dead upload link (404) from a busy server (429)', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(failure(429, 'Too many requests. Try again later.'))
+      await expect(getUploadLinkInfo('tok')).rejects.toMatchObject({ status: 429, message: 'Too many requests. Try again later.' })
+
+      vi.mocked(fetch).mockResolvedValueOnce(failure(404, 'Link already used'))
+      await expect(getUploadLinkInfo('tok')).rejects.toMatchObject({ status: 404 })
+    })
+
+    it('carries the status on event-edit link and authenticated errors too', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(failure(503, 'Database not configured'))
+      await expect(getEventEditLinkInfo('tok')).rejects.toMatchObject({ status: 503 })
+
+      vi.mocked(fetch).mockResolvedValueOnce(failure(500, 'Internal server error'))
+      await expect(getDecks({})).rejects.toMatchObject({ status: 500 })
+    })
+  })
+
+  describe('getCardLookup for a link holder', () => {
+    it('sends the upload token so the whole pasted list is looked up', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({}) } as Response)
+
+      await getCardLookup(['sol ring'], { uploadToken: 'my-upload-token' })
+
+      const headers = (vi.mocked(fetch).mock.calls[0][1] as RequestInit).headers as Record<string, string>
+      expect(headers['X-Upload-Token']).toBe('my-upload-token')
+    })
+
+    it('sends no upload token header otherwise', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({}) } as Response)
+
+      await getCardLookup(['Sol Ring'])
+
+      const headers = (vi.mocked(fetch).mock.calls[0][1] as RequestInit).headers as Record<string, string>
+      expect(headers['X-Upload-Token']).toBeUndefined()
+    })
   })
 })

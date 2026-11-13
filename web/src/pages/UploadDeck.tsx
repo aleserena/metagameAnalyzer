@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useParams, useNavigate } from 'react-router-dom'
 import { Toaster } from 'react-hot-toast'
 import toast from 'react-hot-toast'
-import { getUploadLinkInfo, getCardLookup, submitDeckWithUploadLink, submitFeedbackWithUploadLink, submitDecklistWithUploadLink } from '../api'
+import { getUploadLinkInfo, getCardLookup, submitDeckWithUploadLink, submitFeedbackWithUploadLink, submitDecklistWithUploadLink, errorStatus } from '../api'
 import { parseMoxfieldDeckList, formatMoxfieldDeckList } from '../lib/deckListParser'
 import { normalizeDeckListByLookup } from '../lib/deckUtils'
 import { isBye, isDrop, MATCHUP_RESULT_OPTIONS, matchupItemToRow, updateMatchupRowField } from '../lib/matchups'
@@ -33,6 +33,7 @@ export default function UploadDeck() {
     } | null
   } | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [player, setPlayer] = useState('')
   const [deckName, setDeckName] = useState('')
   const [rank, setRank] = useState('')
@@ -93,9 +94,15 @@ export default function UploadDeck() {
           setMatchups(merged.length > 0 ? merged : [{ opponent_player: '', result: 'draw', intentional_draw: false }])
         }
       })
-      .catch(() => {
-        toast.error('Link invalid or already used.')
-        navigate('/', { replace: true })
+      .catch((e) => {
+        // Only a 404 means the link itself is dead. Anything else (busy server, timeout, offline)
+        // is temporary: keep the player here so they can retry with the same link.
+        if (errorStatus(e) === 404) {
+          toast.error('Link invalid or already used.')
+          navigate('/', { replace: true })
+          return
+        }
+        setLoadError(e instanceof Error && e.message ? e.message : 'Could not load this link.')
       })
       .finally(() => setLoading(false))
   }, [token, navigate])
@@ -136,7 +143,7 @@ export default function UploadDeck() {
         let sideboardToSubmit = parsed.sideboard
         let commandersToSubmit = commanders
         if (uniqueNames.length > 0) {
-          const lookup = await getCardLookup(uniqueNames)
+          const lookup = await getCardLookup(uniqueNames, { uploadToken: token })
           const invalid = uniqueNames.filter((n) => !lookup[n] || (lookup[n] as { error?: string }).error)
           if (invalid.length > 0) {
             toast.error(`${invalid.length} card(s) not found: ${invalid.slice(0, 5).join(', ')}${invalid.length > 5 ? ` and ${invalid.length - 5} more` : ''}. Please correct or remove them.`)
@@ -199,7 +206,7 @@ export default function UploadDeck() {
     ].filter((n) => (n || '').trim())
     setUploadingDeck(true)
     try {
-      const lookup = await getCardLookup(uniqueNames)
+      const lookup = await getCardLookup(uniqueNames, { uploadToken: token })
       const invalid = uniqueNames.filter((n) => !lookup[n] || (lookup[n] as { error?: string }).error)
       if (invalid.length > 0) {
         toast.error(`${invalid.length} card(s) not found: ${invalid.slice(0, 5).join(', ')}${invalid.length > 5 ? ` and ${invalid.length - 5} more` : ''}. Please correct or remove them.`)
@@ -242,6 +249,23 @@ export default function UploadDeck() {
         {toaster}
         <div className="page" style={{ maxWidth: 560, margin: '2rem auto' }}>
           <p>Loading…</p>
+        </div>
+      </>
+    )
+  }
+
+  if (loadError) {
+    return (
+      <>
+        {toaster}
+        <div className="page" style={{ maxWidth: 560, margin: '2rem auto' }}>
+          <h1 className="page-title">Could not load this link</h1>
+          <p role="alert" style={{ color: 'var(--text)', marginBottom: '1rem' }}>
+            {loadError} Your link is still valid: wait a moment and try again.
+          </p>
+          <button type="button" className="btn" onClick={() => window.location.reload()}>
+            Try again
+          </button>
         </div>
       </>
     )

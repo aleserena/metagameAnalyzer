@@ -11,6 +11,7 @@ import math
 import os
 import re
 import unicodedata
+from collections.abc import Iterable
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -84,6 +85,8 @@ class EventRow(_TextDateMixin, Base):
     location = Column(String(512), nullable=False, default="")
     event_date = Column(Date, nullable=True, index=True)  # the only stored date; `date` is its DD/MM/YY view
     player_count = Column(Integer, nullable=False, default=0)  # number of players in the event
+    # Field names edited by hand (see EVENT_MANUAL_FIELDS); a re-scrape leaves them alone. NULL = never edited.
+    manual_fields = Column(JSONB, nullable=True)
 
 
 class PlayerRow(Base):
@@ -117,6 +120,8 @@ class DeckRow(_TextDateMixin, Base):
     archetype = Column(String(512), nullable=True)
     mainboard = Column(JSONB, nullable=False)  # [{"qty": int, "card": str}, ...]
     sideboard = Column(JSONB, nullable=False)
+    # Field names edited by hand (see DECK_MANUAL_FIELDS); a re-scrape leaves them alone. NULL = never edited.
+    manual_fields = Column(JSONB, nullable=True)
     # deck_id is globally unique: MTGTop8 use site IDs; manual use MANUAL_DECK_ID_START+
 
 
@@ -133,6 +138,8 @@ class SettingsRow(Base):
 
 
 DEFAULT_LINK_EXPIRY_DAYS = 7
+# An event-edit link is used in one sitting: once opened it stays valid this long, never longer.
+EVENT_EDIT_SITTING_HOURS = 12
 LINK_TYPE_DECK_UPLOAD = "deck_upload"
 LINK_TYPE_DECK_UPDATE = "deck_update"
 LINK_TYPE_EVENT_EDIT = "event_edit"
@@ -173,6 +180,36 @@ class EventUploadLinkRow(Base):
     used_at = Column(DateTime, nullable=True)
     expires_at = Column(DateTime, nullable=True)
     label = Column(String(256), nullable=True)
+
+
+class EventSnapshotRow(Base):
+    """An event as it was before a destructive action (see api/services/snapshots.py).
+
+    ``event_id`` has no foreign key on purpose: the snapshot must outlive the event. ``payload`` is the
+    event export, including player emails, so it is admin-only.
+    """
+
+    __tablename__ = "event_snapshots"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    event_id = Column(String(32), nullable=False, index=True)
+    event_name = Column(String(512), nullable=False, default="", server_default="")
+    created_at = Column(DateTime, nullable=False, index=True)  # naive UTC
+    reason = Column(String(64), nullable=False)  # delete | merge | hadouken | clear_decks | rescrape | before_restore
+    payload_hash = Column(String(64), nullable=False)  # SHA-256 of the payload; identical snapshots are not repeated
+    payload = Column(JSONB, nullable=False)
+
+
+class ChangeLogRow(Base):
+    """One data mutation: when, who (admin or a link's type and label, never its token), what."""
+
+    __tablename__ = "change_log"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    at = Column(DateTime, nullable=False, index=True)  # naive UTC
+    actor = Column(String(128), nullable=False)
+    action = Column(String(64), nullable=False)
+    event_id = Column(String(32), nullable=True, index=True)
+    deck_id = Column(Integer, nullable=True)
+    summary = Column(String(512), nullable=False, default="", server_default="")
 
 
 class CardRow(Base):
@@ -235,6 +272,8 @@ def _get_engine():
             pool_pre_ping=True,
             # Bounded connect so the health check fails fast instead of hanging on an unreachable host
             connect_args={"connect_timeout": 10},
+            # Error text reaches logs and alert emails: keep bound values (link tokens, emails) out of it.
+            hide_parameters=True,
             echo=os.getenv("SQL_ECHO", "").lower() in ("1", "true"),
         )
     except Exception as e:
@@ -412,9 +451,35 @@ def _sync_deck_row_player_denorm(session: Session, row: DeckRow) -> None:
         row.player = (prow.display_name or "").strip()
 
 
-def upsert_deck(session: Session, d: dict, origin: str = ORIGIN_MTGTOP8) -> DeckRow:
+# Fields a person can correct by hand; a re-scrape leaves the ones listed in ``manual_fields`` alone.
+DECK_MANUAL_FIELDS = ("name", "player", "rank", "archetype", "commanders", "mainboard", "sideboard")
+EVENT_MANUAL_FIELDS = ("name", "date", "format_id", "store", "location")
+
+
+def _merge_manual_fields(row, new_fields, allowed: tuple[str, ...]) -> None:
+    """Add ``new_fields`` (only names in ``allowed``) to ``row.manual_fields``, kept sorted."""
+    marked = set(row.manual_fields or []) | {f for f in (new_fields or ()) if f in allowed}
+    if marked != set(row.manual_fields or []):
+        row.manual_fields = sorted(marked)
+
+
+def upsert_deck(
+    session: Session,
+    d: dict,
+    origin: str = ORIGIN_MTGTOP8,
+    *,
+    manual_fields: Iterable[str] = (),
+    respect_manual: bool = False,
+) -> DeckRow:
     """Insert or update a deck by deck_id. For scrape duplicate protection (re-scrape same event = update).
-    If d does not contain player_id, resolves d['player'] to player_id (get_or_create) and sets d['player_id'], d['player']."""
+    If d does not contain player_id, resolves d['player'] to player_id (get_or_create) and sets d['player_id'], d['player'].
+
+    ``manual_fields``: names (from DECK_MANUAL_FIELDS) this hand edit may have set. Those whose value
+    differs from what is stored are remembered on the row; resending an unchanged value marks nothing
+    (edit forms send every field on save). Marks are never removed. Hand-edit paths (admin or link
+    edits) pass ``DECK_MANUAL_FIELDS``.
+    ``respect_manual``: leave remembered fields untouched. Pass it from the scrape path, and nowhere else.
+    """
     if "player_id" not in d:
         name = (d.get("player") or "").strip() or "(unknown)"
         pid, display = resolve_name_to_player_id(session, name)
@@ -438,20 +503,40 @@ def upsert_deck(session: Session, d: dict, origin: str = ORIGIN_MTGTOP8) -> Deck
         norm_arch = _normalize_archetype_or_commander_display(str(arch_src))
 
     if row:
+        kept = set(row.manual_fields or []) if respect_manual else set()
+        # What this write actually changes, for the hand-edit marks (compared before anything is assigned).
+        differs = {
+            "name": d.get("name", row.name) != row.name,
+            "player": "player_id" in d and d["player_id"] != row.player_id,
+            "rank": d.get("rank", row.rank) != row.rank,
+            "commanders": norm_cmd != _normalize_commanders_list(row.commanders),
+            "archetype": (norm_arch or None) != (row.archetype or None),
+            "mainboard": mainboard != (row.mainboard or []),
+            "sideboard": sideboard != (row.sideboard or []),
+        }
+        hand_edited = [f for f in (manual_fields or ()) if differs.get(f)]
         row.event_id = _event_id_str(d.get("event_id", row.event_id))
         row.format_id = d.get("format_id", row.format_id)
-        row.name = d.get("name", row.name)
-        if "player_id" in d:
-            row.player_id = d["player_id"]
-        row.player = d.get("player", row.player)
+        if "name" not in kept:
+            row.name = d.get("name", row.name)
+        if "player" not in kept:
+            if "player_id" in d:
+                row.player_id = d["player_id"]
+            row.player = d.get("player", row.player)
         row.event_name = d.get("event_name", row.event_name)
         row.date = d.get("date", row.date)
-        row.rank = d.get("rank", row.rank)
+        if "rank" not in kept:
+            row.rank = d.get("rank", row.rank)
         row.player_count = int(d.get("player_count", row.player_count))
-        row.commanders = norm_cmd
-        row.archetype = norm_arch
-        row.mainboard = mainboard
-        row.sideboard = sideboard
+        if "commanders" not in kept:
+            row.commanders = norm_cmd
+        if "archetype" not in kept:
+            row.archetype = norm_arch
+        if "mainboard" not in kept:
+            row.mainboard = mainboard
+        if "sideboard" not in kept:
+            row.sideboard = sideboard
+        _merge_manual_fields(row, hand_edited, DECK_MANUAL_FIELDS)
         _sync_deck_row_player_denorm(session, row)
         return row
     row = DeckRow(
@@ -729,23 +814,39 @@ def update_event(
     player_count: int | None = None,
     store: str | None = None,
     location: str | None = None,
+    *,
+    manual_fields: Iterable[str] = (),
+    respect_manual: bool = False,
 ) -> bool:
+    """Update the given event fields (None = leave alone) and copy them onto the event's decks.
+
+    ``manual_fields`` / ``respect_manual`` work as in :func:`upsert_deck`, over EVENT_MANUAL_FIELDS
+    (the event's name is the field ``"name"``): only details whose value changes are marked.
+    """
     eid = _event_id_str(event_id)
     row = session.query(EventRow).filter(EventRow.event_id == eid).first()
     if not row:
         return False
-    if event_name is not None:
+    kept = set(row.manual_fields or []) if respect_manual else set()
+    sent = {"name": (event_name, row.name), "date": (date, row.date), "format_id": (format_id, row.format_id),
+            "store": (store, row.store), "location": (location, row.location)}
+    # Only details whose value really changes count as hand edits (the form resends all of them).
+    hand_edited = [
+        f for f in (manual_fields or ()) if f in sent and sent[f][0] is not None and sent[f][0] != (sent[f][1] or "")
+    ]
+    if event_name is not None and "name" not in kept:
         row.name = event_name
-    if date is not None:
+    if date is not None and "date" not in kept:
         row.date = date
-    if format_id is not None:
+    if format_id is not None and "format_id" not in kept:
         row.format_id = format_id
     if player_count is not None:
         row.player_count = player_count
-    if store is not None:
+    if store is not None and "store" not in kept:
         row.store = store
-    if location is not None:
+    if location is not None and "location" not in kept:
         row.location = location
+    _merge_manual_fields(row, hand_edited, EVENT_MANUAL_FIELDS)
     sync_decks_with_event(session, eid)
     return True
 
@@ -870,11 +971,18 @@ def get_upload_link(session: Session, token: str, *, for_update: bool = False) -
     return query.first()
 
 
-def mark_upload_link_used(session: Session, token: str) -> bool:
+def mark_upload_link_used(session: Session, token: str, *, sitting_hours: int | None = None) -> bool:
+    """Mark a link used. With ``sitting_hours`` the link also expires that long from now,
+    unless it already expires sooner (the window never extends a link's life)."""
     row = session.query(EventUploadLinkRow).filter(EventUploadLinkRow.token == token).first()
     if not row:
         return False
-    row.used_at = utcnow_naive()
+    now = utcnow_naive()
+    row.used_at = now
+    if sitting_hours is not None:
+        sitting_end = now + timedelta(hours=sitting_hours)
+        if row.expires_at is None or row.expires_at > sitting_end:
+            row.expires_at = sitting_end
     return True
 
 

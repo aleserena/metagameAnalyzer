@@ -17,6 +17,10 @@ class SiteFeedbackBody(BaseModel):
     captcha_answer: int | None = None
 
 
+# Largest card-name batch POST /cards/lookup accepts; the frontend splits bigger requests.
+MAX_LOOKUP_NAMES = 200
+
+
 class CardLookupBody(BaseModel):
-    names: list[Annotated[str, StringConstraints(max_length=200)]] = Field(default_factory=list, max_length=1000)
+    names: list[Annotated[str, StringConstraints(max_length=200)]] = Field(default_factory=list, max_length=MAX_LOOKUP_NAMES)
 

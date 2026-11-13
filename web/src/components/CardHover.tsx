@@ -54,6 +54,8 @@ export default function CardHover({ cardName, children, linkTo = false }: CardHo
     getCardLookup([cardName])
       .then((res) => {
         const c = res[cardName]
+        // 'unresolved' means the server did not look this card up (yet): ask again next time.
+        if (c && c.error === 'unresolved') return
         if (c) {
           lookupCache[cardName] = c
           const faces = c.card_faces

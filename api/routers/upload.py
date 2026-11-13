@@ -33,9 +33,16 @@ from api.route_helpers import (
     _is_intentional_draw_result,
     opponent_report_to_prefill,
 )
+from api.services import change_log
+from api.services.rate_limit import RateLimiter, rate_limited
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Per client IP, shared by the four /upload/{token} routes. Loose on purpose: a whole
+# tournament (100+ players: open, validate, submit) may share one venue address.
+UPLOAD_LIMITER = RateLimiter(300, 60)
+_upload_rate_limit = Depends(rate_limited(UPLOAD_LIMITER))
 
 
 def _get_validated_upload_link(
@@ -47,6 +54,8 @@ def _get_validated_upload_link(
     require_deck: bool = False,
     missing_deck_detail: str = "Feedback link has no deck",
     mark_used: bool = False,
+    sitting_hours: int | None = None,
+    allow_used: bool = False,
     lock: bool = False,
 ):
     """Load and validate a one-time upload link and its event.
@@ -57,6 +66,10 @@ def _get_validated_upload_link(
     - Optionally require an attached deck_id
     - Not already used and not expired
     - Associated event still exists
+
+    ``sitting_hours`` (with ``mark_used``) makes the link expire that long after this first use.
+    ``allow_used`` accepts a link that was already used but has not expired; it is not marked again,
+    so its expiry does not move.
 
     With ``lock=True`` the link row is read ``FOR UPDATE``: concurrent submissions of the same link
     serialise on it, so the second one sees ``used_at`` set and is rejected.
@@ -82,7 +95,8 @@ def _get_validated_upload_link(
     if require_deck and getattr(row, "deck_id", None) is None:
         raise HTTPException(status_code=404, detail=missing_deck_detail)
 
-    if row.used_at is not None:
+    already_used = row.used_at is not None
+    if already_used and not allow_used:
         raise HTTPException(status_code=404, detail="Link already used")
 
     if row.expires_at is not None and row.expires_at < _db.utcnow_naive():
@@ -92,13 +106,13 @@ def _get_validated_upload_link(
     if not ev:
         raise HTTPException(status_code=404, detail="Event not found")
 
-    if mark_used:
-        _db.mark_upload_link_used(session, token)
+    if mark_used and not already_used:
+        _db.mark_upload_link_used(session, token, sitting_hours=sitting_hours)
 
     return row, ev
 
 
-@router.get("/api/v1/upload/{token}", dependencies=[Depends(require_database)])
+@router.get("/api/v1/upload/{token}", dependencies=[_upload_rate_limit, Depends(require_database)])
 def get_upload_link_info(token: str):
     """Return event info for a valid one-time upload link (public). For update links, also return current deck."""
     with _db.session_scope() as session:
@@ -172,13 +186,20 @@ def get_upload_link_info(token: str):
 
 @router.get("/api/v1/event-edit/{token}", dependencies=[Depends(require_database)])
 def get_event_edit_link_info(token: str):
-    """Validate a one-time event-edit link, mark it as used, and return event_id. Public (no auth)."""
+    """Validate a one-time event-edit link, mark it as used, and return event_id. Public (no auth).
+
+    The token keeps authorising edits (X-Event-Edit-Token) for EVENT_EDIT_SITTING_HOURS after the
+    first call; calling again within that time succeeds without extending it.
+    """
     with _db.session_scope() as session:
         row, _ = _get_validated_upload_link(
             session,
             token,
             expected_link_type=_db.LINK_TYPE_EVENT_EDIT,
             mark_used=True,
+            sitting_hours=_db.EVENT_EDIT_SITTING_HOURS,
+            # Reloading the page or clicking the link again during the sitting must keep working.
+            allow_used=True,
         )
         return {"event_id": row.event_id}
 
@@ -239,7 +260,7 @@ def _submit_create_with_upload_link(session, row, ev, event_name: str, body: Sub
     return deck_id
 
 
-@router.post("/api/v1/upload/{token}", dependencies=[Depends(require_database)])
+@router.post("/api/v1/upload/{token}", dependencies=[_upload_rate_limit, Depends(require_database)])
 def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
     """Submit or update a deck using a one-time upload link (public). Update links modify the linked deck."""
     _validate_deck_payload(body)
@@ -252,6 +273,7 @@ def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
         )
         event_name = event_display_name(ev.name, ev.store or "", ev.location or "")
 
+        actor, link_event_id = change_log.link_actor(row), row.event_id
         deck_id = getattr(row, "deck_id", None)
         if deck_id is not None:
             # Update existing deck
@@ -276,7 +298,13 @@ def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
             current["commanders"] = commanders
             deck_list = _normalize_split_cards([current])
             _resolve_deck_player(session, deck_list[0])
-            _db.upsert_deck(session, deck_list[0], origin=current.get("origin", _db.ORIGIN_MANUAL))
+            _db.upsert_deck(
+                session,
+                deck_list[0],
+                origin=current.get("origin", _db.ORIGIN_MANUAL),
+                # What the player changed is theirs: a re-scrape must not undo it.
+                manual_fields=_db.DECK_MANUAL_FIELDS,
+            )
             _db.mark_upload_link_used(session, token)
             created = False
         else:
@@ -286,6 +314,13 @@ def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
             created = True
     # Reload only after the transaction has committed, so the new deck is visible and the link lock is released.
     _load_decks_from_db()
+    change_log.log(
+        actor,
+        "upload.deck",
+        f"{'Submitted a new deck' if created else 'Updated a deck'} for {(body.player or '').strip() or '?'} through an upload link",
+        event_id=link_event_id,
+        deck_id=deck_id,
+    )
     if not created:
         return {"deck_id": deck_id, "message": "Deck updated successfully"}
     return Response(
@@ -295,7 +330,7 @@ def submit_deck_with_upload_link(token: str, body: SubmitDeckBody):
     )
 
 
-@router.post("/api/v1/upload/{token}/feedback", dependencies=[Depends(require_database)])
+@router.post("/api/v1/upload/{token}/feedback", dependencies=[_upload_rate_limit, Depends(require_database)])
 def submit_feedback_with_upload_link(token: str, body: EventFeedbackBody):
     """Submit event feedback (archetype + matchups) via one-time feedback link. Deck must exist; deck list not required."""
     if not (body.archetype or "").strip():
@@ -311,6 +346,7 @@ def submit_feedback_with_upload_link(token: str, body: EventFeedbackBody):
             missing_deck_detail="Feedback link has no deck",
             lock=True,
         )
+        actor = change_log.link_actor(row)
         deck_id = row.deck_id
         deck_dict = _get_deck_by_id(deck_id)
         if not deck_dict:
@@ -321,7 +357,12 @@ def submit_feedback_with_upload_link(token: str, body: EventFeedbackBody):
             deck_dict["name"] = (body.deck_name or "").strip()
         if body.rank is not None:
             deck_dict["rank"] = (body.rank or "").strip()
-        _db.upsert_deck(session, deck_dict, origin=deck_dict.get("origin", _db.ORIGIN_MANUAL))
+        _db.upsert_deck(
+            session,
+            deck_dict,
+            origin=deck_dict.get("origin", _db.ORIGIN_MANUAL),
+            manual_fields=_db.DECK_MANUAL_FIELDS,
+        )
         feedback_event_id = _db._event_id_str(deck_dict.get("event_id", ""))
         matchup_rows = []
         for m in body.matchups or []:
@@ -354,10 +395,17 @@ def submit_feedback_with_upload_link(token: str, body: EventFeedbackBody):
         _db.upsert_matchups_for_deck(session, deck_id, matchup_rows)
         _db.mark_upload_link_used(session, token)
     _load_decks_from_db()
+    change_log.log(
+        actor,
+        "upload.feedback",
+        f"Feedback for {deck_dict.get('player') or '?'}: archetype and {len(matchup_rows)} matchup(s)",
+        event_id=deck_dict.get("event_id"),
+        deck_id=deck_id,
+    )
     return {"deck_id": deck_id, "message": "Feedback submitted successfully"}
 
 
-@router.post("/api/v1/upload/{token}/decklist", dependencies=[Depends(require_database)])
+@router.post("/api/v1/upload/{token}/decklist", dependencies=[_upload_rate_limit, Depends(require_database)])
 def submit_decklist_with_upload_link(token: str, body: DeckListBody):
     """Update deck list (mainboard/sideboard/commanders) via one-time feedback link. Does not mark the link as used."""
     mainboard = _build_board(body.mainboard)
@@ -375,6 +423,7 @@ def submit_decklist_with_upload_link(token: str, body: DeckListBody):
                 missing_deck_detail="No deck linked",
                 lock=True,
             )
+            actor = change_log.link_actor(row)
             deck_id = row.deck_id
             deck_dict = _get_deck_by_id(deck_id)
             if not deck_dict:
@@ -389,11 +438,23 @@ def submit_decklist_with_upload_link(token: str, body: DeckListBody):
                 and current.get("mainboard")
             ):
                 current["commanders"] = [current["mainboard"][0]["card"]]
-            _db.upsert_deck(session, current, origin=current.get("origin", _db.ORIGIN_MTGTOP8))
+            _db.upsert_deck(
+                session,
+                current,
+                origin=current.get("origin", _db.ORIGIN_MTGTOP8),
+                manual_fields=_db.DECK_MANUAL_FIELDS,
+            )
     except HTTPException:
         raise
     except Exception as e:
         logger.exception("Deck list update failed: %s", e)
         raise HTTPException(status_code=500, detail="Failed to update deck list")
     _load_decks_from_db()
+    change_log.log(
+        actor,
+        "upload.decklist",
+        f"Deck list of {current.get('player') or '?'} replaced through a feedback link",
+        event_id=current.get("event_id"),
+        deck_id=deck_id,
+    )
     return {"deck_id": deck_id, "message": "Deck list updated"}

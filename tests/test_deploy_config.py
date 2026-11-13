@@ -14,3 +14,17 @@ def test_image_contains_alembic():
     dockerfile = (ROOT / "Dockerfile").read_text()
     assert "COPY alembic/ ./alembic/" in dockerfile
     assert "COPY alembic.ini ./" in dockerfile
+
+
+def test_ci_audits_dependencies():
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    assert "pip-audit -r requirements.txt" in ci
+    assert "npm audit --omit=dev --audit-level=high" in ci
+
+
+def test_dependabot_covers_all_ecosystems():
+    import yaml
+
+    config = yaml.safe_load((ROOT / ".github" / "dependabot.yml").read_text())
+    updates = {u["package-ecosystem"]: u["directory"] for u in config["updates"]}
+    assert updates == {"pip": "/", "npm": "/web", "github-actions": "/", "docker": "/"}

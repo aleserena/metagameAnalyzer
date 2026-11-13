@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from api.services.rate_limit import RateLimiter, client_ip
 
 
@@ -35,3 +37,30 @@ def test_client_ip_prefers_x_real_ip():
     assert client_ip(req) == "203.0.113.9"
     assert client_ip(SimpleNamespace(headers={}, client=SimpleNamespace(host="10.0.0.1"))) == "10.0.0.1"
     assert client_ip(SimpleNamespace(headers={}, client=None)) == "unknown"
+
+
+def _request(ip: str = "198.51.100.7"):
+    return SimpleNamespace(headers={"x-real-ip": ip}, client=SimpleNamespace(host="10.0.0.1"))
+
+
+def test_rate_limited_dependency_blocks_and_sets_retry_after():
+    from fastapi import HTTPException
+
+    from api.services.rate_limit import rate_limited
+
+    dep = rate_limited(RateLimiter(2, 60))
+    dep(_request())
+    dep(_request())
+    with pytest.raises(HTTPException) as exc:
+        dep(_request())
+    assert exc.value.status_code == 429
+    assert exc.value.detail == "Too many requests. Try again later."
+    assert int(exc.value.headers["Retry-After"]) >= 1
+
+
+def test_rate_limited_dependency_counts_each_address_separately():
+    from api.services.rate_limit import rate_limited
+
+    dep = rate_limited(RateLimiter(1, 60))
+    dep(_request("198.51.100.7"))
+    dep(_request("198.51.100.8"))  # a different visitor is not affected

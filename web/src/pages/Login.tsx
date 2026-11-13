@@ -3,11 +3,24 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { useAuth } from '../contexts/AuthContext'
 import { reportError } from '../utils'
+import { SESSION_EXPIRED_KEY } from '../api'
+
+/** Read and clear the flag api.ts sets when a request is rejected with an expired admin token. */
+function takeSessionExpired(): boolean {
+  try {
+    const expired = sessionStorage.getItem(SESSION_EXPIRED_KEY) === '1'
+    sessionStorage.removeItem(SESSION_EXPIRED_KEY)
+    return expired
+  } catch {
+    return false
+  }
+}
 
 export default function Login() {
   const [password, setPassword] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [sessionExpired] = useState(takeSessionExpired)
   const { login, user } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
@@ -42,6 +55,11 @@ export default function Login() {
     <div className="login-page chart-container" style={{ maxWidth: 400, margin: '2rem auto' }}>
       <h1 className="page-title">Admin login</h1>
       <form onSubmit={handleSubmit}>
+        {sessionExpired && !errorMessage && (
+          <div role="status" style={{ marginBottom: '1rem', padding: '0.75rem 1rem', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
+            Your session expired. Log in again to continue.
+          </div>
+        )}
         {errorMessage && (
           <div
             className="form-error"

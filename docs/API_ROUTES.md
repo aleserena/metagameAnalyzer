@@ -6,7 +6,7 @@ Route -> handler-function map for the FastAPI app. **Grep for the handler name**
 
 Auth column: `admin` = admin token required, `event-edit` = admin **or** a valid event-edit token, `DB` = database required. Blank = public.
 
-Total endpoints: **97**.
+Total endpoints: **100**.
 
 ## Health / Info / Auth / Feedback
 
@@ -125,6 +125,7 @@ Total endpoints: **97**.
 
 | Method | Path | Handler | Auth |
 |---|---|---|---|
+| GET | `/api/v1/settings/change-log` | `get_settings_change_log` (in `api/routers/settings.py`) | admin, DB |
 | POST | `/api/v1/settings/clear-cache` | `post_clear_scryfall_cache` (in `api/routers/settings.py`) | admin |
 | POST | `/api/v1/settings/clear-decks` | `post_clear_decks` (in `api/routers/settings.py`) | admin, DB |
 | GET | `/api/v1/settings/ignore-lands-cards` | `get_ignore_lands_cards` (in `api/routers/settings.py`) | admin |
@@ -136,6 +137,8 @@ Total endpoints: **97**.
 | GET | `/api/v1/settings/rank-weights` | `get_rank_weights` (in `api/routers/settings.py`) | admin |
 | PUT | `/api/v1/settings/rank-weights` | `put_rank_weights` (in `api/routers/settings.py`) | admin |
 | POST | `/api/v1/settings/refresh-otag-index` | `post_refresh_otag_index` (in `api/routers/settings.py`) | admin |
+| GET | `/api/v1/settings/snapshots` | `get_settings_snapshots` (in `api/routers/settings.py`) | admin, DB |
+| POST | `/api/v1/settings/snapshots/{snapshot_id}/restore` | `post_restore_snapshot` (in `api/routers/settings.py`) | admin, DB |
 | POST | `/api/v1/settings/sync-mtgjson` | `post_sync_mtgjson` (in `api/routers/settings.py`) | admin, DB |
 | POST | `/api/v1/settings/sync-mtgjson-prices` | `post_sync_mtgjson_prices` (in `api/routers/settings.py`) | admin, DB |
 | GET | `/api/v1/settings/sync-mtgjson/status` | `get_sync_mtgjson_status` (in `api/routers/settings.py`) | admin |

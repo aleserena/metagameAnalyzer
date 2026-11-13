@@ -65,7 +65,7 @@ The API loads decks from the PostgreSQL database on startup. You can load data v
 
 ### Admin authentication
 
-Scrape and Settings are available only to an admin user. Set **`ADMIN_PASSWORD`** and **`JWT_SECRET`** (signs login tokens). On Railway both are required: the app refuses to start without them. Locally they are optional (without `ADMIN_PASSWORD`, admin login is disabled). Note: a local `.env` that contains `RAILWAY_ENVIRONMENT_NAME` makes the app think it is deployed, which blocks local startup and test collection unless both secrets are set. One-time upload/edit links expire after 7 days by default.
+Scrape and Settings are available only to an admin user. Set **`ADMIN_PASSWORD`** and **`JWT_SECRET`** (signs login tokens). On Railway both are required: the app refuses to start without them. Locally they are optional (without `ADMIN_PASSWORD`, admin login is disabled). Note: a local `.env` that contains `RAILWAY_ENVIRONMENT_NAME` makes the app think it is deployed, which blocks local startup and test collection unless both secrets are set. Admin sessions last 12 hours. One-time upload/edit links expire after 7 days by default; an event-edit link stays valid for 12 hours once opened. See `docs/SECURITY_OPERATIONS.md`.
 
 - **Login**: Open `/login` and enter the admin password. A signed token is stored in the browser and sent with requests to protected endpoints.
 - **Scrape tab**: Load/upload data, download export, and run scrapes (admin only).

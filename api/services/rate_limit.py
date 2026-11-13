@@ -6,7 +6,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 
 class RateLimiter:
@@ -65,8 +65,30 @@ class RateLimiter:
 
 
 def client_ip(request: Request) -> str:
-    """Client IP: Railway's ``X-Real-IP`` when present, else the socket peer, else "unknown"."""
+    """Client IP: Railway's ``X-Real-IP`` when present, else the socket peer, else "unknown".
+
+    Railway's edge overwrites a client-supplied ``X-Real-IP`` (and ``X-Forwarded-For``), so the
+    rate limiters keyed on this cannot be sidestepped by forging the header. Verified on staging
+    2026-11-12: a request sent with ``X-Real-IP: 203.0.113.9`` was logged with the real address.
+    Re-check if the app moves behind a different proxy.
+    """
     real_ip = request.headers.get("x-real-ip", "").strip()
     if real_ip:
         return real_ip
     return request.client.host if request.client else "unknown"
+
+
+def rate_limited(limiter: RateLimiter) -> Callable[[Request], None]:
+    """FastAPI dependency: count every request per client IP against ``limiter``; 429 when over."""
+
+    def dependency(request: Request) -> None:
+        ip = client_ip(request)
+        if not limiter.allow(ip):
+            raise HTTPException(
+                status_code=429,
+                detail="Too many requests. Try again later.",
+                headers={"Retry-After": str(limiter.retry_after(ip))},
+            )
+        limiter.record(ip)
+
+    return dependency

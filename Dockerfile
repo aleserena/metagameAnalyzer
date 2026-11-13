@@ -28,6 +28,10 @@ COPY main.py ./
 # Copy built frontend into static dir (FastAPI serves from ./static)
 COPY --from=frontend /app/web/dist ./static
 
+# The container runs as root on purpose: Railway mounts volumes (DATA_DIR=/data) as root, and a
+# non-root user cannot write to them (https://docs.railway.com/volumes/reference#caveats).
+# Accepted risk, see docs/SECURITY_OPERATIONS.md.
+
 EXPOSE 8000
 ENV PORT=8000
 CMD sh -c 'uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8000}'

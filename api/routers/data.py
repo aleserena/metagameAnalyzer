@@ -17,6 +17,7 @@ from api.schemas.events import (
     LoadBody,
     ScrapeBody,
 )
+from api.services import change_log
 from api.services.scrape_job import (
     ScrapeAlreadyRunning,
     current_job,
@@ -127,6 +128,7 @@ async def load_decks(
             _persist_decks_to_db(decks, origin=origin, assign_manual_ids=for_event)
         except Exception as e:
             raise HTTPException(status_code=500, detail="Failed to save decks") from e
+    change_log.log(change_log.ADMIN, "data.load", f"Loaded {len(decks)} deck(s) from a file")
     return {"loaded": len(decks), "message": f"Loaded {len(decks)} decks"}
 
 

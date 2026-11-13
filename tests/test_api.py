@@ -1581,9 +1581,9 @@ def test_feedback_alert_failure_still_creates_issue_and_never_logs_address(clien
 
 def test_cards_lookup_size_limits(client):
     with patch("api.routers.cards.lookup_cards", return_value={}):
-        ok = client.post("/api/v1/cards/lookup", json={"names": ["x"] * 1000})
+        ok = client.post("/api/v1/cards/lookup", json={"names": ["x"] * 200})
         assert ok.status_code == 200
-        too_many = client.post("/api/v1/cards/lookup", json={"names": ["x"] * 1001})
+        too_many = client.post("/api/v1/cards/lookup", json={"names": ["x"] * 201})
         assert too_many.status_code == 422
         too_long = client.post("/api/v1/cards/lookup", json={"names": ["y" * 201]})
         assert too_long.status_code == 422
@@ -1745,7 +1745,8 @@ def test_submit_reloads_decks_after_the_transaction_commits(client_with_override
     ):
         r = client_with_overrides.post("/api/v1/upload/tok", json=body)
     assert r.status_code == 201
-    assert events == ["open", "closed", "reload"]
+    # The change-log entry is written afterwards, in a transaction of its own.
+    assert events == ["open", "closed", "reload", "open", "closed"]
 
 
 # --- Link emails are sent after the transaction commits ---
@@ -1910,3 +1911,181 @@ def test_card_category_order():
         "",
     )
     assert [_card_category(t) for t in types] == ["Creature", "Land", "Spell", "Enchantment", "Other"]
+
+
+def test_admin_token_lifetime_is_twelve_hours():
+    import time
+
+    import jwt
+
+    from api import dependencies as deps
+
+    assert deps.JWT_EXP_SECONDS == 12 * 3600
+    claims = jwt.decode(deps._create_admin_token(), deps._JWT_KEY, algorithms=[deps.JWT_ALGORITHM])
+    assert 0 < claims["exp"] - time.time() <= 12 * 3600
+
+
+def _fake_lookup(calls):
+    """lookup_cards stand-in: names starting with "Known" resolve; others need the fallback."""
+
+    def fake(names, *, strict=False, max_fallback=None):
+        calls.append((list(names), max_fallback))
+        out = {}
+        for n in names:
+            if n.startswith("Known"):
+                out[n] = {"name": n}
+            elif max_fallback == 0:
+                out[n] = {"error": "unresolved"}
+            else:
+                out[n] = {"name": n, "via": "scryfall"}
+        return out
+
+    return fake
+
+
+def test_anonymous_card_lookup_sends_at_most_five_names_to_the_fallback(client):
+    calls = []
+    names = ["Known A"] + [f"Odd {i}" for i in range(9)]
+    with patch("api.routers.cards.lookup_cards", side_effect=_fake_lookup(calls)):
+        r = client.post("/api/v1/cards/lookup", json={"names": names}, headers={"X-Real-IP": "203.0.113.60"})
+    assert r.status_code == 200
+    assert calls[0] == (names, 0)  # first pass: cards table and cache only, no network
+    assert calls[1] == ([f"Odd {i}" for i in range(5)], None)
+    body = r.json()
+    assert body["Odd 0"] == {"name": "Odd 0", "via": "scryfall"}
+    assert body["Odd 8"] == {"error": "unresolved"}
+
+
+def test_anonymous_lookup_of_known_cards_never_touches_the_fallback(client):
+    calls = []
+    with patch("api.routers.cards.lookup_cards", side_effect=_fake_lookup(calls)):
+        client.post("/api/v1/cards/lookup", json={"names": ["Known A", "Known B"]})
+    assert calls == [(["Known A", "Known B"], 0)]
+
+
+def test_anonymous_fallback_has_a_small_per_address_budget(client):
+    from api.routers import cards
+
+    calls = []
+    headers = {"X-Real-IP": "203.0.113.61"}
+    budget = cards.ANON_FALLBACK_IP_LIMITER.max_events
+    with patch("api.routers.cards.lookup_cards", side_effect=_fake_lookup(calls)):
+        for i in range(budget + 3):
+            r = client.post("/api/v1/cards/lookup", json={"names": [f"Odd {i}"]}, headers=headers)
+            assert r.status_code == 200  # over budget is not an error: the card is just unresolved
+    assert len([c for c in calls if c[1] is None]) == budget
+    assert r.json() == {f"Odd {budget + 2}": {"error": "unresolved"}}
+
+
+def test_anonymous_fallback_has_a_site_wide_budget(client, monkeypatch):
+    from api.routers import cards
+
+    monkeypatch.setattr(cards.ANON_FALLBACK_GLOBAL_LIMITER, "max_events", 2)
+    calls = []
+    with patch("api.routers.cards.lookup_cards", side_effect=_fake_lookup(calls)):
+        for i in range(4):  # four different addresses
+            client.post(
+                "/api/v1/cards/lookup", json={"names": [f"Odd {i}"]}, headers={"X-Real-IP": f"203.0.113.{70 + i}"}
+            )
+    assert len([c for c in calls if c[1] is None]) == 2
+
+
+def test_anonymous_fallback_budgets_are_tight():
+    from api.routers import cards
+
+    assert (cards.ANON_FALLBACK_IP_LIMITER.max_events, cards.ANON_FALLBACK_IP_LIMITER.window_seconds) == (6, 60)
+    assert (cards.ANON_FALLBACK_GLOBAL_LIMITER.max_events, cards.ANON_FALLBACK_GLOBAL_LIMITER.window_seconds) == (
+        30,
+        60,
+    )
+
+
+def test_link_holder_card_lookup_resolves_a_whole_pasted_list(client):
+    """A player validating a deck list on an upload link gets every name looked up."""
+    calls = []
+    names = [f"odd {i}" for i in range(100)]
+    with (
+        patch("api.routers.cards.lookup_cards", side_effect=_fake_lookup(calls)),
+        patch("api.routers.cards._is_valid_link_token", side_effect=lambda t: t == "good-token"),
+    ):
+        r = client.post("/api/v1/cards/lookup", json={"names": names}, headers={"X-Upload-Token": "good-token"})
+        organiser = client.post(
+            "/api/v1/cards/lookup", json={"names": names}, headers={"X-Event-Edit-Token": "good-token"}
+        )
+        stranger = client.post("/api/v1/cards/lookup", json={"names": names}, headers={"X-Upload-Token": "made-up"})
+    assert calls[0] == (names, None)
+    assert not any(v.get("error") for v in r.json().values())
+    assert not any(v.get("error") for v in organiser.json().values())
+    assert sum(1 for v in stranger.json().values() if v.get("error") == "unresolved") == 95
+
+
+def test_admin_card_lookup_has_unbounded_fallback(client, monkeypatch):
+    from api import dependencies as deps
+
+    monkeypatch.setattr(deps, "ADMIN_PASSWORD", "test-admin-password")
+    headers = {"Authorization": f"Bearer {deps._create_admin_token()}"}
+    with patch("api.routers.cards.lookup_cards", return_value={}) as lookup:
+        r = client.post("/api/v1/cards/lookup", json={"names": ["Brand New Card"]}, headers=headers)
+    assert r.status_code == 200
+    assert lookup.call_args.kwargs["max_fallback"] is None
+
+
+# ---- per-IP rate limit on public upload / lookup endpoints -----------------------------------
+
+
+def test_a_venue_of_players_on_one_ip_is_not_limited(client):
+    """A whole tournament submits from one venue address within a minute."""
+    headers = {"X-Real-IP": "203.0.113.50"}
+    statuses = {client.get("/api/v1/upload/no-such-token", headers=headers).status_code for _ in range(100)}
+    assert 429 not in statuses
+
+
+def test_upload_endpoints_return_429_after_the_limit(client, monkeypatch):
+    from api.routers import upload
+
+    monkeypatch.setattr(upload.UPLOAD_LIMITER, "max_events", 3)
+    headers = {"X-Real-IP": "203.0.113.51"}
+    statuses = [client.get("/api/v1/upload/no-such-token", headers=headers).status_code for _ in range(4)]
+    assert 429 not in statuses[:3]
+    assert statuses[3] == 429
+    # the POST routes share the same budget
+    for path in ("/api/v1/upload/t", "/api/v1/upload/t/feedback", "/api/v1/upload/t/decklist"):
+        assert client.post(path, json={}, headers=headers).status_code == 429
+    # another address is unaffected
+    assert client.get("/api/v1/upload/no-such-token", headers={"X-Real-IP": "203.0.113.52"}).status_code != 429
+
+
+def test_card_lookup_returns_429_after_the_limit(client, monkeypatch):
+    from api.routers import cards
+
+    monkeypatch.setattr(cards.LOOKUP_LIMITER, "max_events", 2)
+    headers = {"X-Real-IP": "203.0.113.53"}
+    with patch("api.routers.cards.lookup_cards", return_value={}):
+        statuses = [client.post("/api/v1/cards/lookup", json={"names": ["x"]}, headers=headers).status_code for _ in range(3)]
+    assert statuses == [200, 200, 429]
+
+
+def test_public_limits_leave_room_for_real_use():
+    from api.routers import cards
+
+    assert (cards.LOOKUP_LIMITER.max_events, cards.LOOKUP_LIMITER.window_seconds) == (600, 60)
+
+
+def test_feedback_does_not_echo_github_error_text(client, github_ok, caplog):
+    import requests as _requests
+
+    post, _ = github_ok
+    response = MagicMock()
+    response.json.return_value = {"message": "Validation Failed: label does not exist"}
+    post.return_value.raise_for_status.side_effect = _requests.HTTPError("422", response=response)
+    r = client.post("/api/v1/feedback", json=_feedback_body(client))
+    assert r.status_code == 502
+    assert r.json()["detail"] == "Could not create issue. Try again later."
+    assert "label does not exist" in caplog.text  # still logged for the operator
+
+
+def test_upload_limit_allows_a_large_event_submitting_at_once():
+    from api.routers import upload
+
+    # 100+ players told to "submit now" on one venue address: open + validate + submit each.
+    assert (upload.UPLOAD_LIMITER.max_events, upload.UPLOAD_LIMITER.window_seconds) == (300, 60)

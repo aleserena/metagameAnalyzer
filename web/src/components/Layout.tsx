@@ -78,6 +78,8 @@ export default function Layout() {
         {' · '}
         <Link to="/feedback">Feedback</Link>
         {' · '}
+        <Link to="/privacy">Privacy</Link>
+        {' · '}
         <Link to="/login" state={{ from: location }}>Admin login</Link>
         {buildId != null && dbEnv != null && (
           <>

@@ -10,6 +10,7 @@ import threading
 import uuid
 
 from api import db as _db
+from api.services import change_log
 from api.services.scrape_store import persist_scraped_decks
 from api.state import _load_decks_from_db
 from src.mtgtop8.scraper import scrape
@@ -147,6 +148,12 @@ def _run(job: ScrapeJob, params: dict, scrape_fn, persist_fn, reload_fn) -> None
         deck_dicts = [d.to_dict() for d in decks]
         events_in_run = {d.get("event_id") for d in deck_dicts if d.get("event_id") is not None}
         result = persist_fn(deck_dicts, force_replace)
+        change_log.log(
+            change_log.ADMIN,
+            "data.scrape",
+            f"Scrape saved {result.get('decks_saved', len(deck_dicts))} deck(s) in {len(events_in_run)} event(s)"
+            + (" (forced re-scrape)" if force_replace else ""),
+        )
         persist_failed = list(result.get("failed") or [])
         for f in persist_failed:
             logger.warning(

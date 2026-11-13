@@ -21,6 +21,7 @@ const Settings = lazy(() => import('./pages/Settings'))
 const Login = lazy(() => import('./pages/Login'))
 const UploadDeck = lazy(() => import('./pages/UploadDeck'))
 const Feedback = lazy(() => import('./pages/Feedback'))
+const Privacy = lazy(() => import('./pages/Privacy'))
 const CommanderDetail = lazy(() => import('./pages/CommanderDetail'))
 
 function routeElement(element: ReactElement) {
@@ -60,6 +61,7 @@ const router = createBrowserRouter(
         { path: 'players/:playerId', element: routeElement(<PlayerDetail />) },
         { path: 'commanders/:commanderName', element: routeElement(<CommanderDetail />) },
         { path: 'feedback', element: routeElement(<Feedback />) },
+        { path: 'privacy', element: routeElement(<Privacy />) },
         {
           path: 'scrape',
           element: routeElement(

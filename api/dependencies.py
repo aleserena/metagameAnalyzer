@@ -34,7 +34,7 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 JWT_SECRET = os.getenv("JWT_SECRET", "")
 _JWT_KEY = derive_jwt_key(JWT_SECRET, ADMIN_PASSWORD)
 JWT_ALGORITHM = "HS256"
-JWT_EXP_SECONDS = 7 * 24 * 3600  # 7 days
+JWT_EXP_SECONDS = 12 * 3600  # 12 hours: one admin sitting (see docs/SECURITY_OPERATIONS.md)
 
 
 def _create_admin_token() -> str:
@@ -119,6 +119,22 @@ def require_admin_or_event_edit_deck(
                     raise HTTPException(status_code=401, detail="Event edit link expired")
                 return "event_edit"
     raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+
+def current_actor(
+    authorization: str | None = Header(None, alias="Authorization"),
+    x_event_edit_token: str | None = Header(None, alias="X-Event-Edit-Token"),
+) -> str:
+    """Dependency: who is making this change, for the change log.
+
+    ``admin`` for a valid admin token, else the event-edit link named by its type and label
+    (never its token). Does not authorise anything; pair it with a ``require_*`` dependency.
+    """
+    from api.services import change_log
+
+    if authorization and authorization.startswith("Bearer ") and _verify_admin_token(authorization[7:].strip()):
+        return change_log.ADMIN
+    return change_log.actor_for_token(x_event_edit_token)
 
 
 def require_database():

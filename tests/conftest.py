@@ -55,11 +55,15 @@ def _get_app_and_deps():
 
 @pytest.fixture(autouse=True)
 def _reset_login_limiter():
-    """Keep failed-login throttling from leaking between tests."""
+    """Keep failed-login throttling and the public per-IP limits from leaking between tests."""
     yield
-    from api.routers import auth
+    from api.routers import auth, cards, upload
 
     auth.LOGIN_LIMITER.reset()
+    cards.LOOKUP_LIMITER.reset()
+    cards.ANON_FALLBACK_IP_LIMITER.reset()
+    cards.ANON_FALLBACK_GLOBAL_LIMITER.reset()
+    upload.UPLOAD_LIMITER.reset()
 
 
 @pytest.fixture

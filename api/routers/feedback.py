@@ -99,6 +99,6 @@ def post_feedback(body: SiteFeedbackBody, request: Request):
                 msg = err.get("message", err.get("documentation_url", str(e)))
             except Exception:
                 msg = str(e)
+            # GitHub's message is for the operator; visitors get a generic error.
             logger.warning("GitHub API error creating feedback issue: %s", msg)
-            raise HTTPException(status_code=502, detail=f"Could not create issue: {msg}")
         raise HTTPException(status_code=502, detail="Could not create issue. Try again later.")

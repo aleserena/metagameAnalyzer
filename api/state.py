@@ -248,11 +248,16 @@ def _persist_decks_to_db(decks: list[dict], origin: str = None, *, assign_manual
 
 
 def _clear_decks_in_db() -> None:
-    """Delete all decks in DB, then clear state.decks."""
+    """Snapshot every event that has decks, delete all decks in DB, then clear state.decks."""
     if not _database_available() or _db is None:
         return
+    from api.services.snapshots import REASON_CLEAR_DECKS, take_snapshot  # imports api.db only; kept local
+
     try:
         with _db.session_scope() as session:
+            event_ids = [eid for (eid,) in session.query(_db.DeckRow.event_id).distinct()]
+            for event_id in event_ids:
+                take_snapshot(session, event_id, REASON_CLEAR_DECKS)
             session.query(_db.DeckRow).delete()
     except Exception:
         logger.exception("Failed to clear decks in DB")

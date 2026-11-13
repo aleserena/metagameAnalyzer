@@ -1,6 +1,7 @@
 """Persist scraped decks without ever deleting rows (match results hang off deck ids)."""
 
 from api import db as _db
+from api.services.snapshots import REASON_RESCRAPE, take_snapshot
 from api.state import _resolve_deck_player
 from sqlalchemy.exc import DBAPIError
 from src.mtgtop8.scraper import parse_event_display
@@ -34,6 +35,7 @@ def _ensure_event(session, sample: dict, *, refresh: bool) -> None:
             player_count=max(int(sample.get("player_count", 0) or 0), existing.player_count or 0),
             store=store or existing.store,
             location=location or existing.location,
+            respect_manual=True,
         )
 
 
@@ -46,6 +48,9 @@ def persist_scraped_decks(session, deck_dicts: list[dict], *, refresh_events: bo
         if ev_id is None or str(ev_id) in seen_events:
             continue
         seen_events.add(str(ev_id))
+        # An event that already exists is about to be overwritten in part: keep how it was.
+        # (None for a new event; unchanged events are not stored twice.)
+        take_snapshot(session, str(ev_id), REASON_RESCRAPE)
         _ensure_event(session, d, refresh=refresh_events)
 
     saved = 0
@@ -54,7 +59,8 @@ def persist_scraped_decks(session, deck_dicts: list[dict], *, refresh_events: bo
         try:
             with session.begin_nested():
                 _resolve_deck_player(session, d)
-                _db.upsert_deck(session, d, origin=_db.ORIGIN_MTGTOP8)
+                # Fields a person corrected by hand are left alone, even on a forced re-scrape.
+                _db.upsert_deck(session, d, origin=_db.ORIGIN_MTGTOP8, respect_manual=True)
                 session.flush()
             saved += 1
         except DBAPIError as e:

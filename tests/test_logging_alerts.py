@@ -248,3 +248,30 @@ def test_notify_deployment_skipped_off_railway(deploy_env, monkeypatch):
     monkeypatch.delenv("RAILWAY_DEPLOYMENT_ID", raising=False)
     assert alerts.notify_deployment({"status": "ok"}) is None
     assert deploy_env == []
+
+
+# ---- link tokens never reach the request log ------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("/api/v1/upload/AbC-123_x", "/api/v1/upload/***"),
+        ("/api/v1/upload/AbC-123_x/feedback", "/api/v1/upload/***/feedback"),
+        ("/api/v1/upload/AbC-123_x/decklist", "/api/v1/upload/***/decklist"),
+        ("/api/v1/event-edit/AbC-123_x", "/api/v1/event-edit/***"),
+        ("/upload/AbC-123_x", "/upload/***"),
+        ("/api/v1/decks/42", "/api/v1/decks/42"),
+        ("/api/v1/settings/upload-links", "/api/v1/settings/upload-links"),
+    ],
+)
+def test_mask_link_tokens(raw, expected):
+    assert lc.mask_link_tokens(raw) == expected
+
+
+def test_request_log_never_contains_link_token(caplog):
+    caplog.set_level(logging.INFO)
+    TestClient(app).get("/api/v1/upload/SECRET-TOKEN-VALUE")
+    assert caplog.records, "the request should have been logged"
+    assert "SECRET-TOKEN-VALUE" not in caplog.text
+    assert all("SECRET-TOKEN-VALUE" not in str(getattr(r, "path", "")) for r in caplog.records)

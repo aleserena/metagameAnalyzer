@@ -8,6 +8,7 @@ from api.dependencies import (
 )
 from api.results import effective_wld
 from api.schemas.matchups import PatchMatchupBody
+from api.services import change_log
 
 try:
     from api import db as _db
@@ -443,4 +444,5 @@ def patch_matchup(matchup_id: int, body: PatchMatchupBody):
         raise HTTPException(status_code=409, detail="A result already exists for that round")
     if not ok:
         raise HTTPException(status_code=404, detail="Matchup not found")
+    change_log.log(change_log.ADMIN, "matchup.update", f"Edited matchup {matchup_id}")
     return {"ok": True}

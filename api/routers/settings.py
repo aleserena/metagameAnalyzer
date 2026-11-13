@@ -13,10 +13,13 @@ from api.schemas.settings import (
     MatchupsMinMatchesBody,
     RankWeightsBody,
 )
+from api.services import change_log
 from api.services import mtgjson as mtgjson_service
 from api.services import settings as settings_service
+from api.services import snapshots as snapshot_service
 from api.state import (
     _clear_decks_in_db,
+    _load_decks_from_db,
     state,
 )
 
@@ -39,7 +42,9 @@ def get_ignore_lands_cards(_: str = Depends(require_admin)):
 @router.put("/api/v1/settings/ignore-lands-cards")
 def put_ignore_lands_cards(body: IgnoreLandsCardsBody, _: str = Depends(require_admin)):
     """Update list of cards excluded when 'Ignore lands' is checked (admin-only)."""
-    return {"cards": settings_service.set_ignore_lands_cards(body.cards)}
+    cards = settings_service.set_ignore_lands_cards(body.cards)
+    change_log.log(change_log.ADMIN, "settings.update", f"Ignore-lands list set ({len(cards)} card(s))")
+    return {"cards": cards}
 
 
 @router.get("/api/v1/settings/rank-weights")
@@ -51,7 +56,9 @@ def get_rank_weights(_: str = Depends(require_admin)):
 @router.put("/api/v1/settings/rank-weights")
 def put_rank_weights(body: RankWeightsBody, _: str = Depends(require_admin)):
     """Update points per placement (admin-only)."""
-    return {"weights": settings_service.set_rank_weights(body.weights)}
+    weights = settings_service.set_rank_weights(body.weights)
+    change_log.log(change_log.ADMIN, "settings.update", "Rank weights changed")
+    return {"weights": weights}
 
 
 @router.get("/api/v1/settings/matchups-min-matches", dependencies=[Depends(require_admin), Depends(require_database)])
@@ -139,6 +146,7 @@ def post_clear_decks(_: str = Depends(require_admin)):
         _clear_decks_in_db()
     except Exception as e:
         raise HTTPException(status_code=500, detail="Failed to clear decks") from e
+    change_log.log(change_log.ADMIN, "data.clear_decks", "Cleared all decks (each event was snapshotted first)")
     return {"message": "Decks cleared"}
 
 
@@ -159,4 +167,60 @@ def delete_settings_upload_links(
     """Clear one-time upload links (admin-only). used_only=true clears only used links. Requires database."""
     with _db.session_scope() as session:
         deleted = _db.delete_all_upload_links(session, used_only=used_only)
+    change_log.log(
+        change_log.ADMIN, "settings.update", f"Cleared {deleted} {'used ' if used_only else ''}upload link(s)"
+    )
     return {"deleted": deleted, "message": f"Cleared {deleted} link(s)"}
+
+
+# --- Recovery: event snapshots and the change log (see docs/BACKUP_RESTORE.md) ---
+
+
+@router.get("/api/v1/settings/snapshots", dependencies=[Depends(require_admin), Depends(require_database)])
+def get_settings_snapshots(
+    event_id: str | None = Query(None, description="Only snapshots of this event"),
+    search: str | None = Query(None, max_length=200, description="Event id, or part of the event name"),
+    limit: int = Query(200, ge=1, le=500),
+):
+    """List event snapshots, newest first (admin-only). Never returns snapshot contents: they hold player emails.
+
+    The list is capped at ``limit``; ``search`` reaches older snapshots of a given event.
+    """
+    with _db.session_scope() as session:
+        return {
+            "snapshots": snapshot_service.list_snapshots(session, event_id=event_id, search=search, limit=limit)
+        }
+
+
+@router.post(
+    "/api/v1/settings/snapshots/{snapshot_id}/restore",
+    dependencies=[Depends(require_admin), Depends(require_database)],
+)
+def post_restore_snapshot(snapshot_id: int):
+    """Put an event back as a snapshot recorded it (admin-only). The current state is snapshotted first."""
+    try:
+        with _db.session_scope() as session:
+            result = snapshot_service.restore_snapshot(session, snapshot_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+    except Exception as e:
+        logger.exception("Snapshot restore failed: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to restore the snapshot. Nothing was changed.")
+    _load_decks_from_db()  # also clears the metagame and events caches
+    change_log.log(
+        change_log.ADMIN,
+        "event.restore",
+        f"Restored from snapshot {snapshot_id}: {result['deck_count']} deck(s), {result['matchup_count']} matchup(s)",
+        event_id=result["event_id"],
+    )
+    return result
+
+
+@router.get("/api/v1/settings/change-log", dependencies=[Depends(require_admin), Depends(require_database)])
+def get_settings_change_log(
+    event_id: str | None = Query(None, description="Only changes to this event"),
+    limit: int = Query(200, ge=1, le=500),
+):
+    """List recorded data changes, newest first (admin-only)."""
+    with _db.session_scope() as session:
+        return {"changes": change_log.list_changes(session, event_id=event_id, limit=limit)}

@@ -342,3 +342,83 @@ def test_lookup_cards_strict_reraises_db_error(monkeypatch):
     monkeypatch.setattr(db, "session_scope", boom)
     with pytest.raises(RuntimeError):
         cl.lookup_cards(["Sol Ring"], strict=True)
+
+
+# ---- bounded Scryfall fallback (public lookups) ---------------------------------------------
+
+
+def _no_database(monkeypatch):
+    """Every name is missing from the cards table; record what goes to the Scryfall fallback."""
+    from src.mtgtop8 import card_lookup as cl
+    import api.db as db
+
+    monkeypatch.setattr(db, "is_database_available", lambda: False)
+    monkeypatch.setattr(cl, "SCRYFALL_FALLBACK_ENABLED", True)
+    sent: list[str] = []
+
+    def fake_fallback(names):
+        sent.extend(names)
+        return {n: {"name": n} for n in names}
+
+    monkeypatch.setattr(cl, "_scryfall_lookup_cards", fake_fallback)
+    return cl, sent
+
+
+def test_max_fallback_limits_names_sent_to_scryfall(monkeypatch):
+    cl, sent = _no_database(monkeypatch)
+    names = [f"Unknown {i}" for i in range(20)]
+    result = cl.lookup_cards(names, max_fallback=5)
+    assert sent == names[:5]
+    assert all(result[n] == {"name": n} for n in names[:5])
+    # over the cap: "unresolved" (we did not look), never "not_found" (we looked and it is not a card)
+    assert all(result[n] == {"error": "unresolved"} for n in names[5:])
+
+
+def test_names_over_the_fallback_limit_are_not_cached_as_not_found(monkeypatch):
+    cl, _ = _no_database(monkeypatch)
+    monkeypatch.setattr(cl, "_card_cache", {})
+    names = [f"Unknown {i}" for i in range(20)]
+    cl.lookup_cards(names, max_fallback=5)
+    assert all(n not in cl._card_cache for n in names[5:])
+
+
+def test_max_fallback_none_sends_every_missing_name(monkeypatch):
+    cl, sent = _no_database(monkeypatch)
+    names = [f"Unknown {i}" for i in range(20)]
+    cl.lookup_cards(names)
+    assert sent == names
+
+
+def test_max_fallback_zero_never_calls_scryfall(monkeypatch):
+    cl, sent = _no_database(monkeypatch)
+    result = cl.lookup_cards(["Unknown"], max_fallback=0)
+    assert sent == []
+    assert result == {"Unknown": {"error": "unresolved"}}
+
+
+def _cached(monkeypatch, cl, names):
+    entry = {"card_faces": [], "oracle_text": "", "name": "x"}
+    monkeypatch.setattr(cl, "_card_cache", {n: dict(entry) for n in names})
+    monkeypatch.setattr(cl, "_load_cache", lambda: None)
+
+
+def test_names_already_in_the_scryfall_cache_do_not_count_against_the_cap(monkeypatch):
+    """A pasted deck list whose names were resolved before must resolve again for free."""
+    cl, sent = _no_database(monkeypatch)
+    cached = [f"Cached {i}" for i in range(50)]
+    _cached(monkeypatch, cl, cached)
+    names = cached + ["New A", "New B"]
+    result = cl.lookup_cards(names, max_fallback=5)
+    assert sorted(sent) == sorted(names)  # every name reaches the cache-aware lookup
+    assert not any(result[n].get("error") == "unresolved" for n in names)
+
+
+def test_only_names_needing_a_network_fetch_are_capped(monkeypatch):
+    cl, sent = _no_database(monkeypatch)
+    cached = [f"Cached {i}" for i in range(10)]
+    _cached(monkeypatch, cl, cached)
+    fresh = [f"Fresh {i}" for i in range(8)]
+    result = cl.lookup_cards(cached + fresh, max_fallback=3)
+    assert [n for n in sent if n.startswith("Fresh")] == fresh[:3]
+    assert all(result[n] == {"error": "unresolved"} for n in fresh[3:])
+    assert all("error" not in result[n] for n in cached)

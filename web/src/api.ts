@@ -28,6 +28,33 @@ export function clearEventEditToken(): void {
   sessionStorage.removeItem(EVENT_EDIT_TOKEN_KEY)
 }
 
+export const SESSION_EXPIRED_KEY = 'session_expired'
+
+/** An API error response. `status` is the HTTP status code (network failures throw a plain Error). */
+export class ApiError extends Error {
+  status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
+/** HTTP status of a failed API call, or undefined when the request never got a response. */
+export function errorStatus(e: unknown): number | undefined {
+  const status = (e as { status?: unknown } | null)?.status
+  return typeof status === 'number' ? status : undefined
+}
+
+/** A 401 ends the admin session. If there was one, remember it so the login page can say why. */
+function handleUnauthorized(): void {
+  if (localStorage.getItem('admin_token') !== null && typeof sessionStorage !== 'undefined') {
+    sessionStorage.setItem(SESSION_EXPIRED_KEY, '1')
+  }
+  localStorage.removeItem('admin_token')
+  window.dispatchEvent(new Event('auth-logout'))
+}
+
 /** Shared 401 + error handling for fetch. Use for JSON or blob responses with auth. */
 async function fetchWithAuth(
   path: string,
@@ -42,16 +69,13 @@ async function fetchWithAuth(
     ...options,
     headers: { ...headers, ...(options.headers as Record<string, string>) },
   })
-  if (res.status === 401) {
-    localStorage.removeItem('admin_token')
-    window.dispatchEvent(new Event('auth-logout'))
-  }
+  if (res.status === 401) handleUnauthorized()
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     const detail = err.detail ?? res.statusText
     const message = typeof detail === 'string' ? detail : JSON.stringify(detail)
     console.error('[API]', res.status, path, detail, err)
-    throw new Error(message)
+    throw new ApiError(message, res.status)
   }
   return responseType === 'blob' ? res.blob() : res.json()
 }
@@ -65,16 +89,13 @@ async function fetchApi<T>(path: string, options?: RequestInit & { timeoutMs?: n
       ...options?.headers,
     },
   })
-  if (res.status === 401) {
-    localStorage.removeItem('admin_token')
-    window.dispatchEvent(new Event('auth-logout'))
-  }
+  if (res.status === 401) handleUnauthorized()
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     const detail = err.detail ?? res.statusText
     const message = typeof detail === 'string' ? detail : JSON.stringify(detail)
     console.error(`[API] ${res.status} ${path}`, detail, err)
-    throw new Error(message)
+    throw new ApiError(message, res.status)
   }
   return res.json()
 }
@@ -103,7 +124,7 @@ export async function submitFeedback(body: {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     const detail = err.detail ?? res.statusText
     const message = typeof detail === 'string' ? detail : JSON.stringify(detail)
-    throw new Error(message)
+    throw new ApiError(message, res.status)
   }
   return res.json()
 }
@@ -222,12 +243,33 @@ export interface CardLookupResult {
   error?: string
 }
 
-export async function getCardLookup(names: string[]): Promise<Record<string, CardLookupResult>> {
+/** The API accepts at most this many names per lookup (MAX_LOOKUP_NAMES); larger lists are split. */
+const CARD_LOOKUP_BATCH = 200
+
+/**
+ * Look up card data by name. `uploadToken` is the token of the upload/feedback link the visitor is
+ * using: the API then looks up every name (needed to validate a pasted deck list) instead of the
+ * small budget anonymous visitors get. Names it did not look up come back as `{ error: 'unresolved' }`.
+ */
+export async function getCardLookup(
+  names: string[],
+  opts?: { uploadToken?: string }
+): Promise<Record<string, CardLookupResult>> {
   if (names.length === 0) return {}
-  return fetchApi('/cards/lookup', {
-    method: 'POST',
-    body: JSON.stringify({ names }),
-  })
+  const batches: string[][] = []
+  for (let i = 0; i < names.length; i += CARD_LOOKUP_BATCH) {
+    batches.push(names.slice(i, i + CARD_LOOKUP_BATCH))
+  }
+  const results = await Promise.all(
+    batches.map((batch) =>
+      fetchApi<Record<string, CardLookupResult>>('/cards/lookup', {
+        method: 'POST',
+        body: JSON.stringify({ names: batch }),
+        ...(opts?.uploadToken ? { headers: { 'X-Upload-Token': opts.uploadToken } } : {}),
+      })
+    )
+  )
+  return Object.assign({}, ...results)
 }
 
 export async function getCardSearch(query: string, role?: string): Promise<{ data: string[] }> {
@@ -613,7 +655,7 @@ async function fetchApiPublic<T>(path: string, options?: RequestInit): Promise<T
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     const detail = err.detail ?? res.statusText
     const message = typeof detail === 'string' ? detail : JSON.stringify(detail)
-    throw new Error(message)
+    throw new ApiError(message, res.status)
   }
   return res.json()
 }
@@ -1167,6 +1209,53 @@ export async function getUploadLinks(): Promise<{ links: UploadLinkRow[] }> {
 export async function clearUploadLinks(usedOnly: boolean): Promise<{ deleted: number; message: string }> {
   const params = usedOnly ? '?used_only=true' : ''
   return fetchApi(`/settings/upload-links${params}`, { method: 'DELETE' })
+}
+
+/** An event as it was before a destructive action (contents are never sent to the browser). */
+export type EventSnapshot = {
+  id: number
+  event_id: string
+  event_name: string
+  created_at: string | null
+  /** delete | merge | hadouken | clear_decks | rescrape | before_restore */
+  reason: string
+  deck_count: number
+  matchup_count: number
+}
+
+/** Newest 200 snapshots; `search` (event id, or part of the event name) reaches older ones. */
+export async function getSnapshots(search?: string): Promise<{ snapshots: EventSnapshot[] }> {
+  const params = search ? `?search=${encodeURIComponent(search)}` : ''
+  return fetchApi(`/settings/snapshots${params}`)
+}
+
+export async function restoreSnapshot(
+  snapshotId: number
+): Promise<{
+  event_id: string
+  deck_count: number
+  matchup_count: number
+  safety_snapshot_id: number | null
+  /** Other events that held this event's decks (after a merge); each was saved before the restore. */
+  also_saved_event_ids: string[]
+}> {
+  return fetchApi(`/settings/snapshots/${snapshotId}/restore`, { method: 'POST' })
+}
+
+/** One recorded data change. `actor` is "admin" or "link:<type>:<label>". */
+export type ChangeLogEntry = {
+  id: number
+  at: string | null
+  actor: string
+  action: string
+  event_id: string | null
+  deck_id: number | null
+  summary: string
+}
+
+export async function getChangeLog(eventId?: string): Promise<{ changes: ChangeLogEntry[] }> {
+  const params = eventId ? `?event_id=${encodeURIComponent(eventId)}` : ''
+  return fetchApi(`/settings/change-log${params}`)
 }
 
 export async function getSimilarPlayers(name: string, limit = 10): Promise<{ similar: string[] }> {
