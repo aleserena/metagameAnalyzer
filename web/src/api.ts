@@ -1217,7 +1217,7 @@ export type EventSnapshot = {
   event_id: string
   event_name: string
   created_at: string | null
-  /** delete | merge | hadouken | clear_decks | rescrape | before_restore */
+  /** delete | merge | hadouken | clear_decks | rescrape | before_restore | renumber_rounds */
   reason: string
   deck_count: number
   matchup_count: number

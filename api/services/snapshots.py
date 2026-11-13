@@ -26,6 +26,7 @@ REASON_HADOUKEN = "hadouken"
 REASON_CLEAR_DECKS = "clear_decks"
 REASON_RESCRAPE = "rescrape"
 REASON_BEFORE_RESTORE = "before_restore"
+REASON_RENUMBER_ROUNDS = "renumber_rounds"
 
 
 def _payload_hash(payload: dict) -> str:
