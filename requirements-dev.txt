@@ -46,7 +46,7 @@ colorama==0.4.6 ; os_name == 'nt' or sys_platform == 'win32'
     #   pytest
 coverage==7.17.2
     # via pytest-cov
-fastapi==0.162.4
+fastapi==0.165.0
     # via
     #   -c requirements.txt
     #   -r requirements.in
@@ -98,7 +98,7 @@ packaging==26.3
     #   wheel
 pip==26.3
     # via pip-tools
-pip-tools==7.6.2
+pip-tools==7.7.0
     # via -r requirements-dev.in
 pluggy==1.7.0
     # via
@@ -149,7 +149,7 @@ requests==2.34.2
     # via
     #   -c requirements.txt
     #   -r requirements.in
-ruff==0.17.4
+ruff==0.17.6
     # via -r requirements-dev.in
 setuptools==84.2.1
     # via pip-tools
