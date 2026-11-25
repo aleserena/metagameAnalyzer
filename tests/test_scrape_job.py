@@ -49,6 +49,46 @@ def test_job_saves_without_a_listener():
     assert snap["message"] == "Scraped 1 decks from 1 events"
 
 
+@pytest.mark.parametrize("ids", ["m1", "12,typo", ",", "0", [-1]])
+def test_invalid_event_filter_never_starts_a_job(ids, monkeypatch):
+    from fastapi import HTTPException
+    from api.routers import data
+    from api.schemas.events import ScrapeBody
+
+    monkeypatch.setattr(data, "start_job", lambda _: pytest.fail("invalid filter started a job"))
+    with pytest.raises(HTTPException) as err:
+        data.run_scrape(ScrapeBody(format="EDH", event_ids=ids, force_replace=True))
+    assert err.value.status_code == 400
+
+
+def test_scrape_filters_reach_worker(monkeypatch):
+    from api.routers import data
+    from api.schemas.events import ScrapeBody
+
+    received = {}
+
+    def scrape(**kw):
+        received.update(kw)
+        return []
+
+    def start(params):
+        return scrape_job.start_job(params, scrape_fn=scrape, persist_fn=lambda *_: EMPTY, reload_fn=lambda: None)
+
+    monkeypatch.setattr(data, "start_job", start)
+    data.run_scrape(ScrapeBody(format="EDH", event_ids="24, 12,24", meta=77))
+    scrape_job.current_job().thread.join(5)
+    assert received["event_ids"] == [24, 12]
+    assert received["meta"] == 77
+
+
+def test_progress_stays_at_half_when_second_event_starts():
+    job = scrape_job.ScrapeJob()
+    for message in ("[1/2] Fetching decks", "Found 2 decks", "Parsing deck 2/2"):
+        job.pct = scrape_job._progress_pct(job, message)
+    assert job.pct == 50
+    assert scrape_job._progress_pct(job, "[2/2] Fetching decks") == 50
+
+
 def test_persist_failure_ends_in_error_and_does_not_reload():
     reloaded = []
 

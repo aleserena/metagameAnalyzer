@@ -159,18 +159,25 @@ def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
     period = body.period
     store = body.store
     event_ids = body.event_ids
-    if isinstance(event_ids, str):
-        event_ids = [x.strip() for x in event_ids.split(",") if x.strip()] or None
-    # Scraper expects list[int]; ignore non-numeric IDs (e.g. manual "m1")
     scrape_event_ids: list[int] | None = None
-    if event_ids:
-        scrape_event_ids = [int(x) for x in event_ids if str(x).isdigit()]
-        if not scrape_event_ids:
-            scrape_event_ids = None
+    if isinstance(event_ids, str) and event_ids.strip():
+        tokens = [x.strip() for x in event_ids.split(",") if x.strip()]
+        if not tokens or any(not x.isascii() or not x.isdecimal() for x in tokens):
+            raise HTTPException(status_code=400, detail="Provide numeric MTGTop8 event IDs")
+        try:
+            scrape_event_ids = [int(x) for x in tokens]
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid MTGTop8 event ID") from None
+    elif isinstance(event_ids, list) and event_ids:
+        scrape_event_ids = event_ids
+    if scrape_event_ids:
+        if min(scrape_event_ids) < 1:
+            raise HTTPException(status_code=400, detail="Event IDs must be positive")
+        scrape_event_ids = list(dict.fromkeys(scrape_event_ids))
 
     # When not forcing, skip events already in DB (or in state.decks when no DB)
     skip_event_ids: set[int] | None = None
-    if not body.force_replace and body.ignore_existing_events:
+    if not scrape_event_ids and not body.force_replace and body.ignore_existing_events:
         if state.database_available():
             try:
                 with _db.session_scope() as session:
@@ -192,6 +199,7 @@ def run_scrape(body: ScrapeBody, _: str = Depends(require_admin)):
     params = {
         "format_id": format_id,
         "period": period,
+        "meta": body.meta,
         "store": store,
         "event_ids": scrape_event_ids,
         "skip_event_ids": None if body.force_replace or scrape_event_ids else skip_event_ids,
