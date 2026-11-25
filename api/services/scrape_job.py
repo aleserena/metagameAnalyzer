@@ -62,6 +62,7 @@ def _progress_pct(job: ScrapeJob, msg: str) -> float:
     if event_match:
         job._current_event = int(event_match.group(1))
         job._total_events = int(event_match.group(2))
+        job._current_deck = job._total_decks = 0
 
     deck_found = re.search(r"Found (\d+) decks", msg)
     if deck_found:
@@ -138,6 +139,7 @@ def _run(job: ScrapeJob, params: dict, scrape_fn, persist_fn, reload_fn) -> None
         decks = scrape_fn(
             format_id=params.get("format_id"),
             period=params.get("period"),
+            meta=params.get("meta"),
             store=params.get("store"),
             event_ids=params.get("event_ids"),
             skip_event_ids=params.get("skip_event_ids"),
